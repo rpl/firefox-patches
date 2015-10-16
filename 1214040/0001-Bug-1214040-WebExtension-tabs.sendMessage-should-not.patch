@@ -1,0 +1,92 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1214040 - WebExtension tabs.sendMessage should not raise an exception on unexistent tabId
+
+---
+ browser/components/extensions/ext-tabs.js          |  4 +++
+ .../components/extensions/test/browser/browser.ini |  1 +
+ .../test/browser/browser_ext_tabs_sendMessage.js   | 31 ++++++++++++++++++++++
+ 3 files changed, 36 insertions(+)
+ create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_sendMessage.js
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+index 2c91076..068745f 100644
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -488,16 +488,20 @@ extensions.registerAPI((extension, context) => {
+         if ("frameId" in connectInfo) {
+           recipient.frameId = connectInfo.frameId;
+         }
+         return context.messenger.connect(mm, name, recipient);
+       },
+ 
+       sendMessage: function(tabId, message, options, responseCallback) {
+         let tab = TabManager.getTab(tabId);
++        if (!tab) {
++          // ignore sendMessage to non existent tab id
++          return;
++        }
+         let mm = tab.linkedBrowser.messageManager;
+ 
+         let recipient = {extensionId: extension.id};
+         if (options && "frameId" in options) {
+           recipient.frameId = options.frameId;
+         }
+         return context.messenger.sendMessage(mm, message, recipient, responseCallback);
+       },
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+index 6012a80..9829dc3 100644
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -8,11 +8,12 @@ support-files =
+ [browser_ext_currentWindow.js]
+ [browser_ext_browserAction_simple.js]
+ [browser_ext_browserAction_icon.js]
+ [browser_ext_contextMenus.js]
+ [browser_ext_getViews.js]
+ [browser_ext_tabs_executeScript.js]
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_update.js]
++[browser_ext_tabs_sendMessage.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+ [browser_ext_tab_runtimeConnect.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_sendMessage.js b/browser/components/extensions/test/browser/browser_ext_tabs_sendMessage.js
+new file mode 100644
+index 0000000..6dbcbaf
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_sendMessage.js
+@@ -0,0 +1,31 @@
++add_task(function* tabsSendMessageNoExceptionOnNonExistentTab() {
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "permissions": ["tabs"]
++    },
++
++    background: function() {
++      chrome.tabs.create({ url: "about:robots"}, function (tab) {
++        var exception;
++        try {
++          browser.tabs.sendMessage(tab.id, "message");
++          browser.tabs.sendMessage(tab.id + 100, "message");
++        } catch(e) {
++          exception = e;
++        }
++
++        browser.test.assertEq(undefined, exception, "no exception should be raised on tabs.sendMessage to unexistent tabs");
++        chrome.tabs.remove(tab.id, function() {
++          browser.test.notifyPass("tabs.sendMessage");
++        })
++      })
++    },
++  });
++
++  yield Promise.all([
++    extension.startup(),
++    extension.awaitFinish("tabs.sendMessage")
++  ]);
++
++  yield extension.unload();
++});
+
