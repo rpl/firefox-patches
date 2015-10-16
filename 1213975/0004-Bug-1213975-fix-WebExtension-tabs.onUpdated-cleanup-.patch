@@ -4,45 +4,32 @@
 Bug 1213975 - fix WebExtension tabs.onUpdated cleanup on context close (r=billm)
 
 ---
- browser/components/extensions/ext-tabs.js  | 17 +++++++++++++----
- browser/components/extensions/ext-utils.js |  2 +-
- 2 files changed, 14 insertions(+), 5 deletions(-)
+ browser/components/extensions/ext-tabs.js  | 7 ++++---
+ browser/components/extensions/ext-utils.js | 2 +-
+ 2 files changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index e73ea0a..c56b4a3 100644
+index e73ea0a..02f3ccd 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -202,25 +202,34 @@ extensions.registerAPI((extension, context) => {
-               url: locationURI.spec
-             });
-             if (needed) {
-               fire(tabId, changeInfo, TabManager.convert(extension, tab));
+@@ -206,21 +206,22 @@ extensions.registerAPI((extension, context) => {
              }
            },
          };
  
-+        let onClose = {
-+          close: () => {
-+            context.forgetOnClose(onClose);
-+            AllWindowEvents.removeListener("progress", progressListener);
-+            AllWindowEvents.removeListener("TabAttrModified", listener);
-+            AllWindowEvents.removeListener("TabPinned", listener);
-+            AllWindowEvents.removeListener("TabUnpinned", listener);
-+          }
-+        };
-+        context.callOnClose(onClose);
-+
          AllWindowEvents.addListener("progress", progressListener);
          AllWindowEvents.addListener("TabAttrModified", listener);
          AllWindowEvents.addListener("TabPinned", listener);
          AllWindowEvents.addListener("TabUnpinned", listener);
 +
          return () => {
--          AllWindowEvents.removeListener("progress", progressListener);
+           AllWindowEvents.removeListener("progress", progressListener);
 -          AllWindowEvents.addListener("TabAttrModified", listener);
 -          AllWindowEvents.addListener("TabPinned", listener);
 -          AllWindowEvents.addListener("TabUnpinned", listener);
-+          onClose.close();
++          AllWindowEvents.removeListener("TabAttrModified", listener);
++          AllWindowEvents.removeListener("TabPinned", listener);
++          AllWindowEvents.removeListener("TabUnpinned", listener);
          };
        }).api(),
  
