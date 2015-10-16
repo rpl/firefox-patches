@@ -1,0 +1,172 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1213975 - add WebExtension tabs.onUpdated test case (r=billm)
+
+---
+ .../components/extensions/test/browser/browser.ini |  3 +
+ .../test/browser/browser_ext_tabs_onUpdated.js     | 79 ++++++++++++++++++++++
+ .../browser/context_tabs_onUpdated_iframe.html     | 17 +++++
+ .../test/browser/context_tabs_onUpdated_page.html  | 16 +++++
+ 4 files changed, 115 insertions(+)
+ create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
+ create mode 100644 browser/components/extensions/test/browser/context_tabs_onUpdated_iframe.html
+ create mode 100644 browser/components/extensions/test/browser/context_tabs_onUpdated_page.html
+
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+index 6012a80..8305a23 100644
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -1,18 +1,21 @@
+ [DEFAULT]
+ support-files =
+   head.js
+   context.html
+   ctxmenu-image.png
++  context_tabs_onUpdated_page.html
++  context_tabs_onUpdated_iframe.html
+ 
+ [browser_ext_simple.js]
+ [browser_ext_currentWindow.js]
+ [browser_ext_browserAction_simple.js]
+ [browser_ext_browserAction_icon.js]
+ [browser_ext_contextMenus.js]
+ [browser_ext_getViews.js]
+ [browser_ext_tabs_executeScript.js]
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_update.js]
++[browser_ext_tabs_onUpdated.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+ [browser_ext_tab_runtimeConnect.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
+new file mode 100644
+index 0000000..ad94e66b
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
+@@ -0,0 +1,79 @@
++add_task(function* () {
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "permissions": ["tabs"],
++      "content_scripts": [{
++        "matches": ["http://mochi.test/*/context_tabs_onUpdated_page.html"],
++        "js": ["content-script.js"],
++        "run_at": "document_start"
++      },],
++    },
++
++    background: function() {
++      var pageURL = "http://mochi.test:8888/browser/browser/components/extensions/test/browser/context_tabs_onUpdated_page.html";
++
++      var expectedSequence = [
++        { status: "loading" },
++        { status: "loading", url: pageURL },
++        { status: "complete" }
++      ];
++      var collectedSequence = [];
++      var tabId;
++
++      browser.tabs.onUpdated.addListener(function (tabId, updatedInfo) {
++        collectedSequence.push(updatedInfo);
++      });
++
++      browser.runtime.onMessage.addListener(function () {
++          if (collectedSequence.length !== expectedSequence.length) {
++            browser.test.assertEq(
++              JSON.stringify(expectedSequence),
++              JSON.stringify(collectedSequence),
++              "got unexpected number of updateInfo data"
++            );
++          } else {
++            for (var i = 0; i < expectedSequence.length; i++) {
++              browser.test.assertEq(
++                expectedSequence[i].status,
++                collectedSequence[i].status,
++                "check updatedInfo status"
++              );
++              if (expectedSequence[i].url || collectedSequence[i].url) {
++                browser.test.assertEq(
++                  expectedSequence[i].url,
++                  collectedSequence[i].url,
++                  "check updatedInfo url"
++                );
++              }
++            }
++          }
++
++          browser.tabs.query({active: true}, function ([tab]) {
++            browser.tabs.remove(tab.id, function () {
++              browser.test.notifyPass("tabs.onUpdated");
++            });
++          })
++      });
++
++      browser.tabs.create({ url: pageURL }, function (tab) {
++        tabId = tab.id;
++      });
++    },
++    files: {
++      "content-script.js": `
++        window.addEventListener("message", function(evt) {
++          if (evt.data == "frame-updated") {
++            browser.runtime.sendMessage("load-completed");
++          }
++        }, true);
++      `,
++    }
++  });
++
++  yield Promise.all([
++    extension.startup(),
++    extension.awaitFinish("tabs.onUpdated")
++  ]);
++
++  yield extension.unload();
++});
+diff --git a/browser/components/extensions/test/browser/context_tabs_onUpdated_iframe.html b/browser/components/extensions/test/browser/context_tabs_onUpdated_iframe.html
+new file mode 100644
+index 0000000..1f5e981
+--- /dev/null
++++ b/browser/components/extensions/test/browser/context_tabs_onUpdated_iframe.html
+@@ -0,0 +1,17 @@
++<html>
++  <body>
++    <h3>test iframe</h3>
++    <script>
++      window.onload = function() {
++        window.onhashchange = function() {
++          window.parent.postMessage("updated-iframe-url", "*");
++        }
++        // NOTE: without the this setTimeout the location change is not fired
++        // even without the "fire only for top level windows" fix
++        setTimeout(function() {
++          window.location.hash="updated-iframe-url";
++        }, 0);
++      }
++    </script>
++  </body>
++</html>
+diff --git a/browser/components/extensions/test/browser/context_tabs_onUpdated_page.html b/browser/components/extensions/test/browser/context_tabs_onUpdated_page.html
+new file mode 100644
+index 0000000..703b6ef
+--- /dev/null
++++ b/browser/components/extensions/test/browser/context_tabs_onUpdated_page.html
+@@ -0,0 +1,16 @@
++<html>
++  <body>
++    <h3>test page</h3>
++    <iframe src="about:blank"></iframe>
++    <script>
++      window.onmessage = function(evt) {
++        if (evt.data === "updated-iframe-url") {
++          window.postMessage("frame-updated", "*");
++        }
++      };
++      window.onload = function() {
++        document.querySelector('iframe').setAttribute("src", "context_tabs_onUpdated_iframe.html");
++      };
++    </script>
++  </body>
++</html>
+

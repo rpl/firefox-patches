@@ -1,0 +1,34 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1213975 - filter out from WebExtension tabs.onUpdated events any location changes related to iframes (r=billm)
+
+---
+ browser/components/extensions/ext-tabs.js | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+index 68299dc2..e73ea0a 100644
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -186,16 +186,19 @@ extensions.registerAPI((extension, context) => {
+             let gBrowser = browser.ownerDocument.defaultView.gBrowser;
+             let tab = gBrowser.getTabForBrowser(browser);
+             let tabId = TabManager.getId(tab);
+             let [needed, changeInfo] = sanitize(extension, {status});
+             fire(tabId, changeInfo, TabManager.convert(extension, tab));
+           },
+ 
+           onLocationChange(browser, webProgress, request, locationURI, flags) {
++            if (!webProgress.isTopLevel) {
++              return;
++            }
+             let gBrowser = browser.ownerDocument.defaultView.gBrowser;
+             let tab = gBrowser.getTabForBrowser(browser);
+             let tabId = TabManager.getId(tab);
+             let [needed, changeInfo] = sanitize(extension, {
+               status: webProgress.isLoadingDocument ? "loading" : "complete",
+               url: locationURI.spec
+             });
+             if (needed) {
+
