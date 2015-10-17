@@ -5,10 +5,12 @@ Bug 1213975 - add WebExtension tabs.onUpdated test case (r=billm)
 
 ---
  .../components/extensions/test/browser/browser.ini |  3 +
- .../test/browser/browser_ext_tabs_onUpdated.js     | 79 ++++++++++++++++++++++
+ .../test/browser/browser_ext_currentWindow.js      | 18 -----
+ .../test/browser/browser_ext_tabs_onUpdated.js     | 78 ++++++++++++++++++++++
  .../browser/context_tabs_onUpdated_iframe.html     | 17 +++++
  .../test/browser/context_tabs_onUpdated_page.html  | 16 +++++
- 4 files changed, 115 insertions(+)
+ browser/components/extensions/test/browser/head.js | 18 +++++
+ 6 files changed, 132 insertions(+), 18 deletions(-)
  create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
  create mode 100644 browser/components/extensions/test/browser/context_tabs_onUpdated_iframe.html
  create mode 100644 browser/components/extensions/test/browser/context_tabs_onUpdated_page.html
@@ -39,13 +41,48 @@ index 6012a80..8305a23 100644
  [browser_ext_windows_update.js]
  [browser_ext_contentscript_connect.js]
  [browser_ext_tab_runtimeConnect.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_currentWindow.js b/browser/components/extensions/test/browser/browser_ext_currentWindow.js
+index 5f35cb6..d26bbb9 100644
+--- a/browser/components/extensions/test/browser/browser_ext_currentWindow.js
++++ b/browser/components/extensions/test/browser/browser_ext_currentWindow.js
+@@ -1,26 +1,8 @@
+-function* focusWindow(win)
+-{
+-  let fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
+-  if (fm.activeWindow == win) {
+-    return;
+-  }
+-
+-  let promise = new Promise(resolve => {
+-    win.addEventListener("focus", function listener() {
+-      win.removeEventListener("focus", listener, true);
+-      resolve();
+-    }, true);
+-  });
+-
+-  win.focus();
+-  yield promise;
+-}
+-
+ function genericChecker()
+ {
+   var kind = "background";
+   var path = window.location.pathname;
+   if (path.indexOf("popup") != -1) {
+     kind = "popup";
+   } else if (path.indexOf("page") != -1) {
+     kind = "page";
 diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
 new file mode 100644
-index 0000000..ad94e66b
+index 0000000..9fe6db6852
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,78 @@
 +add_task(function* () {
++  let win1 = yield BrowserTestUtils.openNewBrowserWindow();
++
++  yield focusWindow(win1);
++
 +  let extension = ExtensionTestUtils.loadExtension({
 +    manifest: {
 +      "permissions": ["tabs"],
@@ -65,7 +102,6 @@ index 0000000..ad94e66b
 +        { status: "complete" }
 +      ];
 +      var collectedSequence = [];
-+      var tabId;
 +
 +      browser.tabs.onUpdated.addListener(function (tabId, updatedInfo) {
 +        collectedSequence.push(updatedInfo);
@@ -95,16 +131,10 @@ index 0000000..ad94e66b
 +            }
 +          }
 +
-+          browser.tabs.query({active: true}, function ([tab]) {
-+            browser.tabs.remove(tab.id, function () {
-+              browser.test.notifyPass("tabs.onUpdated");
-+            });
-+          })
++          browser.test.notifyPass("tabs.onUpdated");
 +      });
 +
-+      browser.tabs.create({ url: pageURL }, function (tab) {
-+        tabId = tab.id;
-+      });
++      browser.tabs.create({ url: pageURL });
 +    },
 +    files: {
 +      "content-script.js": `
@@ -123,6 +153,8 @@ index 0000000..ad94e66b
 +  ]);
 +
 +  yield extension.unload();
++
++  yield BrowserTestUtils.closeWindow(win1);
 +});
 diff --git a/browser/components/extensions/test/browser/context_tabs_onUpdated_iframe.html b/browser/components/extensions/test/browser/context_tabs_onUpdated_iframe.html
 new file mode 100644
@@ -169,4 +201,34 @@ index 0000000..703b6ef
 +    </script>
 +  </body>
 +</html>
+diff --git a/browser/components/extensions/test/browser/head.js b/browser/components/extensions/test/browser/head.js
+index ac6f9c1..cd47bcd 100644
+--- a/browser/components/extensions/test/browser/head.js
++++ b/browser/components/extensions/test/browser/head.js
+@@ -1,7 +1,25 @@
+ var {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
+ 
+ function makeWidgetId(id)
+ {
+   id = id.toLowerCase();
+   return id.replace(/[^a-z0-9_-]/g, "_");
+ }
++
++function* focusWindow(win)
++{
++  let fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
++  if (fm.activeWindow == win) {
++    return;
++  }
++
++  let promise = new Promise(resolve => {
++    win.addEventListener("focus", function listener() {
++      win.removeEventListener("focus", listener, true);
++      resolve();
++    }, true);
++  });
++
++  win.focus();
++  yield promise;
++}
 
