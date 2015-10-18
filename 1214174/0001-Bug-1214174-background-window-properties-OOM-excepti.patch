@@ -1,0 +1,96 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1214174 - background window properties OOM exception test case
+
+---
+ .../extensions/test/mochitest/mochitest.ini        |  1 +
+ .../mochitest/test_ext_background_oom_bug.html     | 64 ++++++++++++++++++++++
+ 2 files changed, 65 insertions(+)
+ create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
+
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+index 093cbe7..d9cbcd3 100644
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -26,8 +26,9 @@ support-files =
+ [test_ext_runtime_disconnect.html]
+ [test_ext_sandbox_var.html]
+ [test_ext_sendmessage_reply.html]
+ [test_ext_sendmessage_doublereply.html]
+ [test_ext_storage.html]
+ [test_ext_background_runtime_connect_params.html]
+ [test_ext_cookies.html]
+ [test_ext_bookmarks.html]
++[test_ext_background_oom_bug.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html b/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
+new file mode 100644
+index 0000000..a448b53
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
+@@ -0,0 +1,64 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for simple WebExtension</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/SpawnTask.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="application/javascript;version=1.8">
++
++add_task(function* test_messenger() {
++  let extension = ExtensionTestUtils.loadExtension({
++    background: "(" + function() {
++      // based on es5-shim / object.keys code
++      var has = Object.prototype.hasOwnProperty;
++      var blacklistedKeys = {
++        $window: true,
++        $console: true,
++        $parent: true,
++        $self: true,
++        $frames: true,
++        $webkitIndexedDB: true,
++        $webkitStorageInfo: true,
++      };
++      var hasAutomationEqualityBug = (function () {
++        /* global window */
++        if (typeof window === 'undefined') { return false; }
++        for (var k in window) {
++          try {
++            if (!blacklistedKeys['$' + k]) {
++              // NOTE: accessing the property generates the exceptions
++              window[k];
++            }
++          } catch(e) {
++            browser.test.assertEq(null, e, `unexpected exception accessing window property: ${k}`)
++          }
++        }
++
++        browser.test.assertEq(0, window.screenX);
++        browser.test.assertEq(0, window.screenY);
++        browser.test.assertEq(0, window.outerWidth);
++        browser.test.assertEq(0, window.outerHeight);
++
++        return false;
++      }());
++      browser.test.notifyPass("background.OOM.done")
++    } + ")();"
++  });
++  info("load complete");
++  yield extension.startup();
++  info("startup complete");
++  yield extension.awaitFinish("background.OOM.done")
++  yield extension.unload();
++  info("extension unloaded successfully");
++});
++
++</script>
++
++</body>
++</html>
+
