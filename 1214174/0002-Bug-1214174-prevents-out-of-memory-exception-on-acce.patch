@@ -4,11 +4,11 @@
 Bug 1214174 - prevents out of memory exception on accessing window.sidebar/window.external in a windowless browser
 
 ---
- toolkit/components/search/nsSidebar.js | 4 ++++
- 1 file changed, 4 insertions(+)
+ toolkit/components/search/nsSidebar.js | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
 
 diff --git a/toolkit/components/search/nsSidebar.js b/toolkit/components/search/nsSidebar.js
-index deb4557..e408b69 100644
+index deb4557..e410e72 100644
 --- a/toolkit/components/search/nsSidebar.js
 +++ b/toolkit/components/search/nsSidebar.js
 @@ -11,20 +11,24 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -20,8 +20,9 @@ index deb4557..e408b69 100644
  nsSidebar.prototype = {
    init: function(window) {
      this.window = window;
+-    this.mm = window.QueryInterface(Ci.nsIInterfaceRequestor)
 +    try {
-     this.mm = window.QueryInterface(Ci.nsIInterfaceRequestor)
++      this.mm = window.QueryInterface(Ci.nsIInterfaceRequestor)
                      .getInterface(Ci.nsIDocShell)
                      .QueryInterface(Ci.nsIInterfaceRequestor)
                      .getInterface(Ci.nsIContentFrameMessageManager);
