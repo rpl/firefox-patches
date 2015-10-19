@@ -10,11 +10,10 @@ Bug 1214174 - background window properties OOM exception test case
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 093cbe7..d9cbcd3 100644
+index 7fd2c57..fe18dda 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -26,8 +26,9 @@ support-files =
- [test_ext_runtime_disconnect.html]
+@@ -27,8 +27,9 @@ support-files =
  [test_ext_sandbox_var.html]
  [test_ext_sendmessage_reply.html]
  [test_ext_sendmessage_doublereply.html]
@@ -22,6 +21,7 @@ index 093cbe7..d9cbcd3 100644
  [test_ext_background_runtime_connect_params.html]
  [test_ext_cookies.html]
  [test_ext_bookmarks.html]
+ [test_ext_alarms.html]
 +[test_ext_background_oom_bug.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html b/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
 new file mode 100644

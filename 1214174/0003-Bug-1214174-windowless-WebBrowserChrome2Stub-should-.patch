@@ -9,7 +9,7 @@ prevents exception on accessing window's screenX, screenY, outerWidth and outerH
  1 file changed, 73 insertions(+)
 
 diff --git a/xpfe/appshell/nsAppShellService.cpp b/xpfe/appshell/nsAppShellService.cpp
-index 5632dd8..e7a2252 100644
+index 9765f7a..8f26b33 100644
 --- a/xpfe/appshell/nsAppShellService.cpp
 +++ b/xpfe/appshell/nsAppShellService.cpp
 @@ -22,16 +22,17 @@
