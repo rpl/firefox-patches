@@ -5,8 +5,8 @@ Bug 1214174 - background window properties OOM exception test case
 
 ---
  .../extensions/test/mochitest/mochitest.ini        |  1 +
- .../mochitest/test_ext_background_oom_bug.html     | 64 ++++++++++++++++++++++
- 2 files changed, 65 insertions(+)
+ .../mochitest/test_ext_background_oom_bug.html     | 71 ++++++++++++++++++++++
+ 2 files changed, 72 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
@@ -25,10 +25,10 @@ index 7fd2c57..fe18dda 100644
 +[test_ext_background_oom_bug.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html b/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
 new file mode 100644
-index 0000000..a448b53
+index 0000000..b9bf1b5
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,71 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -57,6 +57,13 @@ index 0000000..a448b53
 +        $webkitIndexedDB: true,
 +        $webkitStorageInfo: true,
 +      };
++      var expectedValues = {
++        screenX: 0,
++        screenY: 0,
++        outerWidth: 0,
++        outerHeight: 0
++      };
++
 +      var hasAutomationEqualityBug = (function () {
 +        /* global window */
 +        if (typeof window === 'undefined') { return false; }
@@ -64,17 +71,17 @@ index 0000000..a448b53
 +          try {
 +            if (!blacklistedKeys['$' + k]) {
 +              // NOTE: accessing the property generates the exceptions
-+              window[k];
++              if (k in expectedValues) {
++                browser.test.assertEq(expectedValues[k], window[k],
++                                      `should return the expected value for window property: ${k}`)
++              } else {
++                window[k];
++              }
 +            }
 +          } catch(e) {
 +            browser.test.assertEq(null, e, `unexpected exception accessing window property: ${k}`)
 +          }
 +        }
-+
-+        browser.test.assertEq(0, window.screenX);
-+        browser.test.assertEq(0, window.screenY);
-+        browser.test.assertEq(0, window.outerWidth);
-+        browser.test.assertEq(0, window.outerHeight);
 +
 +        return false;
 +      }());
