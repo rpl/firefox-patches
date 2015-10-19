@@ -1,0 +1,82 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug XXX - WebExtension remove subscribed Messenger's message and connect listeners from broker on context close
+
+---
+ toolkit/components/extensions/ExtensionUtils.jsm | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
+index 0baf222..7f87afb 100644
+--- a/toolkit/components/extensions/ExtensionUtils.jsm
++++ b/toolkit/components/extensions/ExtensionUtils.jsm
+@@ -12,16 +12,21 @@ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+ // Run a function and report exceptions.
+ function runSafeSyncWithoutClone(f, ...args)
+ {
++  if (typeof(f) != "function") {
++    dump(`Extension error: expected function\n${Error().stack}`);
++    return;
++  }
++
+   try {
+     return f(...args);
+   } catch (e) {
+     dump(`Extension error: ${e} ${e.fileName} ${e.lineNumber}\n[[Exception stack\n${e.stack}Current stack\n${Error().stack}]]\n`);
+     Cu.reportError(e);
+   }
+ }
+ 
+@@ -543,16 +548,22 @@ Messenger.prototype = {
+         if (result !== true) {
+           valid = false;
+           if (!sent) {
+             mm.sendAsyncMessage(replyName, {gotData: false});
+           }
+         }
+       };
+ 
++      this.context.callOnClose({
++        close: () => {
++          this.broker.removeListener("message", listener);
++        }
++      });
++
+       this.broker.addListener("message", listener, this.filter);
+       return () => {
+         this.broker.removeListener("message", listener);
+       };
+     }).api();
+   },
+ 
+   connect(messageManager, name, recipient) {
+@@ -570,16 +581,22 @@ Messenger.prototype = {
+         let mm = getMessageManager(target);
+         if (this.delegate) {
+           this.delegate.getSender(this.context, target, sender);
+         }
+         let port = new Port(this.context, mm, name, portId, sender);
+         fire.withoutClone(port.api());
+       };
+ 
++      this.context.callOnClose({
++        close: () => {
++          this.broker.removeListener("connect", listener);
++        }
++      });
++
+       this.broker.addListener("connect", listener, this.filter);
+       return () => {
+         this.broker.removeListener("connect", listener);
+       };
+     }).api();
+   },
+ };
+ 
+
