@@ -8,7 +8,7 @@ Bug 1213975 - WebExtension tab update events about location url change should co
  1 file changed, 4 insertions(+), 1 deletion(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index 2c91076..68299dc2 100644
+index 068745f..4f1fde84 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
 @@ -189,17 +189,20 @@ extensions.registerAPI((extension, context) => {

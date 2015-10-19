@@ -8,7 +8,7 @@ Bug 1213975 - filter out from WebExtension tabs.onUpdated events any location ch
  1 file changed, 3 insertions(+)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index 68299dc2..e73ea0a 100644
+index 4f1fde84..b4935085 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
 @@ -186,16 +186,19 @@ extensions.registerAPI((extension, context) => {

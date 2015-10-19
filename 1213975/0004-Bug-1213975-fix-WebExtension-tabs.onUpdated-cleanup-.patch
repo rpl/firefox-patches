@@ -9,7 +9,7 @@ Bug 1213975 - fix WebExtension tabs.onUpdated cleanup on context close (r=billm)
  2 files changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index e73ea0a..02f3ccd 100644
+index b4935085..7aa2fad 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
 @@ -206,21 +206,22 @@ extensions.registerAPI((extension, context) => {

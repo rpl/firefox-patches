@@ -16,10 +16,10 @@ Bug 1213975 - add WebExtension tabs.onUpdated test case (r=billm)
  create mode 100644 browser/components/extensions/test/browser/context_tabs_onUpdated_page.html
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
-index 6012a80..8305a23 100644
+index 9829dc3..4e5549a 100644
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -1,18 +1,21 @@
+@@ -1,19 +1,22 @@
  [DEFAULT]
  support-files =
    head.js
@@ -38,6 +38,7 @@ index 6012a80..8305a23 100644
  [browser_ext_tabs_query.js]
  [browser_ext_tabs_update.js]
 +[browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
  [browser_ext_windows_update.js]
  [browser_ext_contentscript_connect.js]
  [browser_ext_tab_runtimeConnect.js]
