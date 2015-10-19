@@ -4,27 +4,24 @@
 Bug 1211859 - add open extension devtools API and devtools_page and devtools_panel extension pages
 
 ---
- browser/components/extensions/ext-devtools.js      | 327 +++++++++++++++++++++
+ browser/components/extensions/ext-devtools.js      | 315 +++++++++++++++++++++
  browser/components/extensions/jar.mn               |   1 +
  .../components/extensions/test/browser/browser.ini |   1 +
- .../test/browser/browser_ext_devtools_page.js      |  98 ++++++
+ .../test/browser/browser_ext_devtools_page.js      |  98 +++++++
  browser/components/extensions/test/browser/head.js |   5 +
  browser/components/nsBrowserGlue.js                |   9 +-
- devtools/server/actors/moz.build                   |   1 +
- .../server/actors/webextension-devtools-api.js     |  82 ++++++
- devtools/server/main.js                            |   5 +
- toolkit/components/extensions/ExtensionContent.jsm |  12 +
- 10 files changed, 537 insertions(+), 4 deletions(-)
+ devtools/server/actors/webconsole.js               |  33 ++-
+ devtools/shared/webconsole/client.js               |   3 +
+ 8 files changed, 454 insertions(+), 11 deletions(-)
  create mode 100644 browser/components/extensions/ext-devtools.js
  create mode 100644 browser/components/extensions/test/browser/browser_ext_devtools_page.js
- create mode 100644 devtools/server/actors/webextension-devtools-api.js
 
 diff --git a/browser/components/extensions/ext-devtools.js b/browser/components/extensions/ext-devtools.js
 new file mode 100644
-index 0000000..008703a
+index 0000000..021addc
 --- /dev/null
 +++ b/browser/components/extensions/ext-devtools.js
-@@ -0,0 +1,327 @@
+@@ -0,0 +1,315 @@
 +Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 +var {
 +  EventManager,
@@ -120,11 +117,8 @@ index 0000000..008703a
 +});
 +
 +gDevTools.on("toolbox-destroyed", (evt, target) => {
-+  dump(`SHUTDOWN FOR TARGET: ${devtoolsPageMap.size}\n`)
-+
 +  for (let entry of devtoolsPageMap.entries()) {
 +    let [extension, devtoolsPage] = entry;
-+    dump("ENTRY\n")
 +
 +    devtoolsPage.shutdownForTarget(target);
 +  }
@@ -159,6 +153,7 @@ index 0000000..008703a
 +      gDevTools.registerTool({
 +        id: panelId,
 +        url: "about:blank",
++        icon: icon ? this.extension.baseURI.resolve(icon) : null,
 +        label: title,
 +        invertIconForLightTheme: true,
 +        isTargetSupported: target => target.isLocalTab,
@@ -228,44 +223,15 @@ index 0000000..008703a
 +  let { toolbox } = context;
 +
 +  // filter out any page without a valid toolbox or target
++  // TODO: raise an exception? what about "about:blank" used to unload the
++  // devtools page?
 +  if (!toolbox || !toolbox.target) {
 +    return;
 +  }
 +
 +  let { target } = toolbox;
-+  let windowId, tabId, eval;
 +
-+  let evalWithDevTools = (text, options = {}, cb) => {
-+    try {
-+      target.client.request({
-+        to: target.form.webextensionDevtoolsActor,
-+        type: "inspectedWindowEval",
-+        text, options
-+      }, (res) => {
-+        runSafe(context, cb, res.data.result, res.data.isException);
-+      });
-+    } catch(e) {
-+      dump(`Extension error: ${e} ${e.fileName} ${e.lineNumber}\n[[Exception stack\n${e.stack}Current stack\n${Error().stack}]]\n`);
-+      Cu.reportError(e);
-+    }
-+  }
-+
-+  // unsafe CPOW eval
-+  // NOTE: last resort to reduce latency between request and callback
-+  // e.g. BackboneDebugger needs to complete an eval request under 100ms
-+  // to be able to detect the backbone inject code correctly
-+  let evalWithUnsafeCPOW = (code, options, cb) => {
-+    var value, isException;
-+    try {
-+      value = target.tab.linkedBrowser._contentWindow.eval(code);
-+    } catch(e) {
-+      isException = true;
-+      value = e.toString();
-+    }
-+    if (typeof cb == "function") {
-+      runSafe(context, cb, value, isException);
-+    }
-+  }
++  let windowId, tabId;
 +
 +  if (target.isLocalTab) {
 +    let browser = target.tab.linkedBrowser;
@@ -277,28 +243,12 @@ index 0000000..008703a
 +
 +    context.windowId = windowId;
 +    context.tabId = tabId;
-+
-+    eval = evalWithUnsafeCPOW;
 +  } else {
-+    eval = evalWithDevTools;
++    // TODO: windowID and tabId for remote tabs needs to get tab manager info
++    // from the TabManager on the remote side
 +  }
 +
-+  let preferredEval;
-+
-+  try {
-+    preferredEval = Services.prefs.getCharPref("webextension.devtools.evalType");
-+  } catch (e) {
-+    // do not fail on undefined preference
-+  }
-+
-+  switch(preferredEval) {
-+  case "unsafeCPOW":
-+    eval = evalWithUnsafeCPOW;
-+    break;
-+  case "RDP":
-+    eval = evalWithDevTools;
-+  }
-+
++  // devtools API
 +  let devtools = {
 +    inspectedWindow: {
 +      windowId,
@@ -307,21 +257,56 @@ index 0000000..008703a
 +        // TODO: incomplete, currently it is just a shim
 +        return [ { type: "document", url: target.url } ];
 +      },
-+      eval(text, options, cb) {
++      eval(text, options = {}, cb) {
 +        if (typeof options == "function") {
 +          cb = options;
 +          options = {};
 +        }
 +
-+        eval(text, options, cb);
-+      },
-+      reload(options) {
-+        target.client.request({
-+          to: target.form.webextensionDevtoolsActor,
-+          type: "inspectedWindowReload",
-+          extensionId: extension.id,
-+          options
++        // TODO: add support to eval options
++        // NOTE: support for evaluating into frames can use bindObjectActor?
++
++        // raise exception on unsupported options
++        for (k of ["frameURL", "useContentScriptContext", "contextSecurityOrigin"]) {
++          if (k == "frameURL" && options[k] === target.url) {
++            // tollerate unsupported frameURL if equal to the target url
++            continue;
++          }
++
++          if (options[k]) {
++            throw context.contentWindow.Error(`Unsupported option ${k}: ${options[k]}`);
++          }
++        }
++
++        // TODO: cb should receive exceptionInfo
++        target.activeConsole.evaluateJSAsync(text, (res) => {
++          if (res.error) {
++            runSafe(context, cb, res.error, true);
++          } else {
++            // TODO: check typeof result is string or dump error
++            runSafe(context, cb, res.plainResult, false);
++          }
++        }, {
++          unsafeDereference: true
 +        });
++      },
++      reload(options = {}) {
++        // TODO: add support for custom userAgent, log deprecated on preprocessorScript
++
++        // raise exception on unsupported options
++        for (k of ["userAgent", "preprocessorScript"]) {
++          if (options[k]) {
++            throw context.contentWindow.Error(`Unsupported ${k} option`);
++          }
++        }
++
++        let { injectedScript, ignoreCache } = options;
++
++        target.activeConsole.evaluateJSAsync(injectedScript, _ => {}, {
++          runOnNextWindowReady: true
++        });
++
++        target.activeTab.reload({ force: ignoreCache });
 +      }
 +    },
 +    panels: {
@@ -367,11 +352,11 @@ index 07b6af3..6f75974 100644
      content/browser/ext-windows.js
 +    content/browser/ext-devtools.js
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
-index 9bf32ff..98ae154 100644
+index 6012a80..6b0015a 100644
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -9,8 +9,9 @@ support-files =
- [browser_ext_browserAction_icon.js]
+@@ -11,8 +11,9 @@ support-files =
+ [browser_ext_contextMenus.js]
  [browser_ext_getViews.js]
  [browser_ext_tabs_executeScript.js]
  [browser_ext_tabs_query.js]
@@ -485,11 +470,11 @@ index 0000000..86f6fac
 +  info("extension unloaded successfully");
 +});
 diff --git a/browser/components/extensions/test/browser/head.js b/browser/components/extensions/test/browser/head.js
-index d4fccd6..967dbed 100644
+index ac6f9c1..3bb1d89 100644
 --- a/browser/components/extensions/test/browser/head.js
 +++ b/browser/components/extensions/test/browser/head.js
 @@ -1,7 +1,12 @@
- let {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
+ var {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
  
  function makeWidgetId(id)
  {
@@ -502,10 +487,10 @@ index d4fccd6..967dbed 100644
 +  return `${makeWidgetId(id)}-${url}-devtools-panel`;
 +}
 diff --git a/browser/components/nsBrowserGlue.js b/browser/components/nsBrowserGlue.js
-index a89e975..63a382d 100644
+index 755b1d5..2615df8 100644
 --- a/browser/components/nsBrowserGlue.js
 +++ b/browser/components/nsBrowserGlue.js
-@@ -583,17 +583,17 @@ BrowserGlue.prototype = {
+@@ -586,17 +586,17 @@ BrowserGlue.prototype = {
      // gets called in finalUIStartup and from a browser-search-service observer,
      // to catch both cases (search service initialization occurring before and
      // after final-ui-startup)
@@ -518,13 +503,13 @@ index a89e975..63a382d 100644
 +  // initialization (called on application startup)
    _init: function BG__init() {
      let os = Services.obs;
+     os.addObserver(this, "notifications-open-settings", false);
      os.addObserver(this, "prefservice:after-app-defaults", false);
      os.addObserver(this, "final-ui-startup", false);
      os.addObserver(this, "browser-delayed-startup-finished", false);
      os.addObserver(this, "sessionstore-windows-restored", false);
      os.addObserver(this, "browser:purge-session-history", false);
-     os.addObserver(this, "quit-application-requested", false);
-@@ -627,16 +627,17 @@ BrowserGlue.prototype = {
+@@ -631,16 +631,17 @@ BrowserGlue.prototype = {
      os.addObserver(this, "autocomplete-did-enter-text", false);
      os.addObserver(this, "tablet-mode-change", false);
  
@@ -541,8 +526,8 @@ index a89e975..63a382d 100644
    // cleanup (called on application shutdown)
    _dispose: function BG__dispose() {
      let os = Services.obs;
-     os.removeObserver(this, "prefservice:after-app-defaults");
-@@ -801,17 +802,17 @@ BrowserGlue.prototype = {
+     os.removeObserver(this, "notifications-open-settings");
+@@ -806,17 +807,17 @@ BrowserGlue.prototype = {
    },
  
    // runs on startup, before the first command line handler is invoked
@@ -561,7 +546,7 @@ index a89e975..63a382d 100644
      this._distributionCustomizer.applyCustomizations();
  
      // handle any UI migration
-@@ -2033,17 +2034,17 @@ BrowserGlue.prototype = {
+@@ -2038,17 +2039,17 @@ BrowserGlue.prototype = {
        for (let resourceName of ["mode", "iconsize"]) {
          for (let toolbarId of toolbars) {
            xulStore.removeValue(BROWSER_DOCURL, toolbarId, resourceName);
@@ -580,7 +565,7 @@ index a89e975..63a382d 100644
              detector == "ja_parallel_state_machine" ||
              detector == "ruprob" ||
              detector == "ukprob")) {
-@@ -2195,17 +2196,17 @@ BrowserGlue.prototype = {
+@@ -2200,17 +2201,17 @@ BrowserGlue.prototype = {
          (lightweightThemeSelected && selectedThemeID != "firefox-devedition@mozilla.org");
  
        if (userChoseToNotUseDeveditionTheme && selectedThemeID == "firefox-devedition@mozilla.org") {
@@ -599,213 +584,125 @@ index a89e975..63a382d 100644
      // Update the migration version.
      Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
    },
-diff --git a/devtools/server/actors/moz.build b/devtools/server/actors/moz.build
-index 02fbefb..7dbc139 100644
---- a/devtools/server/actors/moz.build
-+++ b/devtools/server/actors/moz.build
-@@ -50,11 +50,12 @@ DevToolsModules(
-     'styleeditor.js',
-     'styles.js',
-     'stylesheets.js',
-     'timeline.js',
-     'webapps.js',
-     'webaudio.js',
-     'webbrowser.js',
-     'webconsole.js',
-+    'webextension-devtools-api.js',
-     'webgl.js',
-     'worker.js',
- )
-diff --git a/devtools/server/actors/webextension-devtools-api.js b/devtools/server/actors/webextension-devtools-api.js
-new file mode 100644
-index 0000000..b50f849
---- /dev/null
-+++ b/devtools/server/actors/webextension-devtools-api.js
-@@ -0,0 +1,82 @@
-+/* This Source Code Form is subject to the terms of the Mozilla Public
-+ * License, v. 2.0. If a copy of the MPL was not distributed with this
-+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-+
-+/**
-+ * The webextensionDevtools actor provides the remote debugging feature needed
-+ * by the WebExtension Devtools API:
-+ *  - inspectedWindowEval
-+ *  - inspectedWindowReload
-+ *  - inspectedWindowContentScript
-+ */
-+
-+"use strict";
-+
-+const {
-+  method, Arg, Option, RetVal, Front, FrontClass, Actor, ActorClass
-+} = require("devtools/server/protocol");
-+
-+const events = require("sdk/event/core");
-+
-+const { Cu } = require("chrome");
-+
-+const {
-+  ExtensionContent
-+} = Cu.import("resource://gre/modules/ExtensionContent.jsm", {});
-+
-+const WebextensionDevtoolsActor = ActorClass({
-+  typeName: "webextensionDevtools",
-+
-+  initialize: function(conn, tabActor) {
-+    Actor.prototype.initialize.call(this, conn);
-+    this.parentActor = tabActor;
-+    this.window = tabActor.window;
-+  },
-+
-+  inspectedWindowEval: method(function(text, options) {
-+    let result, isException = false;
-+
-+    try {
-+      result = this.window.eval(text);
-+    } catch (e) {
-+      result = e.toString();
-+      isException = true;
-+    }
-+
-+    return { result, isException };
-+  }, {
-+    request: {
-+      text: Arg(0, "string"),
-+      options: Arg(1, "json")
-+    },
-+    response: {
-+      data: RetVal("json")
-+    }
-+  }),
-+
-+  inspectedWindowReload: method(function(extensionId, options) {
-+    if (options && options.injectedScript) {
-+      ExtensionContent.injectScriptOnDocumentStart(
-+        this.window, options.injectedScript
-+      );
-+    }
-+
-+    this.window.location.reload(options.ignoreCache || false);
-+  }, {
-+    request: {
-+      extensionId: Arg(0, "string"),
-+      options: Arg(1, "json")
-+    },
-+    response: {}
-+  })
-+});
-+
-+exports.WebextensionDevtoolsActor = WebextensionDevtoolsActor;
-+
-+exports.WebextensionDevtoolsFront = FrontClass(WebextensionDevtoolsActor, {
-+  initialize: function(client, form) {
-+    Front.prototype.initialize.call(this, client);
-+    this.actorID = form.webextensionDevtoolsActor;
-+    this.manage(this);
-+  },
-+});
-diff --git a/devtools/server/main.js b/devtools/server/main.js
-index 048b8d2..b6e6e44 100644
---- a/devtools/server/main.js
-+++ b/devtools/server/main.js
-@@ -560,16 +560,21 @@ var DebuggerServer = {
-       constructor: "PromisesActor",
-       type: { tab: true }
+diff --git a/devtools/server/actors/webconsole.js b/devtools/server/actors/webconsole.js
+index d0685ea..0755faa 100644
+--- a/devtools/server/actors/webconsole.js
++++ b/devtools/server/actors/webconsole.js
+@@ -799,23 +799,31 @@ WebConsoleActor.prototype =
+ 
+     // First, send a response packet with the id only.
+     let resultID = Date.now();
+     this.conn.send({
+       from: this.actorID,
+       resultID: resultID
      });
-     this.registerModule("devtools/server/actors/performance-entries", {
-       prefix: "performanceEntries",
-       constructor: "PerformanceEntriesActor",
-       type: { tab: true }
-     });
-+    this.registerModule("devtools/server/actors/webextension-devtools-api", {
-+      prefix: "webextensionDevtools",
-+      constructor: "WebextensionDevtoolsActor",
-+      type: { tab: true }
-+    });
+ 
+-    // Then, execute the script that may pause.
+-    let response = this.onEvaluateJS(aRequest);
+-    response.resultID = resultID;
++    // Then, execute the script that may pause
++    let evaluate = () => {
++      let response = this.onEvaluateJS(aRequest);
++      response.resultID = resultID;
++
++      // Finally, send an unsolicited evaluationResult packet with
++      // the normal return value
++      this.conn.sendActorEvent(this.actorID, "evaluationResult", response);
++    };
+ 
+-    // Finally, send an unsolicited evaluationResult packet with
+-    // the normal return value
+-    this.conn.sendActorEvent(this.actorID, "evaluationResult", response);
++    if (aRequest.runOnNextWindowReady) {
++      events.once(this.parentActor, "window-ready", evaluate);
++    } else {
++      evaluate();
++    }
    },
  
    /**
-    * Passes a set of options to the BrowserAddonActors for the given ID.
+    * Handler for the "evaluateJS" request. This method evaluates the given
+    * JavaScript string and sends back the result.
     *
-    * @param aId string
-    *        The ID of the add-on to pass the options to
-    * @param aOptions object
-diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
-index 752fc57..fab57f2 100644
---- a/toolkit/components/extensions/ExtensionContent.jsm
-+++ b/toolkit/components/extensions/ExtensionContent.jsm
-@@ -15,16 +15,17 @@ this.EXPORTED_SYMBOLS = ["ExtensionContent"];
- const Ci = Components.interfaces;
- const Cc = Components.classes;
- const Cu = Components.utils;
- const Cr = Components.results;
- 
- Cu.import("resource://gre/modules/XPCOMUtils.jsm");
- Cu.import("resource://gre/modules/Services.jsm");
- Cu.import("resource://gre/modules/AppConstants.jsm");
-+Cu.import("resource://gre/modules/devtools/shared/event-emitter.js");
- 
- XPCOMUtils.defineLazyModuleGetter(this, "ExtensionManagement",
-                                   "resource://gre/modules/ExtensionManagement.jsm");
- XPCOMUtils.defineLazyModuleGetter(this, "MatchPattern",
-                                   "resource://gre/modules/MatchPattern.jsm");
- XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
-                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
- 
-@@ -413,27 +414,30 @@ var DocumentManager = {
-     this.extensionCount--;
-     if (this.extensionCount == 0) {
-       this.uninit();
+    * @param object aRequest
+    *        The JSON request object received from the Web Console client.
+@@ -859,25 +867,36 @@ WebConsoleActor.prototype =
+     try {
+       resultGrip = this.createValueGrip(result);
+     } catch (e) {
+       errorMessage = e;
      }
+ 
+     this._lastConsoleInputEvaluation = result;
+ 
+-    return {
++    let ret = {
+       from: this.actorID,
+       input: input,
+       result: resultGrip,
+       timestamp: timestamp,
+       exception: errorGrip,
+       exceptionMessage: this._createStringGrip(errorMessage),
+       helperResult: helperResult,
+     };
++
++    if (aRequest.unsafeDereference) {
++      let value = result && result.type === "undefined" ?
++        undefined : result;
++      value = value && (typeof value.unsafeDereference == "function") ?
++        value.unsafeDereference() : value;
++
++      ret.plainResult = value;
++    }
++
++    return ret;
    },
  
-   trigger(when, window) {
-     let state = this.getWindowState(window);
-+    this.emit(when, { state, window });
-     for (let [extensionId, extension] of ExtensionManager.extensions) {
-       for (let script of extension.scripts) {
-         if (script.matches(window)) {
-           let context = this.getContext(extensionId, window);
-           context.execute(script, scheduled => scheduled == state);
-         }
+   /**
+    * The Autocomplete request handler.
+    *
+    * @param object aRequest
+    *        The request message - what input to autocomplete.
+    * @return object
+diff --git a/devtools/shared/webconsole/client.js b/devtools/shared/webconsole/client.js
+index 86fe803..b47f0b8 100644
+--- a/devtools/shared/webconsole/client.js
++++ b/devtools/shared/webconsole/client.js
+@@ -250,16 +250,17 @@ WebConsoleClient.prototype = {
+     let packet = {
+       to: this._actor,
+       type: "evaluateJS",
+       text: aString,
+       bindObjectActor: aOptions.bindObjectActor,
+       frameActor: aOptions.frameActor,
+       url: aOptions.url,
+       selectedNodeActor: aOptions.selectedNodeActor,
++      unsafeDereference: aOptions.unsafeDereference,
+     };
+     this._client.request(packet, aOnResponse);
+   },
+ 
+   /**
+    * Evaluate a JavaScript expression asynchronously.
+    * See evaluateJS for parameter and response information.
+    */
+@@ -274,16 +275,18 @@ WebConsoleClient.prototype = {
+     let packet = {
+       to: this._actor,
+       type: "evaluateJSAsync",
+       text: aString,
+       bindObjectActor: aOptions.bindObjectActor,
+       frameActor: aOptions.frameActor,
+       url: aOptions.url,
+       selectedNodeActor: aOptions.selectedNodeActor,
++      unsafeDereference: aOptions.unsafeDereference,
++      runOnNextWindowReady: aOptions.runOnNextWindowReady,
+     };
+ 
+     this._client.request(packet, response => {
+       // Null check this in case the client has been detached while waiting
+       // for a response.
+       if (this.pendingEvaluationResults) {
+         this.pendingEvaluationResults.set(response.resultID, aOnResponse);
        }
-     }
-   },
- };
- 
-+EventEmitter.decorate(DocumentManager);
-+
- // Represents a browser extension in the content process.
- function BrowserExtensionContent(data)
- {
-   this.id = data.id;
-   this.uuid = data.uuid;
-   this.data = data;
-   this.scripts = [ for (scriptData of data.content_scripts) new Script(scriptData) ];
-   this.webAccessibleResources = data.webAccessibleResources;
-@@ -536,16 +540,24 @@ this.ExtensionContent = {
-                          .outerWindowID;
-     global.sendAsyncMessage("Extension:RemoveTopWindowID", {windowId});
-   },
- 
-   getBroker(messageManager) {
-     return this.globals.get(messageManager);
-   },
- 
-+  injectScriptOnDocumentStart(target, injectedScript) {
-+    DocumentManager.once("document_start", (evt, { state, window }) => {
-+      if (target === window) {
-+        window.eval(injectedScript);
-+      }
-+    });
-+  },
-+
-   receiveMessage({target, name, data}) {
-     switch (name) {
-     case "Extension:Execute":
-       data.options.matches = "<all_urls>";
-       let script = new Script(data.options);
-       let {extensionId} = data;
-       DocumentManager.executeScript(target, extensionId, script);
-       break;
 
