@@ -1,15 +1,15 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1214174 - windowless WebBrowserChrome2Stub should implement nsIEmbeddingSiteWindow GetDimensions
+Bug 1214174 - windowless WebBrowserChrome2Stub should implement nsIEmbeddingSiteWindow GetDimensions (r=billm)
 
 prevents exception on accessing window's screenX, screenY, outerWidth and outerHeight properties in a windowless browser
 ---
- xpfe/appshell/nsAppShellService.cpp | 73 +++++++++++++++++++++++++++++++++++++
- 1 file changed, 73 insertions(+)
+ xpfe/appshell/nsAppShellService.cpp | 75 ++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 74 insertions(+), 1 deletion(-)
 
 diff --git a/xpfe/appshell/nsAppShellService.cpp b/xpfe/appshell/nsAppShellService.cpp
-index 9765f7a..8f26b33 100644
+index 9765f7a..0ee2dc1 100644
 --- a/xpfe/appshell/nsAppShellService.cpp
 +++ b/xpfe/appshell/nsAppShellService.cpp
 @@ -22,16 +22,17 @@
@@ -67,18 +67,24 @@ index 9765f7a..8f26b33 100644
  NS_IMETHODIMP
  WebBrowserChrome2Stub::SetStatus(uint32_t aStatusType, const char16_t* aStatus)
  {
-@@ -321,16 +325,85 @@ WebBrowserChrome2Stub::SetStatusWithContext(uint32_t aStatusType,
+@@ -316,21 +320,90 @@ NS_IMETHODIMP
+ WebBrowserChrome2Stub::SetStatusWithContext(uint32_t aStatusType,
+                                             const nsAString& aStatusText,
+                                             nsISupports* aStatusContext)
+ {
+   return NS_OK;
  }
  
  NS_IMETHODIMP
- WebBrowserChrome2Stub::GetInterface(const nsIID & aIID, void **aSink)
+-WebBrowserChrome2Stub::GetInterface(const nsIID & aIID, void **aSink)
++WebBrowserChrome2Stub::GetInterface(const nsIID& aIID, void** aSink)
  {
      return QueryInterface(aIID, aSink);
  }
  
 +// nsIEmbeddingSiteWindow impl
 +NS_IMETHODIMP
-+WebBrowserChrome2Stub::GetDimensions(uint32_t flags, int32_t *x, int32_t *y, int32_t *cx, int32_t *cy)
++WebBrowserChrome2Stub::GetDimensions(uint32_t flags, int32_t* x, int32_t* y, int32_t* cx, int32_t* cy)
 +{
 +  if (x) {
 +    *x = 0;
@@ -112,7 +118,7 @@ index 9765f7a..8f26b33 100644
 +}
 +
 +NS_IMETHODIMP
-+WebBrowserChrome2Stub::GetVisibility(bool *aVisibility)
++WebBrowserChrome2Stub::GetVisibility(bool* aVisibility)
 +{
 +  return NS_ERROR_NOT_IMPLEMENTED;
 +}
@@ -123,18 +129,18 @@ index 9765f7a..8f26b33 100644
 +}
 +
 +NS_IMETHODIMP
-+WebBrowserChrome2Stub::GetTitle(char16_t * *aTitle)
++WebBrowserChrome2Stub::GetTitle(char16_t** aTitle)
 +{
 +  return NS_ERROR_NOT_IMPLEMENTED;
 +}
 +NS_IMETHODIMP
-+WebBrowserChrome2Stub::SetTitle(const char16_t * aTitle)
++WebBrowserChrome2Stub::SetTitle(const char16_t* aTitle)
 +{
 +  return NS_ERROR_NOT_IMPLEMENTED;
 +}
 +
 +NS_IMETHODIMP
-+WebBrowserChrome2Stub::GetSiteWindow(void **aSiteWindow)
++WebBrowserChrome2Stub::GetSiteWindow(void** aSiteWindow)
 +{
 +  return NS_ERROR_NOT_IMPLEMENTED;
 +}

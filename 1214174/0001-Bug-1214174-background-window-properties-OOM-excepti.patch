@@ -1,7 +1,7 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1214174 - background window properties OOM exception test case
+Bug 1214174 - background window properties OOM exception test case (r=billm)
 
 ---
  .../extensions/test/mochitest/mochitest.ini        |  1 +

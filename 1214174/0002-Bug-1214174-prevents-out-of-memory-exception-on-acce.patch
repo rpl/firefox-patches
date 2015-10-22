@@ -1,17 +1,17 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1214174 - prevents out of memory exception on accessing window.sidebar/window.external in a windowless browser
+Bug 1214174 - prevents out of memory exception on accessing window.sidebar/window.external in a windowless browser (r=billm)
 
 ---
- toolkit/components/search/nsSidebar.js | 6 +++++-
- 1 file changed, 5 insertions(+), 1 deletion(-)
+ toolkit/components/search/nsSidebar.js | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
 
 diff --git a/toolkit/components/search/nsSidebar.js b/toolkit/components/search/nsSidebar.js
-index deb4557..e410e72 100644
+index deb4557..65aeafc 100644
 --- a/toolkit/components/search/nsSidebar.js
 +++ b/toolkit/components/search/nsSidebar.js
-@@ -11,20 +11,24 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+@@ -11,36 +11,45 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
  const SHERLOCK_FILE_EXT_REGEXP = /\.src$/i;
  
  function nsSidebar() {
@@ -21,11 +21,14 @@ index deb4557..e410e72 100644
    init: function(window) {
      this.window = window;
 -    this.mm = window.QueryInterface(Ci.nsIInterfaceRequestor)
+-                    .getInterface(Ci.nsIDocShell)
+-                    .QueryInterface(Ci.nsIInterfaceRequestor)
+-                    .getInterface(Ci.nsIContentFrameMessageManager);
 +    try {
 +      this.mm = window.QueryInterface(Ci.nsIInterfaceRequestor)
-                     .getInterface(Ci.nsIDocShell)
-                     .QueryInterface(Ci.nsIInterfaceRequestor)
-                     .getInterface(Ci.nsIContentFrameMessageManager);
++                      .getInterface(Ci.nsIDocShell)
++                      .QueryInterface(Ci.nsIInterfaceRequestor)
++                      .getInterface(Ci.nsIContentFrameMessageManager);
 +    } catch(e) {
 +      Cu.reportError(e);
 +    }
@@ -37,4 +40,25 @@ index deb4557..e410e72 100644
        Cu.reportError("Installing Sherlock search plugins is no longer supported.");
        return;
      }
+ 
+     this.AddSearchProvider(engineURL);
+   },
+ 
+   // This function implements window.external.AddSearchProvider().
+   // The capitalization, although nonstandard here, is to match other browsers'
+   // APIs and is therefore important.
+   AddSearchProvider: function(engineURL) {
++    if (!this.mm) {
++      Cu.reportError(`Installing a search provider from this context is not currently supported: ${Error().stack}.`);
++      return;
++    }
++
+     this.mm.sendAsyncMessage("Search:AddEngine", {
+       pageURL: this.window.document.documentURIObject.spec,
+       engineURL
+     });
+   },
+ 
+   // This function exists to implement window.external.IsSearchProviderInstalled(),
+   // for compatibility with other browsers.  The function has been deprecated
 
