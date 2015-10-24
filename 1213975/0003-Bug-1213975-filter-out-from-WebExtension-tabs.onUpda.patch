@@ -8,10 +8,10 @@ Bug 1213975 - filter out from WebExtension tabs.onUpdated events any location ch
  1 file changed, 3 insertions(+)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index 4f1fde84..b4935085 100644
+index c7dcbd0..0456f1b 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -186,16 +186,19 @@ extensions.registerAPI((extension, context) => {
+@@ -194,16 +194,19 @@ extensions.registerAPI((extension, context) => {
              let gBrowser = browser.ownerDocument.defaultView.gBrowser;
              let tab = gBrowser.getTabForBrowser(browser);
              let tabId = TabManager.getId(tab);
