@@ -5,12 +5,12 @@ Bug 1214174 - background window properties OOM exception test case (r=billm)
 
 ---
  .../extensions/test/mochitest/mochitest.ini        |  1 +
- .../mochitest/test_ext_background_oom_bug.html     | 71 ++++++++++++++++++++++
- 2 files changed, 72 insertions(+)
- create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
+ .../test_ext_background_window_properties.html     | 52 ++++++++++++++++++++++
+ 2 files changed, 53 insertions(+)
+ create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_window_properties.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 7fd2c57..fe18dda 100644
+index 7fd2c57..e92854f 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
 @@ -27,8 +27,9 @@ support-files =
@@ -22,13 +22,13 @@ index 7fd2c57..fe18dda 100644
  [test_ext_cookies.html]
  [test_ext_bookmarks.html]
  [test_ext_alarms.html]
-+[test_ext_background_oom_bug.html]
-diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html b/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
++[test_ext_background_window_properties.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_window_properties.html b/toolkit/components/extensions/test/mochitest/test_ext_background_window_properties.html
 new file mode 100644
-index 0000000..b9bf1b5
+index 0000000..ec68465
 --- /dev/null
-+++ b/toolkit/components/extensions/test/mochitest/test_ext_background_oom_bug.html
-@@ -0,0 +1,71 @@
++++ b/toolkit/components/extensions/test/mochitest/test_ext_background_window_properties.html
+@@ -0,0 +1,52 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -43,20 +43,9 @@ index 0000000..b9bf1b5
 +
 +<script type="application/javascript;version=1.8">
 +
-+add_task(function* test_messenger() {
++add_task(function* testBackgroundWindowProperties() {
 +  let extension = ExtensionTestUtils.loadExtension({
 +    background: "(" + function() {
-+      // based on es5-shim / object.keys code
-+      var has = Object.prototype.hasOwnProperty;
-+      var blacklistedKeys = {
-+        $window: true,
-+        $console: true,
-+        $parent: true,
-+        $self: true,
-+        $frames: true,
-+        $webkitIndexedDB: true,
-+        $webkitStorageInfo: true,
-+      };
 +      var expectedValues = {
 +        screenX: 0,
 +        screenY: 0,
@@ -64,34 +53,26 @@ index 0000000..b9bf1b5
 +        outerHeight: 0
 +      };
 +
-+      var hasAutomationEqualityBug = (function () {
-+        /* global window */
-+        if (typeof window === 'undefined') { return false; }
-+        for (var k in window) {
-+          try {
-+            if (!blacklistedKeys['$' + k]) {
-+              // NOTE: accessing the property generates the exceptions
-+              if (k in expectedValues) {
-+                browser.test.assertEq(expectedValues[k], window[k],
-+                                      `should return the expected value for window property: ${k}`)
-+              } else {
-+                window[k];
-+              }
-+            }
-+          } catch(e) {
-+            browser.test.assertEq(null, e, `unexpected exception accessing window property: ${k}`)
++      for (var k in window) {
++        try {
++          if (k in expectedValues) {
++            browser.test.assertEq(expectedValues[k], window[k],
++                                  `should return the expected value for window property: ${k}`)
++          } else {
++            window[k];
 +          }
++        } catch(e) {
++          browser.test.assertEq(null, e, `unexpected exception accessing window property: ${k}`)
 +        }
++      }
 +
-+        return false;
-+      }());
-+      browser.test.notifyPass("background.OOM.done")
++      browser.test.notifyPass("background.testWindowProperties.done")
 +    } + ")();"
 +  });
 +  info("load complete");
 +  yield extension.startup();
 +  info("startup complete");
-+  yield extension.awaitFinish("background.OOM.done")
++  yield extension.awaitFinish("background.testWindowProperties.done")
 +  yield extension.unload();
 +  info("extension unloaded successfully");
 +});
