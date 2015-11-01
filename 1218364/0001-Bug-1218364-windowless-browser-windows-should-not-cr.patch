@@ -1,20 +1,20 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1218364 - windowless browser windows should not crash on Troubleshoot (r=billm)
+Bug 1218364 - windowless browser windows should not crash on Troubleshoot (r=billm,jrmuizel)
 
 ---
  gfx/layers/client/ClientLayerManager.cpp           |  1 +
  gfx/tests/browser/browser.ini                      |  4 ++
  .../browser_windowless_troubleshoot_crash.js       | 45 ++++++++++++++++++++++
  gfx/tests/moz.build                                |  1 +
- toolkit/modules/Troubleshoot.jsm                   |  3 +-
- 5 files changed, 53 insertions(+), 1 deletion(-)
+ toolkit/modules/Troubleshoot.jsm                   |  6 ++-
+ 5 files changed, 56 insertions(+), 1 deletion(-)
  create mode 100644 gfx/tests/browser/browser.ini
  create mode 100644 gfx/tests/browser/browser_windowless_troubleshoot_crash.js
 
 diff --git a/gfx/layers/client/ClientLayerManager.cpp b/gfx/layers/client/ClientLayerManager.cpp
-index e4cd768..8bfea1d 100644
+index 2141347..c67b4a4 100644
 --- a/gfx/layers/client/ClientLayerManager.cpp
 +++ b/gfx/layers/client/ClientLayerManager.cpp
 @@ -755,16 +755,17 @@ ClientLayerManager::ClearLayer(Layer* aLayer)
@@ -47,7 +47,7 @@ index 0000000..0a1902f
 +[browser_windowless_troubleshoot_crash.js]
 diff --git a/gfx/tests/browser/browser_windowless_troubleshoot_crash.js b/gfx/tests/browser/browser_windowless_troubleshoot_crash.js
 new file mode 100644
-index 0000000..77293b8
+index 0000000..ef5c39d
 --- /dev/null
 +++ b/gfx/tests/browser/browser_windowless_troubleshoot_crash.js
 @@ -0,0 +1,45 @@
@@ -85,7 +85,6 @@ index 0000000..77293b8
 +
 +  ok(true, "not crashed");
 +
-+  // TODO: is this test better moved elsewhere in the source tree?
 +  var Troubleshoot = Cu.import("resource://gre/modules/Troubleshoot.jsm", {}).Troubleshoot;
 +  var data = yield new Promise((resolve, reject) => {
 +    Troubleshoot.snapshot((data) => {
@@ -93,8 +92,9 @@ index 0000000..77293b8
 +    });
 +  });
 +
++  is(data.graphics.numTotalWindows, 2, "windowless browser window should not be counted as windows in the troubleshoot graphics report");
 +  is(data.graphics.numAcceleratedWindows, 0, "windowless browser window should not be counted as an accelerated window");
-+  is(data.graphics.windowLayerManagerType, "None", "windowless browser window should not be recognized as windowLayerManagerType 'None'");
++  is(data.graphics.windowLayerManagerType, "Basic", "windowless browser window should not set windowLayerManagerType to 'None'");
 +});
 diff --git a/gfx/tests/moz.build b/gfx/tests/moz.build
 index b985130..696ca9a 100644
@@ -111,11 +111,28 @@ index b985130..696ca9a 100644
  MOCHITEST_MANIFESTS += ['mochitest/mochitest.ini']
 +BROWSER_CHROME_MANIFESTS += ['browser/browser.ini']
 diff --git a/toolkit/modules/Troubleshoot.jsm b/toolkit/modules/Troubleshoot.jsm
-index 159bc66..5474682 100644
+index 159bc66..bf7f872 100644
 --- a/toolkit/modules/Troubleshoot.jsm
 +++ b/toolkit/modules/Troubleshoot.jsm
-@@ -314,17 +314,18 @@ var dataProviders = {
+@@ -302,21 +302,25 @@ var dataProviders = {
+       var gfxInfo = Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo);
+     }
+     catch (e) {}
+ 
+     data.numTotalWindows = 0;
+     data.numAcceleratedWindows = 0;
+     let winEnumer = Services.ww.getWindowEnumerator();
+     while (winEnumer.hasMoreElements()) {
+-      data.numTotalWindows++;
+       let winUtils = winEnumer.getNext().
+                      QueryInterface(Ci.nsIInterfaceRequestor).
+                      getInterface(Ci.nsIDOMWindowUtils);
        try {
++        // NOTE: windowless browser's windows should not be reported in the graphics troubleshoot report
++        if (winUtils.layerManagerType == "None") {
++          continue;
++        }
++        data.numTotalWindows++;
          data.windowLayerManagerType = winUtils.layerManagerType;
          data.windowLayerManagerRemote = winUtils.layerManagerRemote;
          data.supportsHardwareH264 = winUtils.supportsHardwareH264Decoding;
@@ -123,15 +140,5 @@ index 159bc66..5474682 100644
        catch (e) {
          continue;
        }
--      if (data.windowLayerManagerType != "Basic")
-+      // if layerManagerType equals Basic or None, it doesn't count as accelerated window
-+      if (["Basic", "None"].indexOf(data.windowLayerManagerType) < 0)
-         data.numAcceleratedWindows++;
-     }
- 
-     if (!data.numAcceleratedWindows && gfxInfo) {
-       let win = AppConstants.platform == "win";
-       let feature = win ? gfxInfo.FEATURE_DIRECT3D_9_LAYERS :
-                           gfxInfo.FEATURE_OPENGL_LAYERS;
-       data.numAcceleratedWindowsMessage = statusMsgForFeature(feature);
+       if (data.windowLayerManagerType != "Basic")
 
