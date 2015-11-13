@@ -6,10 +6,10 @@ Bug 1218364 - windowless browser windows should not crash on Troubleshoot (r=bil
 ---
  gfx/layers/client/ClientLayerManager.cpp           |  1 +
  gfx/tests/browser/browser.ini                      |  4 ++
- .../browser_windowless_troubleshoot_crash.js       | 45 ++++++++++++++++++++++
+ .../browser_windowless_troubleshoot_crash.js       | 43 ++++++++++++++++++++++
  gfx/tests/moz.build                                |  1 +
  toolkit/modules/Troubleshoot.jsm                   |  6 ++-
- 5 files changed, 56 insertions(+), 1 deletion(-)
+ 5 files changed, 54 insertions(+), 1 deletion(-)
  create mode 100644 gfx/tests/browser/browser.ini
  create mode 100644 gfx/tests/browser/browser_windowless_troubleshoot_crash.js
 
@@ -47,10 +47,10 @@ index 0000000..0a1902f
 +[browser_windowless_troubleshoot_crash.js]
 diff --git a/gfx/tests/browser/browser_windowless_troubleshoot_crash.js b/gfx/tests/browser/browser_windowless_troubleshoot_crash.js
 new file mode 100644
-index 0000000..ef5c39d
+index 0000000..78008a9
 --- /dev/null
 +++ b/gfx/tests/browser/browser_windowless_troubleshoot_crash.js
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,43 @@
 +let { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 +
 +add_task(function* test_windowlessBrowserTroubleshootCrash() {
@@ -92,9 +92,7 @@ index 0000000..ef5c39d
 +    });
 +  });
 +
-+  is(data.graphics.numTotalWindows, 2, "windowless browser window should not be counted as windows in the troubleshoot graphics report");
-+  is(data.graphics.numAcceleratedWindows, 0, "windowless browser window should not be counted as an accelerated window");
-+  is(data.graphics.windowLayerManagerType, "Basic", "windowless browser window should not set windowLayerManagerType to 'None'");
++  ok(data.graphics.windowLayerManagerType !== "None", "windowless browser window should not set windowLayerManagerType to 'None'");
 +});
 diff --git a/gfx/tests/moz.build b/gfx/tests/moz.build
 index b985130..696ca9a 100644
