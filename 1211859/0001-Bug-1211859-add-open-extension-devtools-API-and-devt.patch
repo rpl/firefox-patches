@@ -9,10 +9,9 @@ Bug 1211859 - add open extension devtools API and devtools_page and devtools_pan
  .../components/extensions/test/browser/browser.ini |   1 +
  .../test/browser/browser_ext_devtools_page.js      |  98 +++++++
  browser/components/extensions/test/browser/head.js |   5 +
- browser/components/nsBrowserGlue.js                |   9 +-
+ browser/components/nsBrowserGlue.js                |   1 +
  devtools/server/actors/webconsole.js               |  33 ++-
- devtools/shared/webconsole/client.js               |   3 +
- 8 files changed, 454 insertions(+), 11 deletions(-)
+ 7 files changed, 447 insertions(+), 7 deletions(-)
  create mode 100644 browser/components/extensions/ext-devtools.js
  create mode 100644 browser/components/extensions/test/browser/browser_ext_devtools_page.js
 
@@ -338,29 +337,29 @@ index 0000000..021addc
 +  }
 +});
 diff --git a/browser/components/extensions/jar.mn b/browser/components/extensions/jar.mn
-index 07b6af3..6f75974 100644
+index faa5d58..ca9667d 100644
 --- a/browser/components/extensions/jar.mn
 +++ b/browser/components/extensions/jar.mn
-@@ -4,8 +4,9 @@
- 
- browser.jar:
+@@ -6,8 +6,9 @@ browser.jar:
      content/browser/extension.svg
      content/browser/ext-utils.js
      content/browser/ext-contextMenus.js
      content/browser/ext-browserAction.js
+     content/browser/ext-pageAction.js
      content/browser/ext-tabs.js
      content/browser/ext-windows.js
+     content/browser/ext-bookmarks.js
 +    content/browser/ext-devtools.js
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
-index 6012a80..6b0015a 100644
+index ff6e12c..d398f3a 100644
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -11,8 +11,9 @@ support-files =
- [browser_ext_contextMenus.js]
- [browser_ext_getViews.js]
+@@ -18,8 +18,9 @@ support-files =
  [browser_ext_tabs_executeScript.js]
  [browser_ext_tabs_query.js]
  [browser_ext_tabs_update.js]
+ [browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
  [browser_ext_windows_update.js]
  [browser_ext_contentscript_connect.js]
  [browser_ext_tab_runtimeConnect.js]
@@ -470,10 +469,10 @@ index 0000000..86f6fac
 +  info("extension unloaded successfully");
 +});
 diff --git a/browser/components/extensions/test/browser/head.js b/browser/components/extensions/test/browser/head.js
-index ac6f9c1..3bb1d89 100644
+index cd47bcd..4f4d480 100644
 --- a/browser/components/extensions/test/browser/head.js
 +++ b/browser/components/extensions/test/browser/head.js
-@@ -1,7 +1,12 @@
+@@ -1,16 +1,21 @@
  var {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
  
  function makeWidgetId(id)
@@ -481,114 +480,47 @@ index ac6f9c1..3bb1d89 100644
    id = id.toLowerCase();
    return id.replace(/[^a-z0-9_-]/g, "_");
  }
-+
+ 
 +function makeDevtoolsPanelId(id, url)
 +{
 +  return `${makeWidgetId(id)}-${url}-devtools-panel`;
 +}
++
+ function* focusWindow(win)
+ {
+   let fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
+   if (fm.activeWindow == win) {
+     return;
+   }
+ 
+   let promise = new Promise(resolve => {
 diff --git a/browser/components/nsBrowserGlue.js b/browser/components/nsBrowserGlue.js
-index 755b1d5..2615df8 100644
+index 3a74a55..d08546a 100644
 --- a/browser/components/nsBrowserGlue.js
 +++ b/browser/components/nsBrowserGlue.js
-@@ -586,17 +586,17 @@ BrowserGlue.prototype = {
-     // gets called in finalUIStartup and from a browser-search-service observer,
-     // to catch both cases (search service initialization occurring before and
-     // after final-ui-startup)
-     if (Services.search.isInitialized) {
-       Services.search.defaultEngine = Services.search.currentEngine;
-     }
-   },
- 
--  // initialization (called on application startup) 
-+  // initialization (called on application startup)
-   _init: function BG__init() {
-     let os = Services.obs;
-     os.addObserver(this, "notifications-open-settings", false);
-     os.addObserver(this, "prefservice:after-app-defaults", false);
-     os.addObserver(this, "final-ui-startup", false);
-     os.addObserver(this, "browser-delayed-startup-finished", false);
-     os.addObserver(this, "sessionstore-windows-restored", false);
-     os.addObserver(this, "browser:purge-session-history", false);
-@@ -631,16 +631,17 @@ BrowserGlue.prototype = {
-     os.addObserver(this, "autocomplete-did-enter-text", false);
-     os.addObserver(this, "tablet-mode-change", false);
+@@ -637,16 +637,17 @@ BrowserGlue.prototype = {
  
      ExtensionManagement.registerScript("chrome://browser/content/ext-utils.js");
      ExtensionManagement.registerScript("chrome://browser/content/ext-browserAction.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-pageAction.js");
      ExtensionManagement.registerScript("chrome://browser/content/ext-contextMenus.js");
      ExtensionManagement.registerScript("chrome://browser/content/ext-tabs.js");
      ExtensionManagement.registerScript("chrome://browser/content/ext-windows.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-bookmarks.js");
 +    ExtensionManagement.registerScript("chrome://browser/content/ext-devtools.js");
  
      this._flashHangCount = 0;
+     this._firstWindowReady = new Promise(resolve => this._firstWindowLoaded = resolve);
    },
  
    // cleanup (called on application shutdown)
    _dispose: function BG__dispose() {
      let os = Services.obs;
-     os.removeObserver(this, "notifications-open-settings");
-@@ -806,17 +807,17 @@ BrowserGlue.prototype = {
-   },
- 
-   // runs on startup, before the first command line handler is invoked
-   // (i.e. before the first window is opened)
-   _finalUIStartup: function BG__finalUIStartup() {
-     this._sanitizer.onStartup();
-     // check if we're in safe mode
-     if (Services.appinfo.inSafeMode) {
--      Services.ww.openWindow(null, "chrome://browser/content/safeMode.xul", 
-+      Services.ww.openWindow(null, "chrome://browser/content/safeMode.xul",
-                              "_blank", "chrome,centerscreen,modal,resizable=no", null);
-     }
- 
-     // apply distribution customizations
-     // prefs are applied in _onAppDefaults()
-     this._distributionCustomizer.applyCustomizations();
- 
-     // handle any UI migration
-@@ -2038,17 +2039,17 @@ BrowserGlue.prototype = {
-       for (let resourceName of ["mode", "iconsize"]) {
-         for (let toolbarId of toolbars) {
-           xulStore.removeValue(BROWSER_DOCURL, toolbarId, resourceName);
-         }
-       }
-     }
- 
-     if (currentUIVersion < 19) {
--      let detector = null;    
-+      let detector = null;
-       try {
-         detector = Services.prefs.getComplexValue("intl.charset.detector",
-                                                   Ci.nsIPrefLocalizedString).data;
-       } catch (ex) {}
-       if (!(detector == "" ||
-             detector == "ja_parallel_state_machine" ||
-             detector == "ruprob" ||
-             detector == "ukprob")) {
-@@ -2200,17 +2201,17 @@ BrowserGlue.prototype = {
-         (lightweightThemeSelected && selectedThemeID != "firefox-devedition@mozilla.org");
- 
-       if (userChoseToNotUseDeveditionTheme && selectedThemeID == "firefox-devedition@mozilla.org") {
-         Services.prefs.setCharPref("lightweightThemes.selectedThemeID", "");
-       }
- 
-       Services.prefs.clearUserPref("browser.devedition.showCustomizeButton");
-     }
-- 
-+
-     if (currentUIVersion < 31) {
-       xulStore.removeValue(BROWSER_DOCURL, "bookmarks-menu-button", "class");
-       xulStore.removeValue(BROWSER_DOCURL, "home-button", "class");
-     }
- 
-     // Update the migration version.
-     Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
-   },
 diff --git a/devtools/server/actors/webconsole.js b/devtools/server/actors/webconsole.js
-index d0685ea..0755faa 100644
+index 6d62ad4..4e16f9b 100644
 --- a/devtools/server/actors/webconsole.js
 +++ b/devtools/server/actors/webconsole.js
-@@ -799,23 +799,31 @@ WebConsoleActor.prototype =
+@@ -793,23 +793,31 @@ WebConsoleActor.prototype =
  
      // First, send a response packet with the id only.
      let resultID = Date.now();
@@ -626,7 +558,7 @@ index d0685ea..0755faa 100644
     *
     * @param object aRequest
     *        The JSON request object received from the Web Console client.
-@@ -859,25 +867,36 @@ WebConsoleActor.prototype =
+@@ -858,25 +866,36 @@ WebConsoleActor.prototype =
      try {
        resultGrip = this.createValueGrip(result);
      } catch (e) {
@@ -664,45 +596,4 @@ index d0685ea..0755faa 100644
     * @param object aRequest
     *        The request message - what input to autocomplete.
     * @return object
-diff --git a/devtools/shared/webconsole/client.js b/devtools/shared/webconsole/client.js
-index 86fe803..b47f0b8 100644
---- a/devtools/shared/webconsole/client.js
-+++ b/devtools/shared/webconsole/client.js
-@@ -250,16 +250,17 @@ WebConsoleClient.prototype = {
-     let packet = {
-       to: this._actor,
-       type: "evaluateJS",
-       text: aString,
-       bindObjectActor: aOptions.bindObjectActor,
-       frameActor: aOptions.frameActor,
-       url: aOptions.url,
-       selectedNodeActor: aOptions.selectedNodeActor,
-+      unsafeDereference: aOptions.unsafeDereference,
-     };
-     this._client.request(packet, aOnResponse);
-   },
- 
-   /**
-    * Evaluate a JavaScript expression asynchronously.
-    * See evaluateJS for parameter and response information.
-    */
-@@ -274,16 +275,18 @@ WebConsoleClient.prototype = {
-     let packet = {
-       to: this._actor,
-       type: "evaluateJSAsync",
-       text: aString,
-       bindObjectActor: aOptions.bindObjectActor,
-       frameActor: aOptions.frameActor,
-       url: aOptions.url,
-       selectedNodeActor: aOptions.selectedNodeActor,
-+      unsafeDereference: aOptions.unsafeDereference,
-+      runOnNextWindowReady: aOptions.runOnNextWindowReady,
-     };
- 
-     this._client.request(packet, response => {
-       // Null check this in case the client has been detached while waiting
-       // for a response.
-       if (this.pendingEvaluationResults) {
-         this.pendingEvaluationResults.set(response.resultID, aOnResponse);
-       }
 
