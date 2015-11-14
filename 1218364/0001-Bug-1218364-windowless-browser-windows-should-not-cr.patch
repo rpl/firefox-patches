@@ -14,7 +14,7 @@ Bug 1218364 - windowless browser windows should not crash on Troubleshoot (r=bil
  create mode 100644 gfx/tests/browser/browser_windowless_troubleshoot_crash.js
 
 diff --git a/gfx/layers/client/ClientLayerManager.cpp b/gfx/layers/client/ClientLayerManager.cpp
-index 2141347..c67b4a4 100644
+index 7000d88..dfd623a 100644
 --- a/gfx/layers/client/ClientLayerManager.cpp
 +++ b/gfx/layers/client/ClientLayerManager.cpp
 @@ -755,16 +755,17 @@ ClientLayerManager::ClearLayer(Layer* aLayer)
