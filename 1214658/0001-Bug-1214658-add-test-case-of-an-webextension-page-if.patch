@@ -1,0 +1,131 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1214658 - add test case of an webextension page iframe created from a content script r=kmag
+
+---
+ .../extensions/test/mochitest/mochitest.ini        |  1 +
+ .../test_ext_contentscript_create_iframe.html      | 91 ++++++++++++++++++++++
+ 2 files changed, 92 insertions(+)
+ create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
+
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+index e535b5d..3f77302 100644
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -16,16 +16,17 @@ support-files =
+   file_script_xhr.js
+   file_sample.html
+   file_privilege_escalation.html
+   file_ext_background_api_injection.js
+ 
+ [test_ext_simple.html]
+ [test_ext_geturl.html]
+ [test_ext_contentscript.html]
++[test_ext_contentscript_create_iframe.html]
+ [test_ext_webrequest.html]
+ [test_ext_generate.html]
+ [test_ext_localStorage.html]
+ [test_ext_notifications.html]
+ [test_ext_runtime_connect.html]
+ [test_ext_runtime_disconnect.html]
+ [test_ext_runtime_getPlatformInfo.html]
+ [test_ext_sandbox_var.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
+new file mode 100644
+index 0000000..ad57c4e2
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
+@@ -0,0 +1,91 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for content script</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/SpawnTask.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<!-- WORKAROUND: this iframe hack is used to contain the html page source without escaping it -->
++<iframe id="test-asset">
++  <!DOCTYPE>
++  <html>
++    <script>
++      browser.runtime.sendMessage("content-script-iframe-loaded");
++    </script>
++  </html>
++</iframe>
++
++<script type="application/javascript;version=1.8">
++"use strict";
++
++add_task(function* test_contentscript_create_iframe()
++{
++  function backgroundScript() {
++    browser.runtime.onMessage.addListener((msg, sender) => {
++      browser.test.sendMessage(msg);
++    });
++  }
++
++  function contentScript() {
++    var iframe = document.createElement("iframe");
++    iframe.setAttribute("src", browser.runtime.getURL("content_script_iframe.html"));
++    document.body.appendChild(iframe);
++  }
++
++  function contentScriptIframe() {
++    browser.runtime.sendMessage('content-script-iframe-loaded');
++  }
++
++  let extensionData = {
++    manifest: {
++      content_scripts: [
++        {
++          "matches": ["http://mochi.test/*/file_sample.html"],
++          "js": ["content_script.js"],
++          "run_at": "document_end"
++        }
++      ],
++      "web_accessible_resources": [
++        "content_script_iframe.html"
++      ]
++    },
++
++    background: "(" + backgroundScript.toString() + ")()",
++
++    files: {
++      "content_script.js": "(" + contentScript.toString() + ")()",
++      "content_script_iframe.html": document.querySelector("iframe#test-asset").textContent
++    },
++  };
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++
++  let contentScriptIframeCount = 0;
++  let contentScriptIframeCreatedPromise = new Promise(resolve => {
++    extension.onMessage("content-script-iframe-loaded", () => { contentScriptIframeCount++; resolve(); });
++  });
++
++  yield extension.startup();
++  info("extension loaded");
++
++  let win = window.open("file_sample.html");
++
++  yield Promise.all([waitForLoad(win), contentScriptIframeCreatedPromise]);
++  info("test page loaded");
++
++  win.close();
++
++  is(contentScriptIframeCount, 1, "iframe created from content script ran exactly once");
++
++  yield extension.unload();
++  info("extension unloaded");
++});
++</script>
++
++</body>
++</html>
+
