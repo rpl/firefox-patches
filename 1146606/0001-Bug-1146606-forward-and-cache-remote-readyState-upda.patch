@@ -1,0 +1,152 @@
+From acee2d14bb8e85f869b475ad39ae8a802cb128d5 Mon Sep 17 00:00:00 2001
+From: Luca Greco <luca.greco@alcacoop.it>
+Date: Fri, 4 Dec 2015 05:28:53 +0100
+Subject: Bug 1146606 - forward and cache remote readyState updates and remove
+ CPOWs usage
+
+---
+ lib/sdk/content/tab-events.js | 21 +++++++++++++++------
+ lib/sdk/tabs/tab-firefox.js   | 19 ++++++++++++++++---
+ 2 files changed, 31 insertions(+), 9 deletions(-)
+
+diff --git a/lib/sdk/content/tab-events.js b/lib/sdk/content/tab-events.js
+index 45363be..0ca2c4c 100644
+--- a/lib/sdk/content/tab-events.js
++++ b/lib/sdk/content/tab-events.js
+@@ -4,39 +4,48 @@
+ "use strict";
+ 
+ const system = require('sdk/system/events');
+ const { frames } = require('sdk/remote/child');
+ const { WorkerChild } = require('sdk/content/worker-child');
+ 
+ // map observer topics to tab event names
+ const EVENTS = {
++  'content-document-global-created': 'create',
++  'chrome-document-global-created': 'create',
+   'content-document-interactive': 'ready',
+   'chrome-document-interactive': 'ready',
+   'content-document-loaded': 'load',
+   'chrome-document-loaded': 'load',
+ // 'content-page-shown': 'pageshow', // bug 1024105
+ }
+ 
+ function topicListener({ subject, type }) {
+-  let window = subject.defaultView;
+-  if (!window)
++  // NOTE detect the window from the subject:
++  // - on *-global-created the subject is the window
++  // - in the other cases it is the document object
++  let window = subject.navigator ? subject : subject.defaultView;
++  if (!window){
+     return;
+-  let frame = frames.getFrameForWindow(subject.defaultView);
+-  if (frame)
+-    frame.port.emit('sdk/tab/event', EVENTS[type]);
++  }
++  let frame = frames.getFrameForWindow(window);
++  if (frame) {
++    let readyState = frame.content.document.readyState;
++    frame.port.emit('sdk/tab/event', EVENTS[type], { readyState });
++  }
+ }
+ 
+ for (let topic in EVENTS)
+   system.on(topic, topicListener, true);
+ 
+ // bug 1024105 - content-page-shown notification doesn't pass persisted param
+ function eventListener({target, type, persisted}) {
+   let frame = this;
+-  if (target === frame.content.document)
++  if (target === frame.content.document) {
+     frame.port.emit('sdk/tab/event', type, persisted);
++  }
+ }
+ frames.addEventListener('pageshow', eventListener, true);
+ 
+ frames.port.on('sdk/tab/attach', (frame, options) => {
+   options.window = frame.content;
+   new WorkerChild(options);
+ });
+diff --git a/lib/sdk/tabs/tab-firefox.js b/lib/sdk/tabs/tab-firefox.js
+index 2a318b1..041a409 100644
+--- a/lib/sdk/tabs/tab-firefox.js
++++ b/lib/sdk/tabs/tab-firefox.js
+@@ -39,16 +39,22 @@ function isDestroyed(tab) {
+ }
+ 
+ function isClosed(tab) {
+   if (!viewsFor.has(tab))
+     return true;
+   return viewsFor.get(tab).closing;
+ }
+ 
++// private tab setter used to set the cached value from the tabEvelListener
++// on the tab object
++const setRemoteReadyStateCached = Symbol("setRemoteReadyStateCached");
++// private tab attribute where the remote cached value is stored
++const remoteReadyStateCached = Symbol("remoteReadyStateCached");
++
+ const Tab = Class({
+   implements: [EventTarget],
+   initialize: function(tabElement, options = null) {
+     modelsFor.set(tabElement, this);
+     viewsFor.set(this, tabElement);
+ 
+     if (options) {
+       EventTarget.prototype.initialize.call(this, options);
+@@ -119,19 +125,22 @@ const Tab = Class({
+ 
+     // TODO: Remove the dependency on the windows module, see bug 792670
+     require('../windows');
+     let tabElement = viewsFor.get(this);
+     let domWindow = tabElement.ownerDocument.defaultView;
+     return modelFor(domWindow);
+   },
+ 
++  [setRemoteReadyStateCached](val) {
++    this[remoteReadyStateCached] = val;
++  },
++
+   get readyState() {
+-    // TODO: This will use CPOWs in e10s: bug 1146606
+-    return isDestroyed(this) ? undefined : browser(this).contentDocument.readyState;
++    return isDestroyed(this) ? undefined : this[remoteReadyStateCached] || "uninitialized";
+   },
+ 
+   pin: function() {
+     if (isDestroyed(this))
+       return;
+ 
+     pin(viewsFor.get(this));
+   },
+@@ -301,21 +310,25 @@ function tabEventListener(event, tabElement, ...args) {
+       addListItem(window.tabs, tab);
+     // The tabs module will take care of adding to its internal list
+   }
+   else if (event == "close") {
+     if (window)
+       removeListItem(window.tabs, tab);
+     // The tabs module will take care of removing from its internal list
+   }
+-  else if (event == "ready" || event == "load") {
++  else if (event == "create" || event == "ready" || event == "load") {
+     // Ignore load events from before browser windows have fully loaded, these
+     // are for about:blank in the initial tab
+     if (isBrowser(domWindow) && !domWindow.gBrowserInit.delayedStartupFinished)
+       return;
++
++    // update the cached remote readyState value
++    let { readyState } = args[0] || {};
++    tab[setRemoteReadyStateCached](readyState);
+   }
+ 
+   tabEmit(tab, event, ...args);
+ 
+   // The tab object shouldn't be reachable after closed
+   if (event == "close") {
+     viewsFor.delete(tab);
+     modelsFor.delete(tabElement);
+-- 
+2.4.0
+
