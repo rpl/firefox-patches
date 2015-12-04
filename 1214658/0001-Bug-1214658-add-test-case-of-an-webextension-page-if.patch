@@ -4,9 +4,9 @@
 Bug 1214658 - add test case of an webextension page iframe created from a content script r=kmag
 
 ---
- .../extensions/test/mochitest/mochitest.ini        |  1 +
- .../test_ext_contentscript_create_iframe.html      | 91 ++++++++++++++++++++++
- 2 files changed, 92 insertions(+)
+ .../extensions/test/mochitest/mochitest.ini        |   1 +
+ .../test_ext_contentscript_create_iframe.html      | 102 +++++++++++++++++++++
+ 2 files changed, 103 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
@@ -33,10 +33,10 @@ index e535b5d..3f77302 100644
  [test_ext_sandbox_var.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..ad57c4e2
+index 0000000..f8d040e
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,102 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -50,14 +50,20 @@ index 0000000..ad57c4e2
 +<body>
 +
 +<!-- WORKAROUND: this iframe hack is used to contain the html page source without escaping it -->
-+<iframe id="test-asset">
-+  <!DOCTYPE>
++<textarea id="test-asset">
++  <!DOCTYPE HTML>
 +  <html>
-+    <script>
-+      browser.runtime.sendMessage("content-script-iframe-loaded");
-+    </script>
++    <head>
++      <meta charset="utf-8">
++      <script>
++       browser.runtime.sendMessage({
++         name: "content-script-iframe-loaded",
++         availableAPIs: Object.keys(browser)
++       });
++      </script>
++    </head>
 +  </html>
-+</iframe>
++</textarea>
 +
 +<script type="application/javascript;version=1.8">
 +"use strict";
@@ -66,7 +72,14 @@ index 0000000..ad57c4e2
 +{
 +  function backgroundScript() {
 +    browser.runtime.onMessage.addListener((msg, sender) => {
-+      browser.test.sendMessage(msg);
++      var { name, availableAPIs } = msg;
++      var hasExtTabsAPI = availableAPIs.indexOf("tabs") > 0;
++      var hasExtWindowsAPI = availableAPIs.indexOf("windows") > 0;
++
++      browser.test.assertFalse(hasExtTabsAPI, "the created iframe should not be able to use privileged APIs (tabs)");
++      browser.test.assertFalse(hasExtWindowsAPI, "the created iframe should not be able to use privileged APIs (windows)");
++
++      browser.test.sendMessage(name);
 +    });
 +  }
 +
@@ -94,19 +107,18 @@ index 0000000..ad57c4e2
 +      ]
 +    },
 +
-+    background: "(" + backgroundScript.toString() + ")()",
++    background: "(" + backgroundScript + ")()",
 +
 +    files: {
-+      "content_script.js": "(" + contentScript.toString() + ")()",
-+      "content_script_iframe.html": document.querySelector("iframe#test-asset").textContent
++      "content_script.js": "(" + contentScript + ")()",
++      "content_script_iframe.html": document.querySelector("#test-asset").textContent
 +    },
 +  };
 +
 +  let extension = ExtensionTestUtils.loadExtension(extensionData);
 +
-+  let contentScriptIframeCount = 0;
 +  let contentScriptIframeCreatedPromise = new Promise(resolve => {
-+    extension.onMessage("content-script-iframe-loaded", () => { contentScriptIframeCount++; resolve(); });
++    extension.onMessage("content-script-iframe-loaded", () => { resolve(); });
 +  });
 +
 +  yield extension.startup();
@@ -115,11 +127,10 @@ index 0000000..ad57c4e2
 +  let win = window.open("file_sample.html");
 +
 +  yield Promise.all([waitForLoad(win), contentScriptIframeCreatedPromise]);
-+  info("test page loaded");
++
++  info("content script privileged iframe loaded and executed");
 +
 +  win.close();
-+
-+  is(contentScriptIframeCount, 1, "iframe created from content script ran exactly once");
 +
 +  yield extension.unload();
 +  info("extension unloaded");
