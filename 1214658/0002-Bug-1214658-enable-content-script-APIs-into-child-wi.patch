@@ -7,14 +7,78 @@ content script APIs should be available in windows which points to a
 web accessible webextension url webextension url and are child of a
 tab wrapped by a content script related to the same add-on uuid.
 ---
- toolkit/components/extensions/ExtensionContent.jsm | 75 ++++++++++++++++++++--
- 1 file changed, 69 insertions(+), 6 deletions(-)
+ toolkit/components/extensions/Extension.jsm        |  20 +++-
+ toolkit/components/extensions/ExtensionContent.jsm | 113 +++++++++++++++++++--
+ .../components/extensions/ExtensionManagement.jsm  |   8 +-
+ 3 files changed, 122 insertions(+), 19 deletions(-)
 
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+index 41677e3..e6b66d5 100644
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -289,16 +289,19 @@ var GlobalManager = {
+     }
+ 
+     // Find the add-on associated with this document via the
+     // principal's originAttributes. This value is computed by
+     // extensionURIToAddonID, which ensures that we don't inject our
+     // API into webAccessibleResources or remote web pages.
+     let principal = contentWindow.document.nodePrincipal;
+     let id = principal.originAttributes.addonId;
++
++    // We don't inject privileged apis if the addonid is null
++    // or doesn't exists
+     if (!this.extensionMap.has(id)) {
+       return;
+     }
+ 
+     let docShell = contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                                 .getInterface(Ci.nsIWebNavigation)
+                                 .QueryInterface(Ci.nsIDocShellTreeItem)
+                                 .sameTypeRootTreeItem
+@@ -306,23 +309,34 @@ var GlobalManager = {
+ 
+     if (this.docShells.has(docShell)) {
+       let {extension, context} = this.docShells.get(docShell);
+       if (context && extension.id == id) {
+         inject(extension, context);
+       }
+       return;
+     }
+-
+-    // We don't inject into sub-frames of a UI page.
++    // We don't inject privileged APIs into sub-frames of a UI page.
++    // with Bug 1214658 content script APIs will be injected into
++    // iframes created in a window wrapped with a content script
++    // (in ExtensionContent.jsm)
+     if (contentWindow != contentWindow.top) {
+       return;
+     }
+-    let extension = this.extensionMap.get(id);
++
++    // We don't inject privileged APIs into web accessible urls
++    // NOTE: we will probably need to enable tab api in
++    // visible tabs created on a web accessible url in a followups
++    // of Bug 1214658
+     let uri = contentWindow.document.documentURIObject;
++    if (ExtensionManagement.extensionURILoadableByAnyone(uri)) {
++      return;
++    }
++
++    let extension = this.extensionMap.get(id);
+     let incognito = PrivateBrowsingUtils.isContentWindowPrivate(contentWindow);
+     let context = new ExtensionPage(extension, {type: "tab", contentWindow, uri, docShell, incognito});
+     inject(extension, context);
+ 
+     let eventHandler = docShell.chromeEventHandler;
+     let listener = event => {
+       if (event.target != docShell.contentViewer.DOMDocument) {
+         return;
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
-index d299b16..d8f4409 100644
+index d299b16..54eac9f 100644
 --- a/toolkit/components/extensions/ExtensionContent.jsm
 +++ b/toolkit/components/extensions/ExtensionContent.jsm
-@@ -190,25 +190,46 @@ function getWindowMessageManager(contentWindow)
+@@ -190,25 +190,75 @@ function getWindowMessageManager(contentWindow)
    try {
      return ir.getInterface(Ci.nsIContentFrameMessageManager);
    } catch (e) {
@@ -26,22 +90,51 @@ index d299b16..d8f4409 100644
 +// Bug 1214658 - content script APIs should be available in windows which points to a web accessible
 +// webextension url and are child of a  window wrapped by a content script related to the same add-on uuid
 +function checkIfContentScriptIframe(window) {
-+  if ([ "moz-extension:", "chrome-extension:" ].indexOf(window.location.protocol) >= 0) {
-+    let extensionUUID = window.location.hostname;
-+    let extension = ExtensionManager.getByUUID(extensionUUID);
++  // Find the add-on associated with this document via the
++  // principal's originAttributes. This value is computed by
++  // extensionURIToAddonID, which ensures that we don't inject our
++  // API into webAccessibleResources or remote web pages.
++  let principal = window.document.nodePrincipal;
++  let id = principal.originAttributes.addonId;
++  let extension = ExtensionManager.get(id);
 +
-+    if (extension) {
-+      let contentScriptExtension = DocumentManager.getContext(extension.id, window.parent);
-+
-+      if (contentScriptExtension) {
-+        return true;
-+      }
-+
-+      return false;
-+    }
++  // do not inject if webextension id do not exist
++  if (!extension) {
++    return false;
 +  }
 +
-+  return false;
++  let uri = window.document.documentURIObject;
++
++  // do not inject in webextension uri not loadable by anyone
++  if (!ExtensionManagement.extensionURILoadableByAnyone(uri)) {
++    return false;
++  }
++
++  // get the container element across chrome boundaries
++  let containerEl = window.QueryInterface(Ci.nsIInterfaceRequestor).
++        getInterface(Ci.nsIDOMWindowUtils).
++        containerElement;
++
++  // do not inject if the container tag is not an iframe (e.g. a new window/tab)
++  if (containerEl.tagName != "IFRAME") {
++    return false;
++  }
++
++  // get the parent window across chrome boundaries
++  let parentWindow = window.QueryInterface(Ci.nsIInterfaceRequestor)
++        .getInterface(Ci.nsIWebNavigation)
++        .QueryInterface(Ci.nsIDocShellTreeItem).parent
++        .QueryInterface(Ci.nsIInterfaceRequestor)
++        .getInterface(Ci.nsIDOMWindow);
++
++  // do not inject if the iframe's parent window is not wrapped by a content script
++  // with the same addon id
++  let contentScriptExtension = DocumentManager.getContext(extension.id, parentWindow);
++  if (!contentScriptExtension) {
++    return false;
++  }
++
++  return true;
 +}
 +
  // Scope in which extension content script code can run. It uses
@@ -62,7 +155,7 @@ index d299b16..d8f4409 100644
    let frameId = contentWindow == contentWindow.top ? 0 : outerWindowId;
    this.frameId = frameId;
  
-@@ -216,17 +237,23 @@ function ExtensionContext(extensionId, contentWindow)
+@@ -216,39 +266,57 @@ function ExtensionContext(extensionId, contentWindow)
    this.messageManager = mm;
  
    let prin = [contentWindow];
@@ -72,14 +165,7 @@ index d299b16..d8f4409 100644
    }
  
 -  this.sandbox = Cu.Sandbox(prin, {sandboxPrototype: contentWindow, wantXrays: true, isWebExtensionContentScript: true});
-+  if (this.isContentScriptIframe) {
-+    // if the context is an iframe created from a content script
-+    // its sandbox is the contentWindow object itself
-+    this.sandbox = contentWindow;
-+  } else {
-+    this.sandbox = Cu.Sandbox(prin, {sandboxPrototype: contentWindow, wantXrays: true, isWebExtensionContentScript: true});
-+  }
- 
+-
    let delegate = {
      getSender(context, target, sender) {
        // Nothing to do here.
@@ -87,7 +173,54 @@ index d299b16..d8f4409 100644
    };
  
    let url = contentWindow.location.href;
-@@ -258,17 +285,24 @@ ExtensionContext.prototype = {
+   let broker = ExtensionContent.getBroker(mm);
+   this.messenger = new Messenger(this, broker, {id: extensionId, frameId, url},
+                                  {id: extensionId, frameId}, delegate);
+ 
+-  let chromeObj = Cu.createObjectIn(this.sandbox, {defineAs: "browser"});
++  if (this.isContentScriptIframe) {
++    // if the context is an iframe created from a content script
++    // it has content script apis available into the content window
++    let iframeChromeObj = Cu.createObjectIn(this.contentWindow, { defineAs: "browser" });
++
++    this.contentWindow.browser = iframeChromeObj;
++    this.contentWindow.chrome = iframeChromeObj;
+ 
+-  // Sandboxes don't get Xrays for some weird compatibility
+-  // reason. However, we waive here anyway in case that changes.
+-  Cu.waiveXrays(this.sandbox).chrome = Cu.waiveXrays(this.sandbox).browser;
+-  injectAPI(api(this), chromeObj);
++    injectAPI(api(this), iframeChromeObj);
++  } else {
++    this.sandbox = Cu.Sandbox(prin, {sandboxPrototype: contentWindow, wantXrays: true, isWebExtensionContentScript: true});
++    let chromeObj = Cu.createObjectIn(this.sandbox, {defineAs: "browser"});
++
++    // Sandboxes don't get Xrays for some weird compatibility
++    // reason. However, we waive here anyway in case that changes.
++    Cu.waiveXrays(this.sandbox).chrome = Cu.waiveXrays(this.sandbox).browser;
++
++    injectAPI(api(this), chromeObj);
++  }
+ }
+ 
+ ExtensionContext.prototype = {
+   get cloneScope() {
++    // clone scope is used to clone the manifest object into the
++    // context the apis is running on (the content window in case of
++    // a content script privileged iframe)
++    if (this.isContentScriptIframe) {
++      return this.contentWindow;
++    }
++
+     return this.sandbox;
+   },
+ 
+   execute(script, shouldRun) {
+     script.tryInject(this.extension, this.contentWindow, this.sandbox, shouldRun);
+   },
+ 
+   callOnClose(obj) {
+@@ -258,18 +326,30 @@ ExtensionContext.prototype = {
    forgetOnClose(obj) {
      this.onClose.delete(obj);
    },
@@ -97,15 +230,21 @@ index d299b16..d8f4409 100644
        obj.close();
      }
 -    Cu.nukeSandbox(this.sandbox);
-+    if (this.isContentScriptIframe) {
-+      // remove the injected apis in case the addon has been removed
-+      // and the iframe is still in the page
-+      delete this.sandbox.chrome;
-+      delete this.sandbox.browser;
-+    } else {
+-  },
++    if (this.sandbox) {
 +      Cu.nukeSandbox(this.sandbox);
 +    }
-   },
++
++    if (this.isContentScriptIframe) {
++      // remove the injected apis by set the properties to undefined
++      // like chrome does in case the addon has been removed
++      // and the iframe is still in the page
++      for (let apiName in this.contentWindow.browser) {
++        this.contentWindow.browser[apiName] = undefined;
++        this.contentWindow.chrome[apiName] = undefined;
++      }
++    }
++  }
  };
  
  function windowId(window)
@@ -113,7 +252,8 @@ index d299b16..d8f4409 100644
    return window.QueryInterface(Ci.nsIInterfaceRequestor)
                 .getInterface(Ci.nsIDOMWindowUtils)
                 .currentInnerWindowID;
-@@ -313,16 +347,30 @@ var DocumentManager = {
+ }
+@@ -313,16 +393,29 @@ var DocumentManager = {
  
        // Make sure we only load into frames that ExtensionContent.init
        // was called on (i.e., not frames for social or sidebars).
@@ -125,15 +265,14 @@ index d299b16..d8f4409 100644
 +      // Bug 1214658 - content script APIs should be available in windows which points
 +      // to a web accessible webextension url and are child of a window wrapped by a
 +      // content script related to the same add-on uuid
-+      if (checkIfContentScriptIframe(window)) {
-+        let extensionUUID = window.location.hostname;
-+        let extension = ExtensionManager.getByUUID(extensionUUID);
++      let principal = window.document.nodePrincipal;
++      let extensionId = principal.originAttributes.addonId;
 +
-+        if (extension) {
-+          // enable the content script api on the recognized window object
-+          DocumentManager.getContext(extension.id, window);
-+          return;
-+        }
++      if (extensionId && checkIfContentScriptIframe(window)) {
++        // enable the content script api on the window object
++        // if it is recognized as an iframe associated to a valid addon id
++        DocumentManager.getContext(extensionId, window);
++        return;
 +      }
 +
        this.trigger("document_start", window);
@@ -144,74 +283,41 @@ index d299b16..d8f4409 100644
        if (!this.windows.has(id)) {
          return;
        }
-@@ -481,51 +529,66 @@ BrowserExtensionContent.prototype = {
-   localize(...args) {
-     return this.localeData.localize(...args);
+diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
+index 0e40ad4..072a376 100644
+--- a/toolkit/components/extensions/ExtensionManagement.jsm
++++ b/toolkit/components/extensions/ExtensionManagement.jsm
+@@ -171,30 +171,26 @@ var Service = {
+   checkAddonMayLoad(extension, uri) {
+     return extension.whiteListedHosts.matchesIgnoringPath(uri);
+   },
+ 
+   // Finds the add-on ID associated with a given moz-extension:// URI.
+   // This is used to set the addonId on the originAttributes for the
+   // nsIPrincipal attached to the URI.
+   extensionURIToAddonID(uri) {
+-    if (this.extensionURILoadableByAnyone(uri)) {
+-      // We don't want webAccessibleResources to be associated with
+-      // the add-on. That way they don't get any special privileges.
+-      return null;
+-    }
+-
+     let uuid = uri.host;
+     let extension = this.uuidMap.get(uuid);
+     return extension ? extension.id : undefined;
    },
  };
  
- var ExtensionManager = {
-   // Map[extensionId, BrowserExtensionContent]
-   extensions: new Map(),
-+  extensionsByUUID: new Map(),
+ this.ExtensionManagement = {
+   startupExtension: Service.startupExtension.bind(Service),
+   shutdownExtension: Service.shutdownExtension.bind(Service),
  
-   init() {
-     Services.cpmm.addMessageListener("Extension:Startup", this);
-     Services.cpmm.addMessageListener("Extension:Shutdown", this);
-     Services.cpmm.addMessageListener("Extension:FlushJarCache", this);
- 
-     if (Services.cpmm.initialProcessData && "Extension:Extensions" in Services.cpmm.initialProcessData) {
-       let extensions = Services.cpmm.initialProcessData["Extension:Extensions"];
-       for (let data of extensions) {
--        this.extensions.set(data.id, new BrowserExtensionContent(data));
-+        let extension = new BrowserExtensionContent(data);
-+        this.track(extension);
-         DocumentManager.startupExtension(data.id);
-       }
-     }
-   },
- 
-+  track(extension) {
-+    this.extensions.set(extension.id, extension);
-+    this.extensionsByUUID.set(extension.uuid, extension);
-+  },
-+  untrack(extension) {
-+    this.extensions.delete(extension.id);
-+    this.extensionsByUUID.delete(extension.uuid);
-+  },
++  extensionURILoadableByAnyone:  Service.extensionURILoadableByAnyone.bind(Service),
 +
-   get(extensionId) {
-     return this.extensions.get(extensionId);
-   },
+   registerScript: Scripts.register.bind(Scripts),
+   getScripts: Scripts.getScripts.bind(Scripts),
  
-+  getByUUID(extensionUUID) {
-+    return this.extensionsByUUID.get(extensionUUID);
-+  },
-+
-   receiveMessage({name, data}) {
-     let extension;
-     switch (name) {
-       case "Extension:Startup": {
-         extension = new BrowserExtensionContent(data);
--        this.extensions.set(data.id, extension);
-+        this.track(extension);
-         DocumentManager.startupExtension(data.id);
-         Services.cpmm.sendAsyncMessage("Extension:StartupComplete");
-         break;
-       }
- 
-       case "Extension:Shutdown": {
-         extension = this.extensions.get(data.id);
-         extension.shutdown();
-         DocumentManager.shutdownExtension(data.id);
--        this.extensions.delete(data.id);
-+        this.untrack(extension);
-         break;
-       }
- 
-       case "Extension:FlushJarCache": {
-         let nsIFile = Components.Constructor("@mozilla.org/file/local;1", "nsIFile",
-                                              "initWithPath");
-         let file = new nsIFile(data.path);
-         flushJarCache(file);
+   getFrameId: Frames.getId.bind(Frames),
+   getParentFrameId: Frames.getParentId.bind(Frames),
+ };
 
