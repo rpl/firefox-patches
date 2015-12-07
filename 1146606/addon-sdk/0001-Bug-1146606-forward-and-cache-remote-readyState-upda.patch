@@ -1,17 +1,18 @@
-# HG changeset patch
-# User Luca Greco <luca.greco@alcacoop.it>
-
-Bug 1146606 - forward and cache remote readyState updates and remove CPOWs usage
+From acee2d14bb8e85f869b475ad39ae8a802cb128d5 Mon Sep 17 00:00:00 2001
+From: Luca Greco <luca.greco@alcacoop.it>
+Date: Fri, 4 Dec 2015 05:28:53 +0100
+Subject: Bug 1146606 - forward and cache remote readyState updates and remove
+ CPOWs usage
 
 ---
- addon-sdk/source/lib/sdk/content/tab-events.js | 21 +++++++++++++++------
- addon-sdk/source/lib/sdk/tabs/tab-firefox.js   | 19 ++++++++++++++++---
+ lib/sdk/content/tab-events.js | 21 +++++++++++++++------
+ lib/sdk/tabs/tab-firefox.js   | 19 ++++++++++++++++---
  2 files changed, 31 insertions(+), 9 deletions(-)
 
-diff --git a/addon-sdk/source/lib/sdk/content/tab-events.js b/addon-sdk/source/lib/sdk/content/tab-events.js
+diff --git a/lib/sdk/content/tab-events.js b/lib/sdk/content/tab-events.js
 index 45363be..0ca2c4c 100644
---- a/addon-sdk/source/lib/sdk/content/tab-events.js
-+++ b/addon-sdk/source/lib/sdk/content/tab-events.js
+--- a/lib/sdk/content/tab-events.js
++++ b/lib/sdk/content/tab-events.js
 @@ -4,39 +4,48 @@
  "use strict";
  
@@ -67,10 +68,10 @@ index 45363be..0ca2c4c 100644
    options.window = frame.content;
    new WorkerChild(options);
  });
-diff --git a/addon-sdk/source/lib/sdk/tabs/tab-firefox.js b/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
+diff --git a/lib/sdk/tabs/tab-firefox.js b/lib/sdk/tabs/tab-firefox.js
 index 2a318b1..041a409 100644
---- a/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
-+++ b/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
+--- a/lib/sdk/tabs/tab-firefox.js
++++ b/lib/sdk/tabs/tab-firefox.js
 @@ -39,16 +39,22 @@ function isDestroyed(tab) {
  }
  
@@ -146,4 +147,6 @@ index 2a318b1..041a409 100644
    if (event == "close") {
      viewsFor.delete(tab);
      modelsFor.delete(tabElement);
+-- 
+2.4.0
 
