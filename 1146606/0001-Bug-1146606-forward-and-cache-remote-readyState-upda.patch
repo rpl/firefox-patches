@@ -4,17 +4,22 @@
 Bug 1146606 - forward and cache remote readyState updates and remove CPOWs usage
 
 ---
- addon-sdk/source/lib/sdk/content/tab-events.js | 21 +++++++++++++++------
- addon-sdk/source/lib/sdk/tabs/tab-firefox.js   | 19 ++++++++++++++++---
- 2 files changed, 31 insertions(+), 9 deletions(-)
+ addon-sdk/source/lib/sdk/content/tab-events.js | 28 ++++++++++++++++++++------
+ addon-sdk/source/lib/sdk/tabs/tab-firefox.js   | 18 ++++++++++++++---
+ addon-sdk/source/test/test-tab.js              | 12 ++++++++++-
+ 3 files changed, 48 insertions(+), 10 deletions(-)
 
 diff --git a/addon-sdk/source/lib/sdk/content/tab-events.js b/addon-sdk/source/lib/sdk/content/tab-events.js
-index 45363be..0ca2c4c 100644
+index 45363be..2bbf050 100644
 --- a/addon-sdk/source/lib/sdk/content/tab-events.js
 +++ b/addon-sdk/source/lib/sdk/content/tab-events.js
-@@ -4,39 +4,48 @@
+@@ -1,42 +1,58 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  "use strict";
  
++const { Ci } = require('chrome');
  const system = require('sdk/system/events');
  const { frames } = require('sdk/remote/child');
  const { WorkerChild } = require('sdk/content/worker-child');
@@ -36,7 +41,7 @@ index 45363be..0ca2c4c 100644
 +  // NOTE detect the window from the subject:
 +  // - on *-global-created the subject is the window
 +  // - in the other cases it is the document object
-+  let window = subject.navigator ? subject : subject.defaultView;
++  let window = subject instanceof Ci.nsIDOMWindow ? subject : subject.defaultView;
 +  if (!window){
      return;
 -  let frame = frames.getFrameForWindow(subject.defaultView);
@@ -67,11 +72,17 @@ index 45363be..0ca2c4c 100644
    options.window = frame.content;
    new WorkerChild(options);
  });
++
++// Forward the existent frames's readyState.
++for (let frame of frames) {
++  let readyState = frame.content.document.readyState;
++  frame.port.emit('sdk/tab/event', 'detected-existent-tab', { readyState });
++}
 diff --git a/addon-sdk/source/lib/sdk/tabs/tab-firefox.js b/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
-index 2a318b1..041a409 100644
+index 2a318b1..54905b6 100644
 --- a/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
 +++ b/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
-@@ -39,16 +39,22 @@ function isDestroyed(tab) {
+@@ -39,16 +39,19 @@ function isDestroyed(tab) {
  }
  
  function isClosed(tab) {
@@ -80,9 +91,6 @@ index 2a318b1..041a409 100644
    return viewsFor.get(tab).closing;
  }
  
-+// private tab setter used to set the cached value from the tabEvelListener
-+// on the tab object
-+const setRemoteReadyStateCached = Symbol("setRemoteReadyStateCached");
 +// private tab attribute where the remote cached value is stored
 +const remoteReadyStateCached = Symbol("remoteReadyStateCached");
 +
@@ -94,8 +102,7 @@ index 2a318b1..041a409 100644
  
      if (options) {
        EventTarget.prototype.initialize.call(this, options);
-@@ -119,19 +125,22 @@ const Tab = Class({
- 
+@@ -120,18 +123,17 @@ const Tab = Class({
      // TODO: Remove the dependency on the windows module, see bug 792670
      require('../windows');
      let tabElement = viewsFor.get(this);
@@ -103,10 +110,6 @@ index 2a318b1..041a409 100644
      return modelFor(domWindow);
    },
  
-+  [setRemoteReadyStateCached](val) {
-+    this[remoteReadyStateCached] = val;
-+  },
-+
    get readyState() {
 -    // TODO: This will use CPOWs in e10s: bug 1146606
 -    return isDestroyed(this) ? undefined : browser(this).contentDocument.readyState;
@@ -119,7 +122,7 @@ index 2a318b1..041a409 100644
  
      pin(viewsFor.get(this));
    },
-@@ -301,21 +310,25 @@ function tabEventListener(event, tabElement, ...args) {
+@@ -301,21 +303,31 @@ function tabEventListener(event, tabElement, ...args) {
        addListItem(window.tabs, tab);
      // The tabs module will take care of adding to its internal list
    }
@@ -129,7 +132,7 @@ index 2a318b1..041a409 100644
      // The tabs module will take care of removing from its internal list
    }
 -  else if (event == "ready" || event == "load") {
-+  else if (event == "create" || event == "ready" || event == "load") {
++  else if (event == "detected-existent-tab" || event == "create" || event == "ready" || event == "load") {
      // Ignore load events from before browser windows have fully loaded, these
      // are for about:blank in the initial tab
      if (isBrowser(domWindow) && !domWindow.gBrowserInit.delayedStartupFinished)
@@ -137,7 +140,13 @@ index 2a318b1..041a409 100644
 +
 +    // update the cached remote readyState value
 +    let { readyState } = args[0] || {};
-+    tab[setRemoteReadyStateCached](readyState);
++    tab[remoteReadyStateCached] = readyState;
++  }
++
++  if (event == "detected-existent-tabs") {
++    // Do not emit events for the detected existent tabs, we only need to cache
++    // their current document.readyState value.
++    return;
    }
  
    tabEmit(tab, event, ...args);
@@ -146,4 +155,47 @@ index 2a318b1..041a409 100644
    if (event == "close") {
      viewsFor.delete(tab);
      modelsFor.delete(tabElement);
+diff --git a/addon-sdk/source/test/test-tab.js b/addon-sdk/source/test/test-tab.js
+index f23b169..376069a 100644
+--- a/addon-sdk/source/test/test-tab.js
++++ b/addon-sdk/source/test/test-tab.js
+@@ -4,17 +4,17 @@
+ "use strict";
+ 
+ const tabs = require("sdk/tabs");
+ const windowUtils = require("sdk/deprecated/window-utils");
+ const windows = require("sdk/windows").browserWindows;
+ const app = require("sdk/system/xul-app");
+ const { viewFor } = require("sdk/view/core");
+ const { modelFor } = require("sdk/model/core");
+-const { getTabId, isTab } = require("sdk/tabs/utils");
++const { getBrowserForTab, getTabId, isTab } = require("sdk/tabs/utils");
+ const { defer } = require("sdk/lang/functional");
+ 
+ function tabExistenceInTabs(assert, found, tab, tabs) {
+   let tabFound = false;
+ 
+   for (let t of tabs) {
+     assert.notEqual(t.title, undefined, 'tab title is not undefined');
+     assert.notEqual(t.url, undefined, 'tab url is not undefined');
+@@ -197,9 +197,19 @@ exports["test tab.readyState"] = (assert, done) => {
+     },
+     onLoad: (tab) => {
+       assert.equal(tab.readyState, "complete", "tab is complete onLoad");
+       tab.close(defer(done));
+     }
+   });
+ }
+ 
++exports["test tab.readyState for existent tabs"] = (assert) => {
++  assert.equal(tabs.length, 1, "tabs contains an existent tab");
++
++  for (let tab of tabs) {
++    let browserForTab = getBrowserForTab(viewFor(tab));
++    assert.equal(browserForTab.contentDocument.readyState, tab.readyState,
++                 "tab.readyState has the same value of the associated contentDocument.readyState CPOW");
++  }
++}
++
+ require("sdk/test").run(module.exports);
 
