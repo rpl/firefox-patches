@@ -1,0 +1,277 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1214658 - enable content script APIs into sub-frames pointed to a add-on url r=kmag
+
+---
+ toolkit/components/extensions/Extension.jsm        | 20 ++++----
+ toolkit/components/extensions/ExtensionContent.jsm | 40 +++++++++++++++-
+ .../components/extensions/ExtensionManagement.jsm  | 55 +++++++++++++++++++---
+ 3 files changed, 97 insertions(+), 18 deletions(-)
+
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+index 99305da..18b11ec 100644
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -345,22 +345,26 @@ GlobalManager = {
+         },
+         hasListener(ns, name, listener) {
+           return schemaApi[ns][name].hasListener.call(null, listener);
+         },
+       };
+       Schemas.inject(chromeObj, schemaWrapper);
+     };
+ 
+-    // Find the add-on associated with this document via the
+-    // principal's originAttributes. This value is computed by
+-    // extensionURIToAddonID, which ensures that we don't inject our
+-    // API into webAccessibleResources or remote web pages.
+-    let principal = contentWindow.document.nodePrincipal;
+-    let id = principal.originAttributes.addonId;
++    // We don't inject privileged APIs into sub-frames of a UI page.
++    const { FULL_PRIVILEGES } = ExtensionManagement.API_LEVELS;
++    if (ExtensionManagement.getAPILevelForWindow(contentWindow) !== FULL_PRIVILEGES) {
++      return;
++    }
++
++    let id = ExtensionManagement.getAddonIdForWindow(contentWindow);
++
++    // We don't inject privileged apis if the addonid is null
++    // or doesn't exists.
+     if (!this.extensionMap.has(id)) {
+       return;
+     }
+ 
+     let docShell = contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                                 .getInterface(Ci.nsIWebNavigation)
+                                 .QueryInterface(Ci.nsIDocShellTreeItem)
+                                 .sameTypeRootTreeItem
+@@ -369,20 +373,16 @@ GlobalManager = {
+     if (this.docShells.has(docShell)) {
+       let {extension, context} = this.docShells.get(docShell);
+       if (context && extension.id == id) {
+         inject(extension, context);
+       }
+       return;
+     }
+ 
+-    // We don't inject into sub-frames of a UI page.
+-    if (contentWindow != contentWindow.top) {
+-      return;
+-    }
+     let extension = this.extensionMap.get(id);
+     let uri = contentWindow.document.documentURIObject;
+     let incognito = PrivateBrowsingUtils.isContentWindowPrivate(contentWindow);
+     let context = new ExtensionPage(extension, {type: "tab", contentWindow, uri, docShell, incognito});
+     inject(extension, context);
+ 
+     let eventHandler = docShell.chromeEventHandler;
+     let listener = event => {
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+index 325c6f8..7063cbb 100644
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -226,17 +226,17 @@ function ExtensionContext(extensionId, contentWindow) {
+                            .getInterface(Ci.nsIDOMWindowUtils);
+   let outerWindowId = utils.outerWindowID;
+   let frameId = contentWindow == contentWindow.top ? 0 : outerWindowId;
+   this.frameId = frameId;
+ 
+   let mm = getWindowMessageManager(contentWindow);
+   this.messageManager = mm;
+ 
+-  let prin = [contentWindow];
++  let prin = contentWindow;
+   if (Services.scriptSecurityManager.isSystemPrincipal(contentWindow.document.nodePrincipal)) {
+     // Make sure we don't hand out the system principal by accident.
+     prin = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
+   }
+ 
+   this.sandbox = Cu.Sandbox(prin, {sandboxPrototype: contentWindow, wantXrays: true, isWebExtensionContentScript: true});
+ 
+   let delegate = {
+@@ -249,25 +249,43 @@ function ExtensionContext(extensionId, contentWindow) {
+   let broker = ExtensionContent.getBroker(mm);
+   this.messenger = new Messenger(this, broker, {id: extensionId, frameId, url},
+                                  {id: extensionId, frameId}, delegate);
+ 
+   let chromeObj = Cu.createObjectIn(this.sandbox, {defineAs: "browser"});
+ 
+   // Sandboxes don't get Xrays for some weird compatibility
+   // reason. However, we waive here anyway in case that changes.
+-  Cu.waiveXrays(this.sandbox).chrome = Cu.waiveXrays(this.sandbox).browser;
++  Cu.waiveXrays(this.sandbox).chrome = chromeObj;
++
+   injectAPI(api(this), chromeObj);
+ }
+ 
+ ExtensionContext.prototype = {
+   get cloneScope() {
+     return this.sandbox;
+   },
+ 
++  injectAPIIntoContentWindow() {
++    // Do not inject content script APIs if the document loaded has not an addon id.
++    if (!ExtensionManagement.getAddonIdForWindow(this.contentWindow)) {
++      return false;
++    }
++
++    let chromeObj = Cu.waiveXrays(this.sandbox).browser;
++
++    chromeObj = Cu.cloneInto(chromeObj, this.contentWindow, { cloneFunctions: true });
++    Cu.waiveXrays(this.contentWindow).browser = chromeObj;
++    Cu.waiveXrays(this.contentWindow).chrome = chromeObj;
++
++    this.contentWindowAPI = true;
++
++    return true;
++  },
++
+   execute(script, shouldRun) {
+     script.tryInject(this.extension, this.contentWindow, this.sandbox, shouldRun);
+   },
+ 
+   callOnClose(obj) {
+     this.onClose.add(obj);
+   },
+ 
+@@ -275,16 +293,23 @@ ExtensionContext.prototype = {
+     this.onClose.delete(obj);
+   },
+ 
+   close() {
+     for (let obj of this.onClose) {
+       obj.close();
+     }
+     Cu.nukeSandbox(this.sandbox);
++
++    // Overwrite the content script APIs with an empty object if the APIs objects have been
++    // injected in the content window.
++    if (this.contentWindowAPI && ExtensionManagement.getAddonIdForWindow(this.contentWindow)) {
++      Cu.createObjectIn(this.contentWindow, { defineAs: "browser" });
++      Cu.createObjectIn(this.contentWindow, { defineAs: "chrome" });
++    }
+   },
+ };
+ 
+ function windowId(window) {
+   return window.QueryInterface(Ci.nsIInterfaceRequestor)
+                .getInterface(Ci.nsIDOMWindowUtils)
+                .currentInnerWindowID;
+ }
+@@ -328,16 +353,27 @@ var DocumentManager = {
+ 
+       // Make sure we only load into frames that ExtensionContent.init
+       // was called on (i.e., not frames for social or sidebars).
+       let mm = getWindowMessageManager(window);
+       if (!mm || !ExtensionContent.globals.has(mm)) {
+         return;
+       }
+ 
++      // Enable the content script APIs should be available in subframes' window
++      // if it is recognized as a valid addon id (see Bug 1214658 for rationale).
++      const { CONTENTSCRIPT_PRIVILEGES } = ExtensionManagement.API_LEVELS;
++
++      if (ExtensionManagement.getAPILevelForWindow(window) == CONTENTSCRIPT_PRIVILEGES) {
++        let extensionId = ExtensionManagement.getAddonIdForWindow(window);
++        let extension = DocumentManager.getContext(extensionId, window);
++        extension.injectAPIIntoContentWindow();
++        return;
++      }
++
+       this.trigger("document_start", window);
+       /* eslint-disable mozilla/balanced-listeners */
+       window.addEventListener("DOMContentLoaded", this, true);
+       window.addEventListener("load", this, true);
+       /* eslint-enable mozilla/balanced-listeners */
+     } else if (topic == "inner-window-destroyed") {
+       let id = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
+       if (!this.windows.has(id)) {
+diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
+index 40125b8..50d7a61 100644
+--- a/toolkit/components/extensions/ExtensionManagement.jsm
++++ b/toolkit/components/extensions/ExtensionManagement.jsm
+@@ -186,33 +186,76 @@ var Service = {
+   checkAddonMayLoad(extension, uri) {
+     return extension.whiteListedHosts.matchesIgnoringPath(uri);
+   },
+ 
+   // Finds the add-on ID associated with a given moz-extension:// URI.
+   // This is used to set the addonId on the originAttributes for the
+   // nsIPrincipal attached to the URI.
+   extensionURIToAddonID(uri) {
+-    if (this.extensionURILoadableByAnyone(uri)) {
+-      // We don't want webAccessibleResources to be associated with
+-      // the add-on. That way they don't get any special privileges.
+-      return null;
+-    }
+-
+     let uuid = uri.host;
+     let extension = this.uuidMap.get(uuid);
+     return extension ? extension.id : undefined;
+   },
+ };
+ 
++// API Levels Helpers
++
++// Find the add-on associated with this document via the
++// principal's originAttributes. This value is computed by
++// extensionURIToAddonID, which ensures that we don't inject our
++// API into webAccessibleResources or remote web pages.
++function getAddonIdForWindow(window) {
++  let principal = window.document.nodePrincipal;
++  let id = principal.originAttributes.addonId;
++
++  return id;
++}
++
++const NO_PRIVILEGES = "NO_PRIVILEGES";
++const CONTENTSCRIPT_PRIVILEGES = "CONTENTSCRIPT_PRIVILEGES";
++const FULL_PRIVILEGES = "FULL_PRIVILEGES";
++
++const API_LEVELS = Object.freeze({
++  NO_PRIVILEGES, CONTENTSCRIPT_PRIVILEGES, FULL_PRIVILEGES,
++});
++
++// Finds the API Level ("FULL_PRIVILEGES", "CONTENTSCRIPT_PRIVILEGES", "NO_PRIVILEGES")
++// with a given a window object.
++function getAPILevelForWindow(window) {
++  let id = getAddonIdForWindow(window);
++
++  // Non WebExtension urls has access to apis
++  if (!id) {
++    return NO_PRIVILEGES;
++  }
++
++  let sameTypeParent = window.QueryInterface(Ci.nsIInterfaceRequestor)
++        .getInterface(Ci.nsIDocShell).sameTypeParent;
++
++  // WebExtension urls loaded into sub-frame UI has "content script api level privileges"
++  // (see Bug 1214658 for rationale)
++  if (sameTypeParent) {
++    return CONTENTSCRIPT_PRIVILEGES;
++  }
++
++  // WebExtension urls loaded into top frames UI could have full api level privileges
++  return FULL_PRIVILEGES;
++}
++
+ this.ExtensionManagement = {
+   startupExtension: Service.startupExtension.bind(Service),
+   shutdownExtension: Service.shutdownExtension.bind(Service),
+ 
+   registerScript: Scripts.register.bind(Scripts),
+   getScripts: Scripts.getScripts.bind(Scripts),
+ 
+   registerSchema: Schemas.register.bind(Schemas),
+   getSchemas: Schemas.getSchemas.bind(Schemas),
+ 
+   getFrameId: Frames.getId.bind(Frames),
+   getParentFrameId: Frames.getParentId.bind(Frames),
++
++  // exported API Level Helpers
++  getAddonIdForWindow,
++  getAPILevelForWindow,
++  API_LEVELS,
+ };
+

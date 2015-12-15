@@ -5,15 +5,15 @@ Bug 1214658 - add test case of an webextension page iframe created from a conten
 
 ---
  .../extensions/test/mochitest/mochitest.ini        |   1 +
- .../test_ext_contentscript_create_iframe.html      | 102 +++++++++++++++++++++
- 2 files changed, 103 insertions(+)
+ .../test_ext_contentscript_create_iframe.html      | 145 +++++++++++++++++++++
+ 2 files changed, 146 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index e535b5d..3f77302 100644
+index 29970a6..c7d556f 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -16,16 +16,17 @@ support-files =
+@@ -19,16 +19,17 @@ support-files =
    file_script_xhr.js
    file_sample.html
    file_privilege_escalation.html
@@ -23,7 +23,7 @@ index e535b5d..3f77302 100644
  [test_ext_geturl.html]
  [test_ext_contentscript.html]
 +[test_ext_contentscript_create_iframe.html]
- [test_ext_webrequest.html]
+ [test_ext_i18n_css.html]
  [test_ext_generate.html]
  [test_ext_localStorage.html]
  [test_ext_notifications.html]
@@ -33,10 +33,10 @@ index e535b5d..3f77302 100644
  [test_ext_sandbox_var.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..f8d040e
+index 0000000..71e77cf
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,145 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -56,9 +56,11 @@ index 0000000..f8d040e
 +    <head>
 +      <meta charset="utf-8">
 +      <script>
++       var manifest = browser.runtime.getManifest();
 +       browser.runtime.sendMessage({
 +         name: "content-script-iframe-loaded",
-+         availableAPIs: Object.keys(browser)
++         availableAPIs: Object.keys(browser),
++         manifest
 +       });
 +      </script>
 +    </head>
@@ -72,12 +74,17 @@ index 0000000..f8d040e
 +{
 +  function backgroundScript() {
 +    browser.runtime.onMessage.addListener((msg, sender) => {
-+      var { name, availableAPIs } = msg;
++      var { name, availableAPIs, manifest } = msg;
 +      var hasExtTabsAPI = availableAPIs.indexOf("tabs") > 0;
 +      var hasExtWindowsAPI = availableAPIs.indexOf("windows") > 0;
 +
 +      browser.test.assertFalse(hasExtTabsAPI, "the created iframe should not be able to use privileged APIs (tabs)");
 +      browser.test.assertFalse(hasExtWindowsAPI, "the created iframe should not be able to use privileged APIs (windows)");
++
++      browser.test.assertTrue(
++        JSON.stringify(manifest) == JSON.stringify(chrome.runtime.getManifest()),
++        "the add-on manifest should be accessible from the created iframe"
++      )
 +
 +      browser.test.sendMessage(name);
 +    });
@@ -87,10 +94,6 @@ index 0000000..f8d040e
 +    var iframe = document.createElement("iframe");
 +    iframe.setAttribute("src", browser.runtime.getURL("content_script_iframe.html"));
 +    document.body.appendChild(iframe);
-+  }
-+
-+  function contentScriptIframe() {
-+    browser.runtime.sendMessage('content-script-iframe-loaded');
 +  }
 +
 +  let extensionData = {
@@ -127,13 +130,53 @@ index 0000000..f8d040e
 +  let win = window.open("file_sample.html");
 +
 +  yield Promise.all([waitForLoad(win), contentScriptIframeCreatedPromise]);
-+
 +  info("content script privileged iframe loaded and executed");
 +
-+  win.close();
++  info("testing APIs availability once the extension is unloaded...");
++  let iframeWindow = SpecialPowers.wrap(win)[0];
++  iframeWindow.eval("window.GET_MANIFEST = browser.runtime.getManifest.bind(null);");
++
++  let expectedManifest = iframeWindow.eval("GET_MANIFEST()");
++  ok(!!expectedManifest.content_scripts, "GET_MANIFEST() returns manifest data before extension unload")
 +
 +  yield extension.unload();
 +  info("extension unloaded");
++
++  let ww = SpecialPowers.Cu.waiveXrays(iframeWindow);
++  let isDeadWrapper = SpecialPowers.Cu.isDeadWrapper(ww.browser);
++  ok(!isDeadWrapper, "the API object should not be a dead object");
++
++  let manifest;
++  let manifestException;
++
++  try {
++    manifest = iframeWindow.eval("browser.runtime.getManifest()");
++  } catch(e) {
++    manifestException = e;
++  }
++
++  ok(!manifest, "manifest should be undefined");
++
++  const BROWSER_RUNTIME_UNDEFINED_EXCEPTION = "TypeError: browser.runtime is undefined";
++  is(manifestException && manifestException.toString(), BROWSER_RUNTIME_UNDEFINED_EXCEPTION,
++     `expected BROWSER_RUNTIME_UNDEFINED_EXCEPTION exception received`);
++
++  let getManifest;
++  let getManifestException;
++
++  try {
++    getManifest = iframeWindow.eval("GET_MANIFEST()");
++  } catch(e) {
++    getManifestException = e;
++  }
++
++  ok(!getManifest, "getManifest should be undefined");
++
++  const GET_MANIFEST_NOTAFUNCTION_EXCEPTION = "TypeError: GET_MANIFEST is not a function";
++  is(getManifestException && getManifestException.toString(), GET_MANIFEST_NOTAFUNCTION_EXCEPTION,
++     `expected GET_MANIFEST_NOTAFUNCTION_EXCEPTION exception received`);
++
++  win.close();
 +});
 +</script>
 +
