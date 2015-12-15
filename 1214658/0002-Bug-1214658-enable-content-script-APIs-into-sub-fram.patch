@@ -1,13 +1,13 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1214658 - enable content script APIs into sub-frames pointed to a add-on url r=kmag
+Bug 1214658 - enable content script APIs into sub-frames pointed to a valid add-on url r=kmag
 
 ---
  toolkit/components/extensions/Extension.jsm        | 20 ++++----
- toolkit/components/extensions/ExtensionContent.jsm | 40 +++++++++++++++-
+ toolkit/components/extensions/ExtensionContent.jsm | 42 ++++++++++++++++-
  .../components/extensions/ExtensionManagement.jsm  | 55 +++++++++++++++++++---
- 3 files changed, 97 insertions(+), 18 deletions(-)
+ 3 files changed, 99 insertions(+), 18 deletions(-)
 
 diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
 index 99305da..18b11ec 100644
@@ -68,7 +68,7 @@ index 99305da..18b11ec 100644
      let eventHandler = docShell.chromeEventHandler;
      let listener = event => {
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
-index 325c6f8..7063cbb 100644
+index 325c6f8..72f991d 100644
 --- a/toolkit/components/extensions/ExtensionContent.jsm
 +++ b/toolkit/components/extensions/ExtensionContent.jsm
 @@ -226,17 +226,17 @@ function ExtensionContext(extensionId, contentWindow) {
@@ -159,7 +159,7 @@ index 325c6f8..7063cbb 100644
                 .getInterface(Ci.nsIDOMWindowUtils)
                 .currentInnerWindowID;
  }
-@@ -328,16 +353,27 @@ var DocumentManager = {
+@@ -328,16 +353,29 @@ var DocumentManager = {
  
        // Make sure we only load into frames that ExtensionContent.init
        // was called on (i.e., not frames for social or sidebars).
@@ -171,11 +171,13 @@ index 325c6f8..7063cbb 100644
 +      // Enable the content script APIs should be available in subframes' window
 +      // if it is recognized as a valid addon id (see Bug 1214658 for rationale).
 +      const { CONTENTSCRIPT_PRIVILEGES } = ExtensionManagement.API_LEVELS;
++      let extensionId = ExtensionManagement.getAddonIdForWindow(window);
 +
-+      if (ExtensionManagement.getAPILevelForWindow(window) == CONTENTSCRIPT_PRIVILEGES) {
-+        let extensionId = ExtensionManagement.getAddonIdForWindow(window);
++      if (ExtensionManagement.getAPILevelForWindow(window) == CONTENTSCRIPT_PRIVILEGES &&
++          ExtensionManager.get(extensionId)) {
 +        let extension = DocumentManager.getContext(extensionId, window);
 +        extension.injectAPIIntoContentWindow();
++
 +        return;
 +      }
 +
