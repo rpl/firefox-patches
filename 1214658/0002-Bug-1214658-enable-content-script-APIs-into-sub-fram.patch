@@ -5,9 +5,9 @@ Bug 1214658 - enable content script APIs into sub-frames pointed to a valid add-
 
 ---
  toolkit/components/extensions/Extension.jsm        | 20 ++++----
- toolkit/components/extensions/ExtensionContent.jsm | 42 ++++++++++++++++-
- .../components/extensions/ExtensionManagement.jsm  | 55 +++++++++++++++++++---
- 3 files changed, 99 insertions(+), 18 deletions(-)
+ toolkit/components/extensions/ExtensionContent.jsm | 57 +++++++++++++++++++++-
+ .../components/extensions/ExtensionManagement.jsm  | 55 ++++++++++++++++++---
+ 3 files changed, 115 insertions(+), 17 deletions(-)
 
 diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
 index 99305da..18b11ec 100644
@@ -68,29 +68,10 @@ index 99305da..18b11ec 100644
      let eventHandler = docShell.chromeEventHandler;
      let listener = event => {
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
-index 325c6f8..72f991d 100644
+index 325c6f8..fbf84cc 100644
 --- a/toolkit/components/extensions/ExtensionContent.jsm
 +++ b/toolkit/components/extensions/ExtensionContent.jsm
-@@ -226,17 +226,17 @@ function ExtensionContext(extensionId, contentWindow) {
-                            .getInterface(Ci.nsIDOMWindowUtils);
-   let outerWindowId = utils.outerWindowID;
-   let frameId = contentWindow == contentWindow.top ? 0 : outerWindowId;
-   this.frameId = frameId;
- 
-   let mm = getWindowMessageManager(contentWindow);
-   this.messageManager = mm;
- 
--  let prin = [contentWindow];
-+  let prin = contentWindow;
-   if (Services.scriptSecurityManager.isSystemPrincipal(contentWindow.document.nodePrincipal)) {
-     // Make sure we don't hand out the system principal by accident.
-     prin = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
-   }
- 
-   this.sandbox = Cu.Sandbox(prin, {sandboxPrototype: contentWindow, wantXrays: true, isWebExtensionContentScript: true});
- 
-   let delegate = {
-@@ -249,25 +249,43 @@ function ExtensionContext(extensionId, contentWindow) {
+@@ -249,25 +249,59 @@ function ExtensionContext(extensionId, contentWindow) {
    let broker = ExtensionContent.getBroker(mm);
    this.messenger = new Messenger(this, broker, {id: extensionId, frameId, url},
                                   {id: extensionId, frameId}, delegate);
@@ -112,15 +93,31 @@ index 325c6f8..72f991d 100644
  
 +  injectAPIIntoContentWindow() {
 +    // Do not inject content script APIs if the document loaded has not an addon id.
-+    if (!ExtensionManagement.getAddonIdForWindow(this.contentWindow)) {
++    let addonId = ExtensionManagement.getAddonIdForWindow(this.contentWindow);
++    if (!addonId || addonId != this.extensionId) {
 +      return false;
 +    }
 +
-+    let chromeObj = Cu.waiveXrays(this.sandbox).browser;
++    let contentObj = Cu.createObjectIn(this.contentWindow, { defineAs: "browser" });
++    Cu.waiveXrays(this.contentWindow).chrome = contentObj;
 +
-+    chromeObj = Cu.cloneInto(chromeObj, this.contentWindow, { cloneFunctions: true });
-+    Cu.waiveXrays(this.contentWindow).browser = chromeObj;
-+    Cu.waiveXrays(this.contentWindow).chrome = chromeObj;
++    let context= this;
++    let contentContext = new Proxy(this, {
++      get: function(obj, prop) {
++        // Customize the clone scope to the contentWindow
++        if (prop == "cloneScope") {
++          return context.contentWindow;
++        }
++        // Raise exception on trying to use WebExtension APIs from a extension with a nuked sandbox.
++        if (!context.sandbox) {
++          throw context.contentWindow.Error("WebExtension API method called on a destroyed extension context.");
++        }
++
++        return obj[prop];
++      },
++    });
++
++    injectAPI(api(contentContext), contentObj);
 +
 +    this.contentWindowAPI = true;
 +
@@ -135,7 +132,7 @@ index 325c6f8..72f991d 100644
      this.onClose.add(obj);
    },
  
-@@ -275,16 +293,23 @@ ExtensionContext.prototype = {
+@@ -275,16 +309,24 @@ ExtensionContext.prototype = {
      this.onClose.delete(obj);
    },
  
@@ -144,6 +141,7 @@ index 325c6f8..72f991d 100644
        obj.close();
      }
      Cu.nukeSandbox(this.sandbox);
++    this.sandbox = null;
 +
 +    // Overwrite the content script APIs with an empty object if the APIs objects have been
 +    // injected in the content window.
@@ -159,7 +157,7 @@ index 325c6f8..72f991d 100644
                 .getInterface(Ci.nsIDOMWindowUtils)
                 .currentInnerWindowID;
  }
-@@ -328,16 +353,29 @@ var DocumentManager = {
+@@ -328,16 +370,29 @@ var DocumentManager = {
  
        // Make sure we only load into frames that ExtensionContent.init
        // was called on (i.e., not frames for social or sidebars).

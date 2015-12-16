@@ -33,7 +33,7 @@ index 29970a6..c7d556f 100644
  [test_ext_sandbox_var.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..71e77cf
+index 0000000..1b14a70
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 @@ -0,0 +1,145 @@
@@ -172,9 +172,9 @@ index 0000000..71e77cf
 +
 +  ok(!getManifest, "getManifest should be undefined");
 +
-+  const GET_MANIFEST_NOTAFUNCTION_EXCEPTION = "TypeError: GET_MANIFEST is not a function";
-+  is(getManifestException && getManifestException.toString(), GET_MANIFEST_NOTAFUNCTION_EXCEPTION,
-+     `expected GET_MANIFEST_NOTAFUNCTION_EXCEPTION exception received`);
++  const DESTROYED_EXT_METHOD_EXCEPTION = "Error: WebExtension API method called on a destroyed extension context.";
++  is(getManifestException && getManifestException.toString(), DESTROYED_EXT_METHOD_EXCEPTION,
++     `expected DESTROYED_EXT_METHOD_EXCEPTION exception received`);
 +
 +  win.close();
 +});
