@@ -1,0 +1,196 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1214658 - test content script APIs are not injected in arbitrary web pages r=kmag
+
+---
+ .../mochitest/file_ext_background_api_injection.js | 12 ---
+ .../test/mochitest/file_ext_test_api_injection.js  | 12 +++
+ .../extensions/test/mochitest/mochitest.ini        |  3 +-
+ .../test_ext_background_api_injection.html         |  2 +-
+ .../test_ext_contentscript_api_injection.html      | 85 ++++++++++++++++++++++
+ 5 files changed, 100 insertions(+), 14 deletions(-)
+ delete mode 100644 toolkit/components/extensions/test/mochitest/file_ext_background_api_injection.js
+ create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_test_api_injection.js
+ create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html
+
+diff --git a/toolkit/components/extensions/test/mochitest/file_ext_background_api_injection.js b/toolkit/components/extensions/test/mochitest/file_ext_background_api_injection.js
+deleted file mode 100644
+index 93ea999..0000000
+--- a/toolkit/components/extensions/test/mochitest/file_ext_background_api_injection.js
++++ /dev/null
+@@ -1,12 +0,0 @@
+-"use strict";
+-
+-var { interfaces: Ci } = Components;
+-
+-Components.utils.import("resource://gre/modules/Services.jsm");
+-
+-Services.console.registerListener(function listener(message) {
+-  if (/WebExt Privilege Escalation/.test(message.message)) {
+-    Services.console.unregisterListener(listener);
+-    sendAsyncMessage("console-message", { message: message.message });
+-  }
+-});
+diff --git a/toolkit/components/extensions/test/mochitest/file_ext_test_api_injection.js b/toolkit/components/extensions/test/mochitest/file_ext_test_api_injection.js
+new file mode 100644
+index 0000000..93ea999
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_ext_test_api_injection.js
+@@ -0,0 +1,12 @@
++"use strict";
++
++var { interfaces: Ci } = Components;
++
++Components.utils.import("resource://gre/modules/Services.jsm");
++
++Services.console.registerListener(function listener(message) {
++  if (/WebExt Privilege Escalation/.test(message.message)) {
++    Services.console.unregisterListener(listener);
++    sendAsyncMessage("console-message", { message: message.message });
++  }
++});
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+index c7d556f..3ea2f43 100644
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -14,22 +14,23 @@ support-files =
+   file_style_bad.css
+   file_style_redirect.css
+   file_script_good.js
+   file_script_bad.js
+   file_script_redirect.js
+   file_script_xhr.js
+   file_sample.html
+   file_privilege_escalation.html
+-  file_ext_background_api_injection.js
++  file_ext_test_api_injection.js
+ 
+ [test_ext_simple.html]
+ [test_ext_geturl.html]
+ [test_ext_contentscript.html]
+ [test_ext_contentscript_create_iframe.html]
++[test_ext_contentscript_api_injection.html]
+ [test_ext_i18n_css.html]
+ [test_ext_generate.html]
+ [test_ext_localStorage.html]
+ [test_ext_notifications.html]
+ [test_ext_runtime_connect.html]
+ [test_ext_runtime_disconnect.html]
+ [test_ext_runtime_getPlatformInfo.html]
+ [test_ext_sandbox_var.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_api_injection.html b/toolkit/components/extensions/test/mochitest/test_ext_background_api_injection.html
+index c655eeb..7efa539 100644
+--- a/toolkit/components/extensions/test/mochitest/test_ext_background_api_injection.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_background_api_injection.html
+@@ -20,17 +20,17 @@ add_task(function* testBackgroundWindow() {
+ 
+       browser.test.log("background script executed");
+       window.location = `${BASE}/file_privilege_escalation.html`;
+     },
+   });
+ 
+   let awaitConsole = new Promise(resolve => {
+     let chromeScript = SpecialPowers.loadChromeScript(
+-      SimpleTest.getTestFileURL("file_ext_background_api_injection.js"));
++      SimpleTest.getTestFileURL("file_ext_test_api_injection.js"));
+ 
+     chromeScript.addMessageListener("console-message", resolve);
+   });
+ 
+   yield extension.startup();
+ 
+   let message = yield awaitConsole;
+ 
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html
+new file mode 100644
+index 0000000..59416cf
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html
+@@ -0,0 +1,85 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for privilege escalation into iframe with content script APIs</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/SpawnTask.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<!-- WORKAROUND: this textarea hack is used to contain the html page source without escaping it -->
++<textarea id="test-asset">
++  <!DOCTYPE HTML>
++  <html>
++    <head>
++      <meta charset="utf-8">
++      <script>
++       const BASE = "http://mochi.test:8888/tests/toolkit/components/extensions/test/mochitest";
++       window.location = `${BASE}/file_privilege_escalation.html`;
++      </script>
++    </head>
++  </html>
++</textarea>
++
++<script type="application/javascript;version=1.8">
++"use strict";
++
++add_task(function* test_contentscript_api_injection()
++{
++  function contentScript() {
++    var iframe = document.createElement("iframe");
++    iframe.setAttribute("src", browser.runtime.getURL("content_script_iframe.html"));
++    document.body.appendChild(iframe);
++  }
++
++  let extensionData = {
++    manifest: {
++      content_scripts: [
++        {
++          "matches": ["http://mochi.test/*/file_sample.html"],
++          "js": ["content_script.js"],
++          "run_at": "document_end"
++        }
++      ],
++      "web_accessible_resources": [
++        "content_script_iframe.html"
++      ]
++    },
++
++    files: {
++      "content_script.js": "(" + contentScript + ")()",
++      "content_script_iframe.html": document.querySelector("#test-asset").textContent
++    },
++  };
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++
++  let awaitConsole = new Promise(resolve => {
++    let chromeScript = SpecialPowers.loadChromeScript(
++      SimpleTest.getTestFileURL("file_ext_test_api_injection.js"));
++
++    chromeScript.addMessageListener("console-message", resolve);
++  });
++
++  yield extension.startup();
++  info("extension loaded");
++
++  let win = window.open("file_sample.html");
++
++  let message = yield awaitConsole;
++
++  ok(message.message.includes("WebExt Privilege Escalation: typeof(browser) = undefined"),
++     "Document does not have `browser` APIs.");
++
++  win.close();
++
++  yield extension.unload();
++  info("extension unloaded");
++});
++</script>
++
++</body>
++</html>
+

@@ -33,7 +33,7 @@ index 29970a6..c7d556f 100644
  [test_ext_sandbox_var.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..1b14a70
+index 0000000..e6b4b9c
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 @@ -0,0 +1,145 @@
@@ -49,7 +49,7 @@ index 0000000..1b14a70
 +</head>
 +<body>
 +
-+<!-- WORKAROUND: this iframe hack is used to contain the html page source without escaping it -->
++<!-- WORKAROUND: this textarea hack is used to contain the html page source without escaping it -->
 +<textarea id="test-asset">
 +  <!DOCTYPE HTML>
 +  <html>
