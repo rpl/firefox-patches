@@ -1,7 +1,7 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1146606 - forward and cache remote readyState updates and remove CPOWs usage
+Bug 1146606 - forward and cache remote readyState updates and remove CPOWs usage r=mossop
 
 ---
  addon-sdk/source/lib/sdk/content/tab-events.js | 28 ++++++++++++++++++++------
@@ -10,7 +10,7 @@ Bug 1146606 - forward and cache remote readyState updates and remove CPOWs usage
  3 files changed, 48 insertions(+), 10 deletions(-)
 
 diff --git a/addon-sdk/source/lib/sdk/content/tab-events.js b/addon-sdk/source/lib/sdk/content/tab-events.js
-index 45363be..2bbf050 100644
+index 45363be..9e244a8 100644
 --- a/addon-sdk/source/lib/sdk/content/tab-events.js
 +++ b/addon-sdk/source/lib/sdk/content/tab-events.js
 @@ -1,42 +1,58 @@
@@ -76,10 +76,10 @@ index 45363be..2bbf050 100644
 +// Forward the existent frames's readyState.
 +for (let frame of frames) {
 +  let readyState = frame.content.document.readyState;
-+  frame.port.emit('sdk/tab/event', 'detected-existent-tab', { readyState });
++  frame.port.emit('sdk/tab/event', 'init', { readyState });
 +}
 diff --git a/addon-sdk/source/lib/sdk/tabs/tab-firefox.js b/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
-index 2a318b1..54905b6 100644
+index 2a318b1..f1da923 100644
 --- a/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
 +++ b/addon-sdk/source/lib/sdk/tabs/tab-firefox.js
 @@ -39,16 +39,19 @@ function isDestroyed(tab) {
@@ -132,7 +132,7 @@ index 2a318b1..54905b6 100644
      // The tabs module will take care of removing from its internal list
    }
 -  else if (event == "ready" || event == "load") {
-+  else if (event == "detected-existent-tab" || event == "create" || event == "ready" || event == "load") {
++  else if (event == "init" || event == "create" || event == "ready" || event == "load") {
      // Ignore load events from before browser windows have fully loaded, these
      // are for about:blank in the initial tab
      if (isBrowser(domWindow) && !domWindow.gBrowserInit.delayedStartupFinished)
@@ -143,7 +143,7 @@ index 2a318b1..54905b6 100644
 +    tab[remoteReadyStateCached] = readyState;
 +  }
 +
-+  if (event == "detected-existent-tabs") {
++  if (event == "init") {
 +    // Do not emit events for the detected existent tabs, we only need to cache
 +    // their current document.readyState value.
 +    return;
