@@ -1,0 +1,229 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1219229 - add testcase to check background script loading order on debugging attached
+
+---
+ .../test/mochitest/file_ext_load_extension.js      |  27 ++++
+ .../extensions/test/mochitest/mochitest.ini        |   2 +
+ .../test_ext_background_debugger_attached.html     | 143 +++++++++++++++++++++
+ 3 files changed, 172 insertions(+)
+ create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
+ create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
+
+diff --git a/toolkit/components/extensions/test/mochitest/file_ext_load_extension.js b/toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
+new file mode 100644
+index 0000000..48e7340
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
+@@ -0,0 +1,27 @@
++"use strict";
++
++var { utils: Cu } = Components;
++
++let { Extension } = Cu.import("resource://gre/modules/Extension.jsm");
++let { AddonManager } = Cu.import("resource://gre/modules/AddonManager.jsm");
++
++addMessageListener("load-extension", (extensionData) => {
++  let listener = {
++    onInstallEnded: function(install, addon) {
++      sendAsyncMessage("loaded-extension", addon.id);
++    },
++
++    onInstallFailed: function(install) {
++      sendAsyncMessage("loaded-extension", install.error);
++    }
++  };
++  let file = Extension.generateXPI(extensionData.id, extensionData);
++
++  AddonManager.getInstallForFile(file, function(aInstall) {
++    if (aInstall.error != 0) {
++      sendAsyncMessage("loaded-extension", install.error);
++    }
++    aInstall.addListener(listener);
++    aInstall.install();
++  });
++});
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+index 29970a6..4e99997 100644
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -15,16 +15,17 @@ support-files =
+   file_style_redirect.css
+   file_script_good.js
+   file_script_bad.js
+   file_script_redirect.js
+   file_script_xhr.js
+   file_sample.html
+   file_privilege_escalation.html
+   file_ext_background_api_injection.js
++  file_ext_load_extension.js
+ 
+ [test_ext_simple.html]
+ [test_ext_geturl.html]
+ [test_ext_contentscript.html]
+ [test_ext_i18n_css.html]
+ [test_ext_generate.html]
+ [test_ext_localStorage.html]
+ [test_ext_notifications.html]
+@@ -42,8 +43,9 @@ support-files =
+ [test_ext_background_window_properties.html]
+ [test_ext_background_sub_windows.html]
+ [test_ext_background_api_injection.html]
+ [test_ext_jsversion.html]
+ skip-if = e10s # Uses a console monitor which doesn't work from a content process. The code being tested doesn't run in a tab content process in any case.
+ [test_ext_i18n.html]
+ [test_ext_webrequest.html]
+ [test_ext_webnavigation.html]
++[test_ext_background_debugger_attached.html]
+\ No newline at end of file
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
+new file mode 100644
+index 0000000..42bffa7
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
+@@ -0,0 +1,143 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for attach debugger on a background page</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/SpawnTask.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="application/javascript;version=1.8">
++
++let {require} = SpecialPowers.Cu.import("resource://devtools/shared/Loader.jsm", {});
++let {DebuggerClient} = require("devtools/shared/client/main");
++let {DebuggerServer} = require("devtools/server/main");
++
++add_task(function* test_backgroundPageDebuggerAttach() {
++   // Instantiate a minimal server
++   if (!DebuggerServer.initialized) {
++     DebuggerServer.init();
++   }
++   if (!DebuggerServer.createRootActor) {
++     DebuggerServer.addBrowserActors();
++   }
++
++   // Fake a connection to an iframe
++   let transport = DebuggerServer.connectPipe();
++   let conn = transport._serverConnection;
++   let client = new DebuggerClient(transport);
++
++   console.log("CLIENT", client);
++   yield new Promise(function (resolve) {
++     client.connect(function () {
++       resolve();
++     });
++   });
++
++   let extensionData = {
++     files: {
++       "background1.js": "console.log('background1.js')",
++       "background2.js": "console.log('background2.js')",
++       "background3.js": "console.log('background3.js')",
++     },
++     manifest: {
++       id: "test@prova.it",
++       background: {
++         scripts: ["background1.js", "background2.js", "background3.js"]
++       }
++     }
++   };
++   //let extension = ExtensionTestUtils.loadExtension(extensionData);
++  info("load complete");
++
++   if (!extensionData.id) {
++     const uuidGenerator = SpecialPowers.Cc["@mozilla.org/uuid-generator;1"].getService(SpecialPowers.Ci.nsIUUIDGenerator);
++     extensionData.id = uuidGenerator.generateUUID().number;
++   }
++
++   let chromeScript = SpecialPowers.loadChromeScript(
++     SimpleTest.getTestFileURL("file_ext_load_extension.js"));
++
++   let installed = new Promise((resolve, reject) => {
++     chromeScript.addMessageListener("loaded-extension", resolve);
++   });
++
++   chromeScript.sendAsyncMessage("load-extension", extensionData);
++
++   yield installed;
++
++   info("installation complete");
++
++   let listAddons = yield new Promise((resolve) => {
++     client.listAddons((response) => {
++       response = SpecialPowers.wrap(response);
++       resolve(response);
++     });
++   });
++
++   info("remote debugger listAddons complete");
++
++   let filteredAddons = SpecialPowers.wrap(listAddons)["addons"].filter((ext) => {
++     return SpecialPowers.wrap(ext).id == extensionData.id;
++   });
++
++   let form = SpecialPowers.wrap(filteredAddons[0]);
++
++   let addonActor = yield new Promise((resolve) => {
++     client.attachAddon(form.actor, (response) => {
++       response = SpecialPowers.wrap(response);
++
++       client.attachThread(response.threadActor, (response, threadClient) => {
++         threadClient = SpecialPowers.wrap(threadClient);
++         response = SpecialPowers.wrap(response);
++         if (threadClient.paused) {
++           threadClient.resume();
++         }
++         resolve();
++       })
++     });
++   });
++
++   chromeScript.sendAsyncMessage("load-extension", extensionData);
++
++   let waitConsoleMessages = new Promise((resolve, reject) => {
++     let messages = [];
++
++     client.attachConsole(form.consoleActor, ["ConsoleAPI"], (aResponse, aWebConsoleClient) => {
++       aResponse = SpecialPowers.wrap(aResponse);
++       aWebConsoleClient = SpecialPowers.wrap(aWebConsoleClient);
++
++       if (aResponse.error) {
++         dump(`ERROR: ${aResponse.error}\n`);
++         reject();
++       }
++       else {
++         client.addListener("consoleAPICall", (evt, res) => {
++           messages.push(SpecialPowers.wrap(res));
++
++           if (messages.length >= 3) {
++             resolve(messages);
++           }
++         });
++         aWebConsoleClient.startListeners(["consoleAPICall"]);
++       }
++     });
++   })
++
++   messages = yield waitConsoleMessages;
++
++   ok(messages.length >= 3, "console messages received");
++   is(messages[0].message.arguments[0], "background1.js", "background1.js log received");
++   is(messages[1].message.arguments[0], "background2.js", "background2.js log received");
++   is(messages[2].message.arguments[0], "background3.js", "background3.js log received");
++
++  info("extension unloaded successfully");
++});
++
++</script>
++
++</body>
++</html>
+
