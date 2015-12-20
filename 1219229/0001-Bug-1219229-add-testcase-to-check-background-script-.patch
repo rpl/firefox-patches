@@ -6,20 +6,20 @@ Bug 1219229 - add testcase to check background script loading order on debugging
 ---
  .../test/mochitest/file_ext_load_extension.js      |  27 ++++
  .../extensions/test/mochitest/mochitest.ini        |   2 +
- .../test_ext_background_debugger_attached.html     | 143 +++++++++++++++++++++
- 3 files changed, 172 insertions(+)
+ .../test_ext_background_debugger_attached.html     | 179 +++++++++++++++++++++
+ 3 files changed, 208 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/file_ext_load_extension.js b/toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
 new file mode 100644
-index 0000000..48e7340
+index 0000000..6cf5f67
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
 @@ -0,0 +1,27 @@
 +"use strict";
 +
-+var { utils: Cu } = Components;
++let { utils: Cu } = Components;
 +
 +let { Extension } = Cu.import("resource://gre/modules/Extension.jsm");
 +let { AddonManager } = Cu.import("resource://gre/modules/AddonManager.jsm");
@@ -79,10 +79,10 @@ index 29970a6..4e99997 100644
 \ No newline at end of file
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 new file mode 100644
-index 0000000..42bffa7
+index 0000000..5fa416a
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,179 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -115,7 +115,6 @@ index 0000000..42bffa7
 +   let conn = transport._serverConnection;
 +   let client = new DebuggerClient(transport);
 +
-+   console.log("CLIENT", client);
 +   yield new Promise(function (resolve) {
 +     client.connect(function () {
 +       resolve();
@@ -156,6 +155,11 @@ index 0000000..42bffa7
 +
 +   info("installation complete");
 +
++   // set a fake global for the addoon (this is usually done from the XPIProvider)
++   DebuggerServer.setAddonOptions(extensionData.id, {
++     global: window
++   });
++
 +   let listAddons = yield new Promise((resolve) => {
 +     client.listAddons((response) => {
 +       response = SpecialPowers.wrap(response);
@@ -163,13 +167,42 @@ index 0000000..42bffa7
 +     });
 +   });
 +
-+   info("remote debugger listAddons complete");
++   info("search addon in the debugger list addons reply");
 +
-+   let filteredAddons = SpecialPowers.wrap(listAddons)["addons"].filter((ext) => {
++   let form = SpecialPowers.wrap(listAddons)["addons"].filter((ext) => {
 +     return SpecialPowers.wrap(ext).id == extensionData.id;
-+   });
++   })[0];
 +
-+   let form = SpecialPowers.wrap(filteredAddons[0]);
++   let messagesPreAttach = yield new Promise((resolve, reject) => {
++     let messages = [];
++
++     client.attachConsole(form.consoleActor, ["ConsoleAPI"], (aResponse, aWebConsoleClient) => {
++       aResponse = SpecialPowers.wrap(aResponse);
++       aWebConsoleClient = SpecialPowers.wrap(aWebConsoleClient);
++
++       if (aResponse.error) {
++         dump(`ERROR: ${aResponse.error}\n`);
++         reject();
++       }
++       else {
++         client.addListener("consoleAPICall", (evt, res) => {
++           messages.push(SpecialPowers.wrap(res));
++
++           if (messages.length >= 3) {
++             resolve(messages);
++           }
++         });
++         aWebConsoleClient.startListeners(["consoleAPICall"]);
++       }
++     });
++   })
++
++   ok(messagesPreAttach.length >= 3, "console messages received");
++   is(messagesPreAttach[0].message.arguments[0], "background1.js", "background1.js log received");
++   is(messagesPreAttach[1].message.arguments[0], "background2.js", "background2.js log received");
++   is(messagesPreAttach[2].message.arguments[0], "background3.js", "background3.js log received");
++
++   info("attach the addon thread");
 +
 +   let addonActor = yield new Promise((resolve) => {
 +     client.attachAddon(form.actor, (response) => {
@@ -186,7 +219,10 @@ index 0000000..42bffa7
 +     });
 +   });
 +
++   info("reload the addon");
++
 +   chromeScript.sendAsyncMessage("load-extension", extensionData);
++   //client.setAddonOptions(extensionData.id, { global: {} });
 +
 +   let waitConsoleMessages = new Promise((resolve, reject) => {
 +     let messages = [];
