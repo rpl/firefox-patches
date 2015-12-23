@@ -1,0 +1,289 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - Log error messages from add-on scripts to the add-on console
+
+---
+ devtools/server/actors/addon.js     | 10 +++++++++-
+ devtools/shared/webconsole/utils.js | 29 ++++++++++++++++++++++++++++-
+ js/xpconnect/idl/nsIScriptError.idl |  3 +++
+ js/xpconnect/src/nsScriptError.cpp  | 27 ++++++++++++++++++++++++++-
+ js/xpconnect/src/xpcprivate.h       |  1 +
+ 5 files changed, 67 insertions(+), 3 deletions(-)
+
+diff --git a/devtools/server/actors/addon.js b/devtools/server/actors/addon.js
+index 5cfa8d9..85a8fc6 100644
+--- a/devtools/server/actors/addon.js
++++ b/devtools/server/actors/addon.js
+@@ -4,17 +4,17 @@
+ 
+ "use strict";
+ 
+ var { Ci, Cu } = require("chrome");
+ var Services = require("Services");
+ var { ActorPool } = require("devtools/server/actors/common");
+ var { TabSources } = require("./utils/TabSources");
+ var makeDebugger = require("./utils/make-debugger");
+-var { ConsoleAPIListener } = require("devtools/shared/webconsole/utils");
++var { ConsoleAPIListener, ConsoleServiceListener } = require("devtools/shared/webconsole/utils");
+ var DevToolsUtils = require("devtools/shared/DevToolsUtils");
+ var { assert, update } = DevToolsUtils;
+ 
+ loader.lazyRequireGetter(this, "AddonThreadActor", "devtools/server/actors/script", true);
+ loader.lazyRequireGetter(this, "unwrapDebuggerObjectGlobal", "devtools/server/actors/script", true);
+ loader.lazyRequireGetter(this, "mapURIToAddonID", "devtools/server/actors/utils/map-uri-to-addon-id");
+ loader.lazyRequireGetter(this, "WebConsoleActor", "devtools/server/actors/webconsole", true);
+ 
+@@ -308,16 +308,24 @@ update(AddonConsoleActor.prototype, {
+    */
+   onStartListeners: function ACA_onStartListeners(aRequest)
+   {
+     let startedListeners = [];
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
++        case "PageError":
++          if (!this.consoleServiceListener) {
++            this.consoleServiceListener =
++              new ConsoleServiceListener(null, this, "addon/" + this.addon.id);
++            this.consoleServiceListener.init();
++          }
++          startedListeners.push(listener);
++          break;
+         case "ConsoleAPI":
+           if (!this.consoleAPIListener) {
+             this.consoleAPIListener =
+               new ConsoleAPIListener(null, this, "addon/" + this.addon.id);
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/utils.js
+index 7b2757f..8ff8241 100644
+--- a/devtools/shared/webconsole/utils.js
++++ b/devtools/shared/webconsole/utils.js
+@@ -709,35 +709,46 @@ WebConsoleUtils.l10n.prototype = {
+  * @constructor
+  * @param nsIDOMWindow [aWindow]
+  *        Optional - the window object for which we are created. This is used
+  *        for filtering out messages that belong to other windows.
+  * @param object aListener
+  *        The listener object must have one method:
+  *        - onConsoleServiceMessage(). This method is invoked with one argument,
+  *        the nsIConsoleMessage, whenever a relevant message is received.
++ * @param string aConsoleID
++ *        Options - The consoleID that this listener should listen to (used in
++ *        the addon webconsole to filter log messages and script errors related
++ *        to the consoleID in the form "addon/ID")
+  */
+-function ConsoleServiceListener(aWindow, aListener)
++function ConsoleServiceListener(aWindow, aListener, aConsoleID)
+ {
+   this.window = aWindow;
+   this.listener = aListener;
++  this.consoleID = aConsoleID;
+ }
+ exports.ConsoleServiceListener = ConsoleServiceListener;
+ 
+ ConsoleServiceListener.prototype =
+ {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIConsoleListener]),
+ 
+   /**
+    * The content window for which we listen to page errors.
+    * @type nsIDOMWindow
+    */
+   window: null,
+ 
+   /**
++   * Ths console id (e.g. "addon/ID") for which we listen to page errors.
++   * @type string
++   */
++  consoleID: null,
++
++  /**
+    * The listener object which is notified of messages from the console service.
+    * @type object
+    */
+   listener: null,
+ 
+   /**
+    * Initialize the nsIConsoleService listener.
+    */
+@@ -768,16 +779,22 @@ ConsoleServiceListener.prototype =
+       }
+ 
+       let errorWindow = Services.wm.getOuterWindowWithId(aMessage .outerWindowID);
+       if (!errorWindow || !isWindowIncluded(this.window, errorWindow)) {
+         return;
+       }
+     }
+ 
++    // if this.consoleID, we're in an addon console and we want to filter
++    // script errors based on their consoleID
++    if (this.consoleID && (aMessage instanceof Ci.nsIScriptError) && aMessage.consoleID !== this.consoleID) {
++      return;
++    }
++
+     this.listener.onConsoleServiceMessage(aMessage);
+   },
+ 
+   /**
+    * Check if the given message category is allowed to be tracked or not.
+    * We ignore chrome-originating errors as we only care about content.
+    *
+    * @param string aCategory
+@@ -815,16 +832,26 @@ ConsoleServiceListener.prototype =
+    * @return array
+    *         The array of cached messages. Each element is an nsIScriptError or
+    *         an nsIConsoleMessage
+    */
+   getCachedMessages: function CSL_getCachedMessages(aIncludePrivate = false)
+   {
+     let errors = Services.console.getMessageArray() || [];
+ 
++    // if this.consoleID, we're in an addon console and we want to filter
++    // script errors based on their consoleID
++    if (this.consoleID) {
++      errors = errors.filter((aError) => {
++        if (aError instanceof Ci.nsIScriptError) {
++          return aError.consoleID == this.consoleID;
++        }
++      });
++    }
++
+     // if !this.window, we're in a browser console. Still need to filter
+     // private messages.
+     if (!this.window) {
+       return errors.filter((aError) => {
+         if (aError instanceof Ci.nsIScriptError) {
+           if (!aIncludePrivate && aError.isFromPrivateWindow) {
+             return false;
+           }
+diff --git a/js/xpconnect/idl/nsIScriptError.idl b/js/xpconnect/idl/nsIScriptError.idl
+index 8968a8e..dc01bba 100644
+--- a/js/xpconnect/idl/nsIScriptError.idl
++++ b/js/xpconnect/idl/nsIScriptError.idl
+@@ -43,16 +43,19 @@ interface nsIScriptError : nsIConsoleMessage
+     readonly attribute AString errorMessage;
+ 
+     readonly attribute AString sourceName;
+     readonly attribute AString sourceLine;
+     readonly attribute uint32_t lineNumber;
+     readonly attribute uint32_t columnNumber;
+     readonly attribute uint32_t flags;
+ 
++    /** message is tagged with a consoleID (e.g. "addon/ID") */
++    readonly attribute AString consoleID;
++
+     /**
+      * Categories I know about -
+      * XUL javascript
+      * content javascript (both of these from nsDocShell, currently)
+      * system javascript (errors in JS components and other system JS)
+      */
+     readonly attribute string category;
+ 
+diff --git a/js/xpconnect/src/nsScriptError.cpp b/js/xpconnect/src/nsScriptError.cpp
+index 97917f4..c0eb206 100644
+--- a/js/xpconnect/src/nsScriptError.cpp
++++ b/js/xpconnect/src/nsScriptError.cpp
+@@ -41,31 +41,50 @@ void
+ nsScriptErrorBase::InitializeOnMainThread()
+ {
+     MOZ_ASSERT(NS_IsMainThread());
+     MOZ_ASSERT(!mInitializedOnMainThread);
+ 
+     if (mInnerWindowID) {
+         nsGlobalWindow* window =
+           nsGlobalWindow::GetInnerWindowWithId(mInnerWindowID);
++
+         if (window) {
+             nsPIDOMWindow* outer = window->GetOuterWindow();
+             if (outer)
+                 mOuterWindowID = outer->WindowID();
+ 
+             nsIDocShell* docShell = window->GetDocShell();
++            nsIPrincipal* winPrincipal = window->GetPrincipal();
+             nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(docShell);
+ 
+             if (loadContext) {
+                 // Never mark exceptions from chrome windows as having come from
+                 // private windows, since we always want them to be reported.
+-                nsIPrincipal* winPrincipal = window->GetPrincipal();
+                 mIsFromPrivateWindow = loadContext->UsePrivateBrowsing() &&
+                                        !nsContentUtils::IsSystemPrincipal(winPrincipal);
+             }
++
++            if (winPrincipal) {
++                PrincipalOriginAttributes poa = BasePrincipal::Cast(winPrincipal)->OriginAttributesRef();
++                if (!poa.mAddonId.IsEmpty()) {
++                    nsAutoCString consoleId;
++                    CopyUTF16toUTF8(poa.mAddonId, consoleId);
++                    consoleId.Insert(NS_LITERAL_CSTRING("addon/"), 0);
++                    CopyUTF8toUTF16(consoleId, mConsoleID);
++                }
++                /*
++                nsresult rv = winPrincipal->GetAddonId(addonId);
++                if (!NS_FAILED(rv) && !addonId.IsEmpty()) {
++                    nsAutoCString consoleId;
++                    consoleId.Insert(NS_LITERAL_CSTRING("addon/"), 0);
++                    consoleId.Append(addonId);
++                    mConsoleID.Append(consoleId);
++                    }*/
++            }
+         }
+     }
+ 
+     mInitializedOnMainThread = true;
+ }
+ 
+ // nsIConsoleMessage methods
+ NS_IMETHODIMP
+@@ -137,16 +156,22 @@ nsScriptErrorBase::GetFlags(uint32_t* result) {
+ 
+ NS_IMETHODIMP
+ nsScriptErrorBase::GetCategory(char** result) {
+     *result = ToNewCString(mCategory);
+     return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
++nsScriptErrorBase::GetConsoleID(nsAString& aResult) {
++    aResult.Assign(mConsoleID);
++    return NS_OK;
++}
++
++NS_IMETHODIMP
+ nsScriptErrorBase::GetStack(JS::MutableHandleValue aStack) {
+     aStack.setUndefined();
+     return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
+ nsScriptErrorBase::SetStack(JS::HandleValue aStack) {
+     return NS_OK;
+diff --git a/js/xpconnect/src/xpcprivate.h b/js/xpconnect/src/xpcprivate.h
+index e754c5b..dc453c8 100644
+--- a/js/xpconnect/src/xpcprivate.h
++++ b/js/xpconnect/src/xpcprivate.h
+@@ -2992,16 +2992,17 @@ protected:
+     InitializeOnMainThread();
+ 
+     nsString mMessage;
+     nsString mSourceName;
+     uint32_t mLineNumber;
+     nsString mSourceLine;
+     uint32_t mColumnNumber;
+     uint32_t mFlags;
++    nsString mConsoleID;
+     nsCString mCategory;
+     // mOuterWindowID is set on the main thread from InitializeOnMainThread().
+     uint64_t mOuterWindowID;
+     uint64_t mInnerWindowID;
+     int64_t mTimeStamp;
+     // mInitializedOnMainThread and mIsFromPrivateWindow are set on the main
+     // thread from InitializeOnMainThread().
+     mozilla::Atomic<bool> mInitializedOnMainThread;
+

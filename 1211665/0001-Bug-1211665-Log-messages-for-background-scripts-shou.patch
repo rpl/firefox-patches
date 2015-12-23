@@ -8,327 +8,12 @@ Bug 1211665 - Log messages for background scripts should appear in extension deb
   which is how the Addon Console RDP Actor recognize the messages that have to be
   collected and shown in the Addon Console Panel
 ---
- caps/BasePrincipal.cpp              |  7 +++++++
- caps/BasePrincipal.h                |  2 ++
- caps/nsIPrincipal.idl               |  7 +++++++
- caps/nsNullPrincipal.cpp            |  8 ++++++++
- caps/nsNullPrincipal.h              |  1 +
- caps/nsPrincipal.cpp                | 30 ++++++++++++++++++++++++++++++
- caps/nsPrincipal.h                  |  2 ++
- caps/nsSystemPrincipal.cpp          |  8 ++++++++
- caps/nsSystemPrincipal.h            |  1 +
  devtools/shared/webconsole/utils.js |  6 ++++++
- dom/base/Console.cpp                | 20 ++++++++++++++++++++
+ dom/base/Console.cpp                | 19 +++++++++++++++++++
  dom/base/Console.h                  |  1 +
  dom/webidl/Console.webidl           |  1 +
- 13 files changed, 94 insertions(+)
+ 4 files changed, 27 insertions(+)
 
-diff --git a/caps/BasePrincipal.cpp b/caps/BasePrincipal.cpp
-index f47c951..e415ec3 100644
---- a/caps/BasePrincipal.cpp
-+++ b/caps/BasePrincipal.cpp
-@@ -476,16 +476,23 @@ BasePrincipal::GetAppId(uint32_t* aAppId)
-     return NS_OK;
-   }
- 
-   *aAppId = AppId();
-   return NS_OK;
- }
- 
- NS_IMETHODIMP
-+BasePrincipal::GetAddonId(nsACString& aAddonId)
-+{
-+  return GetAddonIdInternal(aAddonId);
-+}
-+
-+
-+NS_IMETHODIMP
- BasePrincipal::GetUserContextId(uint32_t* aUserContextId)
- {
-   *aUserContextId = UserContextId();
-   return NS_OK;
- }
- 
- NS_IMETHODIMP
- BasePrincipal::GetIsInBrowserElement(bool* aIsInBrowserElement)
-diff --git a/caps/BasePrincipal.h b/caps/BasePrincipal.h
-index 16c68b1..7e14091 100644
---- a/caps/BasePrincipal.h
-+++ b/caps/BasePrincipal.h
-@@ -210,16 +210,17 @@ public:
-   NS_IMETHOD GetIsCodebasePrincipal(bool* aResult) override;
-   NS_IMETHOD GetIsExpandedPrincipal(bool* aResult) override;
-   NS_IMETHOD GetIsSystemPrincipal(bool* aResult) override;
-   NS_IMETHOD GetJarPrefix(nsACString& aJarPrefix) final;
-   NS_IMETHOD GetOriginAttributes(JSContext* aCx, JS::MutableHandle<JS::Value> aVal) final;
-   NS_IMETHOD GetOriginSuffix(nsACString& aOriginSuffix) final;
-   NS_IMETHOD GetAppStatus(uint16_t* aAppStatus) final;
-   NS_IMETHOD GetAppId(uint32_t* aAppStatus) final;
-+  NS_IMETHOD GetAddonId(nsACString& aAddonId) final;
-   NS_IMETHOD GetIsInBrowserElement(bool* aIsInBrowserElement) final;
-   NS_IMETHOD GetUnknownAppId(bool* aUnknownAppId) final;
-   NS_IMETHOD GetUserContextId(uint32_t* aUserContextId) final;
- 
-   virtual bool IsOnCSSUnprefixingWhitelist() override { return false; }
- 
-   virtual bool IsCodebasePrincipal() const { return false; };
- 
-@@ -241,16 +242,17 @@ public:
-   };
- 
-   virtual PrincipalKind Kind() = 0;
- 
- protected:
-   virtual ~BasePrincipal();
- 
-   virtual nsresult GetOriginInternal(nsACString& aOrigin) = 0;
-+  virtual nsresult GetAddonIdInternal(nsACString& aOrigin) = 0;
-   virtual bool SubsumesInternal(nsIPrincipal* aOther, DocumentDomainConsideration aConsider) = 0;
- 
-   // Internal, side-effect-free check to determine whether the concrete
-   // principal would allow the load ignoring any common behavior implemented in
-   // BasePrincipal::CheckMayLoad.
-   virtual bool MayLoadInternal(nsIURI* aURI) = 0;
-   friend class ::nsExpandedPrincipal;
- 
-diff --git a/caps/nsIPrincipal.idl b/caps/nsIPrincipal.idl
-index 982cb64..201ec24 100644
---- a/caps/nsIPrincipal.idl
-+++ b/caps/nsIPrincipal.idl
-@@ -222,16 +222,23 @@ interface nsIPrincipal : nsISerializable
-      * special requirements must inspect and compare .originSuffix manually.
-      *
-      * originsuffix are intended to be a replacement for jarPrefix, which will
-      * eventually be removed.
-      */
-     readonly attribute AUTF8String originSuffix;
- 
-     /**
-+     * Gets the id of the addon this principal is inside, by using the addonId
-+     * already stored in the originAttributes.  If this principal is
-+     * not inside an addon, throws NS_ERROR_FAILURE.
-+     */
-+    readonly attribute ACString addonId;
-+
-+    /**
-      * The base domain of the codebase URI to which this principal pertains
-      * (generally the document URI), handling null principals and
-      * non-hierarchical schemes correctly.
-      */
-     readonly attribute ACString baseDomain;
- 
-     const short APP_STATUS_NOT_INSTALLED = 0;
-     const short APP_STATUS_INSTALLED     = 1;
-diff --git a/caps/nsNullPrincipal.cpp b/caps/nsNullPrincipal.cpp
-index cd87aac..88497e3 100644
---- a/caps/nsNullPrincipal.cpp
-+++ b/caps/nsNullPrincipal.cpp
-@@ -102,16 +102,24 @@ nsNullPrincipal::SetDomain(nsIURI* aDomain)
- }
- 
- nsresult
- nsNullPrincipal::GetOriginInternal(nsACString& aOrigin)
- {
-   return mURI->GetSpec(aOrigin);
- }
- 
-+nsresult
-+nsNullPrincipal::GetAddonIdInternal(nsACString& aAddonId)
-+{
-+  // I think the right thing to do here is to just throw...  Silently failing
-+  // seems counterproductive.
-+  return NS_ERROR_NOT_AVAILABLE;
-+}
-+
- bool
- nsNullPrincipal::MayLoadInternal(nsIURI* aURI)
- {
-   // Also allow the load if we are the principal of the URI being checked.
-   nsCOMPtr<nsIURIWithPrincipal> uriPrinc = do_QueryInterface(aURI);
-   if (uriPrinc) {
-     nsCOMPtr<nsIPrincipal> principal;
-     uriPrinc->GetPrincipal(getter_AddRefs(principal));
-diff --git a/caps/nsNullPrincipal.h b/caps/nsNullPrincipal.h
-index 37cc678..a559ac6 100644
---- a/caps/nsNullPrincipal.h
-+++ b/caps/nsNullPrincipal.h
-@@ -41,16 +41,17 @@ public:
- 
-   NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
-   NS_IMETHOD GetHashValue(uint32_t* aHashValue) override;
-   NS_IMETHOD GetURI(nsIURI** aURI) override;
-   NS_IMETHOD GetDomain(nsIURI** aDomain) override;
-   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
-   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
-   nsresult GetOriginInternal(nsACString& aOrigin) override;
-+  nsresult GetAddonIdInternal(nsACString& aAddonId) override;
- 
-   // Returns null on failure.
-   static already_AddRefed<nsNullPrincipal> CreateWithInheritedAttributes(nsIPrincipal *aInheritFrom);
- 
-   // Returns null on failure.
-   static already_AddRefed<nsNullPrincipal>
-   Create(const mozilla::PrincipalOriginAttributes& aOriginAttributes = mozilla::PrincipalOriginAttributes());
- 
-diff --git a/caps/nsPrincipal.cpp b/caps/nsPrincipal.cpp
-index 50f6387..cf7dbd9 100644
---- a/caps/nsPrincipal.cpp
-+++ b/caps/nsPrincipal.cpp
-@@ -182,16 +182,38 @@ nsPrincipal::GetOriginForURI(nsIURI* aURI, nsACString& aOrigin)
- }
- 
- nsresult
- nsPrincipal::GetOriginInternal(nsACString& aOrigin)
- {
-   return GetOriginForURI(mCodebase, aOrigin);
- }
- 
-+nsresult
-+nsPrincipal::GetAddonIdInternal(nsACString& aAddonId)
-+{
-+  if (!mCodebase) {
-+    return NS_ERROR_FAILURE;
-+  }
-+
-+  bool isMozExt;
-+  bool isChromeExt;
-+  mCodebase->SchemeIs("moz-extension", &isMozExt);
-+  mCodebase->SchemeIs("chrome-extension", &isChromeExt);
-+
-+  if (!isMozExt && !isChromeExt) {
-+    return NS_ERROR_FAILURE;
-+  }
-+
-+  CopyUTF16toUTF8(mOriginAttributes.mAddonId, aAddonId);
-+
-+  return NS_OK;
-+}
-+
-+
- bool
- nsPrincipal::SubsumesInternal(nsIPrincipal* aOther,
-                               BasePrincipal::DocumentDomainConsideration aConsideration)
- {
-   MOZ_ASSERT(aOther);
- 
-   // For nsPrincipal, Subsumes is equivalent to Equals.
-   if (aOther == this) {
-@@ -719,16 +741,24 @@ nsExpandedPrincipal::GetOriginInternal(nsACString& aOrigin)
-     NS_ENSURE_SUCCESS(rv, rv);
-     aOrigin.Append(subOrigin);
-   }
- 
-   aOrigin.Append("]]");
-   return NS_OK;
- }
- 
-+nsresult
-+nsExpandedPrincipal::GetAddonIdInternal(nsACString& aAddonId)
-+{
-+  // I think the right thing to do here is to just throw...  Silently failing
-+  // seems counterproductive.
-+  return NS_ERROR_NOT_AVAILABLE;
-+}
-+
- bool
- nsExpandedPrincipal::SubsumesInternal(nsIPrincipal* aOther,
-                                       BasePrincipal::DocumentDomainConsideration aConsideration)
- {
-   // If aOther is an ExpandedPrincipal too, we break it down into its component
-   // nsIPrincipals, and check subsumes on each one.
-   nsCOMPtr<nsIExpandedPrincipal> expanded = do_QueryInterface(aOther);
-   if (expanded) {
-diff --git a/caps/nsPrincipal.h b/caps/nsPrincipal.h
-index 8a7e8bc..6a6f3aa 100644
---- a/caps/nsPrincipal.h
-+++ b/caps/nsPrincipal.h
-@@ -25,16 +25,17 @@ public:
-   NS_IMETHOD GetHashValue(uint32_t* aHashValue) override;
-   NS_IMETHOD GetURI(nsIURI** aURI) override;
-   NS_IMETHOD GetDomain(nsIURI** aDomain) override;
-   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
-   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
-   virtual bool IsOnCSSUnprefixingWhitelist() override;
-   bool IsCodebasePrincipal() const override { return true; }
-   nsresult GetOriginInternal(nsACString& aOrigin) override;
-+  nsresult GetAddonIdInternal(nsACString& aAddonId) override;
- 
-   nsPrincipal();
- 
-   // Init() must be called before the principal is in a usable state.
-   nsresult Init(nsIURI* aCodebase, const mozilla::PrincipalOriginAttributes& aOriginAttributes);
- 
-   virtual void GetScriptLocation(nsACString& aStr) override;
-   void SetURI(nsIURI* aURI);
-@@ -79,16 +80,17 @@ public:
-   NS_IMETHOD GetHashValue(uint32_t* aHashValue) override;
-   NS_IMETHOD GetURI(nsIURI** aURI) override;
-   NS_IMETHOD GetDomain(nsIURI** aDomain) override;
-   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
-   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
-   virtual bool IsOnCSSUnprefixingWhitelist() override;
-   virtual void GetScriptLocation(nsACString &aStr) override;
-   nsresult GetOriginInternal(nsACString& aOrigin) override;
-+  nsresult GetAddonIdInternal(nsACString& aAddonId) override;
- 
-   PrincipalKind Kind() override { return eExpandedPrincipal; }
- 
- protected:
-   virtual ~nsExpandedPrincipal();
- 
-   bool SubsumesInternal(nsIPrincipal* aOther, DocumentDomainConsideration aConsideration) override;
-   bool MayLoadInternal(nsIURI* aURI) override;
-diff --git a/caps/nsSystemPrincipal.cpp b/caps/nsSystemPrincipal.cpp
-index e8f52f1..4f1b76f 100644
---- a/caps/nsSystemPrincipal.cpp
-+++ b/caps/nsSystemPrincipal.cpp
-@@ -57,16 +57,24 @@ nsSystemPrincipal::GetURI(nsIURI** aURI)
- 
- nsresult
- nsSystemPrincipal::GetOriginInternal(nsACString& aOrigin)
- {
-     aOrigin.AssignLiteral(SYSTEM_PRINCIPAL_SPEC);
-     return NS_OK;
- }
- 
-+nsresult
-+nsSystemPrincipal::GetAddonIdInternal(nsACString& aAddonId)
-+{
-+    // I think the right thing to do here is to just throw...  Silently failing
-+    // seems counterproductive.
-+    return NS_ERROR_NOT_AVAILABLE;
-+}
-+
- NS_IMETHODIMP
- nsSystemPrincipal::GetCsp(nsIContentSecurityPolicy** aCsp)
- {
-   *aCsp = nullptr;
-   return NS_OK;
- }
- 
- NS_IMETHODIMP
-diff --git a/caps/nsSystemPrincipal.h b/caps/nsSystemPrincipal.h
-index 03e9175..51268ef 100644
---- a/caps/nsSystemPrincipal.h
-+++ b/caps/nsSystemPrincipal.h
-@@ -30,16 +30,17 @@ public:
-   NS_IMETHOD GetDomain(nsIURI** aDomain) override;
-   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
-   NS_IMETHOD GetCsp(nsIContentSecurityPolicy** aCsp) override;
-   NS_IMETHOD SetCsp(nsIContentSecurityPolicy* aCsp) override;
-   NS_IMETHOD GetPreloadCsp(nsIContentSecurityPolicy** aPreloadCSP) override;
-   NS_IMETHOD SetPreloadCsp(nsIContentSecurityPolicy* aPreloadCSP) override;
-   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
-   nsresult GetOriginInternal(nsACString& aOrigin) override;
-+  nsresult GetAddonIdInternal(nsACString& aAddonId) override;
- 
-   nsSystemPrincipal() {}
- 
-   virtual void GetScriptLocation(nsACString &aStr) override;
- 
- protected:
-   virtual ~nsSystemPrincipal(void) {}
- 
 diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/utils.js
 index 45dc8be..7b2757f 100644
 --- a/devtools/shared/webconsole/utils.js
@@ -357,7 +42,7 @@ index 45dc8be..7b2757f 100644
    destroy: function CAL_destroy()
    {
 diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
-index e1b35a9..7aba30e 100644
+index e1b35a9..42289a8 100644
 --- a/dom/base/Console.cpp
 +++ b/dom/base/Console.cpp
 @@ -151,16 +151,18 @@ public:
@@ -379,7 +64,7 @@ index e1b35a9..7aba30e 100644
    // 1)  mTopStackFrame is initialized whenever we have any JS on the stack
    // 2)  mReifiedStack is initialized if we're created in a worker.
    // 3)  mStack is set (possibly to null if there is no JS on the stack) if
-@@ -699,16 +701,33 @@ Console::Console(nsPIDOMWindow* aWindow)
+@@ -699,16 +701,32 @@ Console::Console(nsPIDOMWindow* aWindow)
  
      // Without outerwindow any console message coming from this object will not
      // shown in the devtools webconsole. But this should be fine because
@@ -393,14 +78,13 @@ index e1b35a9..7aba30e 100644
 +    // an addonId
 +    nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
 +    if (sop) {
-+      nsIPrincipal* targetPrin = sop->GetPrincipal();
-+      if (targetPrin) {
-+        nsAutoCString addonId;
-+        nsresult rv = targetPrin->GetAddonId(addonId);
-+        if (!NS_FAILED(rv) && !addonId.IsEmpty()) {
++      nsIPrincipal* principal = sop->GetPrincipal();
++      if (principal) {
++        PrincipalOriginAttributes poa = BasePrincipal::Cast(principal)->OriginAttributesRef();
++        if (!poa.mAddonId.IsEmpty()) {
 +          nsAutoCString consoleId;
++          CopyUTF16toUTF8(poa.mAddonId, consoleId);
 +          consoleId.Insert(NS_LITERAL_CSTRING("addon/"), 0);
-+          consoleId.Append(addonId);
 +          CopyUTF8toUTF16(consoleId, mConsoleID);
 +        }
 +      }
@@ -413,7 +97,7 @@ index e1b35a9..7aba30e 100644
        obs->AddObserver(this, "inner-window-destroyed", false);
      }
    }
-@@ -1191,16 +1210,17 @@ Console::ProcessCallData(ConsoleCallData* aData)
+@@ -1191,16 +1209,17 @@ Console::ProcessCallData(ConsoleCallData* aData)
    AutoSafeJSContext cx;
    ClearException ce(cx);
    RootedDictionary<ConsoleEvent> event(cx);
