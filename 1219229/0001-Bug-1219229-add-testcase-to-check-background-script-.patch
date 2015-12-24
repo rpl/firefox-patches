@@ -4,10 +4,10 @@
 Bug 1219229 - add testcase to check background script loading order on debugging attached
 
 ---
- .../test/mochitest/file_ext_load_extension.js      |  27 ++++
+ .../test/mochitest/file_ext_load_extension.js      |  27 +++
  .../extensions/test/mochitest/mochitest.ini        |   2 +
- .../test_ext_background_debugger_attached.html     | 179 +++++++++++++++++++++
- 3 files changed, 208 insertions(+)
+ .../test_ext_background_debugger_attached.html     | 203 +++++++++++++++++++++
+ 3 files changed, 232 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 
@@ -79,10 +79,10 @@ index 29970a6..4e99997 100644
 \ No newline at end of file
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 new file mode 100644
-index 0000000..5fa416a
+index 0000000..f329b07
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,203 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -101,26 +101,125 @@ index 0000000..5fa416a
 +let {DebuggerClient} = require("devtools/shared/client/main");
 +let {DebuggerServer} = require("devtools/server/main");
 +
++function initAndConnectDebugger() {
++  // Instantiate a minimal server
++  if (!DebuggerServer.initialized) {
++    DebuggerServer.init();
++  }
++  if (!DebuggerServer.createRootActor) {
++    DebuggerServer.addBrowserActors();
++  }
++  DebuggerServer.allowChromeProcess = true;
++
++  // Fake a connection to an iframe
++  let transport = DebuggerServer.connectPipe();
++  let conn = transport._serverConnection;
++  let client = new DebuggerClient(transport);
++
++  return new Promise(function (resolve) {
++    client.connect(function () {
++      resolve(client);
++    });
++  });
++}
++
++function getChromeAndAddonForms(client, extensionData) {
++  // set a fake global for the addoon (this is usually done from the XPIProvider)
++  DebuggerServer.setAddonOptions(extensionData.id, {
++    global: window
++  });
++
++  let chromeForm = client.getProcess().then((aResponse) => {
++    aResponse = SpecialPowers.wrap(aResponse);
++    return aResponse.form;
++  });
++
++  let addonForm = new Promise((resolve) => {
++    client.listAddons((response) => {
++      let form = SpecialPowers.wrap(response)["addons"].filter((ext) => {
++        return SpecialPowers.wrap(ext).id == extensionData.id;
++      })[0];
++      resolve(form);
++    });
++  });
++
++  return Promise.all([ chromeForm, addonForm ]).then((results) => {
++    console.log("RESULTS", results);
++    return results;
++  });
++}
++
++function collectConsoleMessages (client, form) {
++  return new Promise((resolve, reject) => {
++    let messages = [];
++
++    client.attachConsole(form.consoleActor, ["ConsoleAPI"], (aResponse, aWebConsoleClient) => {
++      aResponse = SpecialPowers.wrap(aResponse);
++      aWebConsoleClient = SpecialPowers.wrap(aWebConsoleClient);
++
++      if (aResponse.error) {
++        dump(`ERROR: ${aResponse.error}\n`);
++        reject();
++      } else {
++        client.addListener("consoleAPICall", (evt, res) => {
++          res = SpecialPowers.wrap(res);
++
++          // filter out not interesting messages
++          if (!res.message.arguments[0].match(/^background\d\.js$/)) {
++            return;
++          }
++
++          messages.push(res.message);
++
++          if (messages.length >= 3) {
++            resolve(messages);
++          }
++        });
++        aWebConsoleClient.startListeners(["consoleAPICall"]);
++      }
++    });
++  })
++}
++
++function installAddon(extensionData) {
++  if (!extensionData.id) {
++    const uuidGenerator = SpecialPowers.Cc["@mozilla.org/uuid-generator;1"].getService(SpecialPowers.Ci.nsIUUIDGenerator);
++    extensionData.id = uuidGenerator.generateUUID().number;
++  }
++
++  let chromeScript = SpecialPowers.loadChromeScript(
++    SimpleTest.getTestFileURL("file_ext_load_extension.js"));
++
++  function installAndWait() {
++    return new Promise((resolve, reject) => {
++      chromeScript.addMessageListener("loaded-extension", () => {
++        resolve(installAndWait);
++      });
++      chromeScript.sendAsyncMessage("load-extension", extensionData);
++    });
++  }
++
++  return installAndWait();
++}
++
++function attachAddonDebugger(client, form) {
++  return new Promise((resolve) => {
++    client.attachAddon(form.actor, (response) => {
++      response = SpecialPowers.wrap(response);
++
++      client.attachThread(response.threadActor, (response, threadClient) => {
++        threadClient = SpecialPowers.wrap(threadClient);
++        response = SpecialPowers.wrap(response);
++        if (threadClient.paused) {
++          threadClient.resume();
++        }
++        resolve();
++      })
++    });
++  });
++}
++
 +add_task(function* test_backgroundPageDebuggerAttach() {
-+   // Instantiate a minimal server
-+   if (!DebuggerServer.initialized) {
-+     DebuggerServer.init();
-+   }
-+   if (!DebuggerServer.createRootActor) {
-+     DebuggerServer.addBrowserActors();
-+   }
-+
-+   // Fake a connection to an iframe
-+   let transport = DebuggerServer.connectPipe();
-+   let conn = transport._serverConnection;
-+   let client = new DebuggerClient(transport);
-+
-+   yield new Promise(function (resolve) {
-+     client.connect(function () {
-+       resolve();
-+     });
-+   });
-+
 +   let extensionData = {
 +     files: {
 +       "background1.js": "console.log('background1.js')",
@@ -134,24 +233,12 @@ index 0000000..5fa416a
 +       }
 +     }
 +   };
-+   //let extension = ExtensionTestUtils.loadExtension(extensionData);
-+  info("load complete");
 +
-+   if (!extensionData.id) {
-+     const uuidGenerator = SpecialPowers.Cc["@mozilla.org/uuid-generator;1"].getService(SpecialPowers.Ci.nsIUUIDGenerator);
-+     extensionData.id = uuidGenerator.generateUUID().number;
-+   }
++   let client = yield initAndConnectDebugger();
 +
-+   let chromeScript = SpecialPowers.loadChromeScript(
-+     SimpleTest.getTestFileURL("file_ext_load_extension.js"));
++   info("load complete");
 +
-+   let installed = new Promise((resolve, reject) => {
-+     chromeScript.addMessageListener("loaded-extension", resolve);
-+   });
-+
-+   chromeScript.sendAsyncMessage("load-extension", extensionData);
-+
-+   yield installed;
++   let reinstallAddon = yield installAddon(extensionData);
 +
 +   info("installation complete");
 +
@@ -160,100 +247,37 @@ index 0000000..5fa416a
 +     global: window
 +   });
 +
-+   let listAddons = yield new Promise((resolve) => {
-+     client.listAddons((response) => {
-+       response = SpecialPowers.wrap(response);
-+       resolve(response);
-+     });
-+   });
++   info("get Chrome Process and Addon RDP forms");
 +
-+   info("search addon in the debugger list addons reply");
++   let [ chromeForm, addonForm ] = yield getChromeAndAddonForms(client, extensionData)
 +
-+   let form = SpecialPowers.wrap(listAddons)["addons"].filter((ext) => {
-+     return SpecialPowers.wrap(ext).id == extensionData.id;
-+   })[0];
++   info("wait addon console messages (before the Addon Debugger is attached)");
 +
-+   let messagesPreAttach = yield new Promise((resolve, reject) => {
-+     let messages = [];
++   let messagesPreAttach = yield collectConsoleMessages(client, chromeForm);
 +
-+     client.attachConsole(form.consoleActor, ["ConsoleAPI"], (aResponse, aWebConsoleClient) => {
-+       aResponse = SpecialPowers.wrap(aResponse);
-+       aWebConsoleClient = SpecialPowers.wrap(aWebConsoleClient);
++   info("addon console messages received");
 +
-+       if (aResponse.error) {
-+         dump(`ERROR: ${aResponse.error}\n`);
-+         reject();
-+       }
-+       else {
-+         client.addListener("consoleAPICall", (evt, res) => {
-+           messages.push(SpecialPowers.wrap(res));
++   ok(messagesPreAttach.length >= 3, "all addon console messages received");
++   is(messagesPreAttach[0].arguments[0], "background1.js", "background1.js log received");
++   is(messagesPreAttach[1].arguments[0], "background2.js", "background2.js log received");
++   is(messagesPreAttach[2].arguments[0], "background3.js", "background3.js log received");
 +
-+           if (messages.length >= 3) {
-+             resolve(messages);
-+           }
-+         });
-+         aWebConsoleClient.startListeners(["consoleAPICall"]);
-+       }
-+     });
-+   })
++   info("attach the Addon Debugger");
 +
-+   ok(messagesPreAttach.length >= 3, "console messages received");
-+   is(messagesPreAttach[0].message.arguments[0], "background1.js", "background1.js log received");
-+   is(messagesPreAttach[1].message.arguments[0], "background2.js", "background2.js log received");
-+   is(messagesPreAttach[2].message.arguments[0], "background3.js", "background3.js log received");
++   yield attachAddonDebugger(client, addonForm);
 +
-+   info("attach the addon thread");
++   info("reload the Addon");
 +
-+   let addonActor = yield new Promise((resolve) => {
-+     client.attachAddon(form.actor, (response) => {
-+       response = SpecialPowers.wrap(response);
++   yield reinstallAddon();
 +
-+       client.attachThread(response.threadActor, (response, threadClient) => {
-+         threadClient = SpecialPowers.wrap(threadClient);
-+         response = SpecialPowers.wrap(response);
-+         if (threadClient.paused) {
-+           threadClient.resume();
-+         }
-+         resolve();
-+       })
-+     });
-+   });
++   info("wait addon console messages (once the Addon Debugger is attached)");
 +
-+   info("reload the addon");
++   let messagesPostAttach = yield collectConsoleMessages(client, chromeForm);
 +
-+   chromeScript.sendAsyncMessage("load-extension", extensionData);
-+   //client.setAddonOptions(extensionData.id, { global: {} });
-+
-+   let waitConsoleMessages = new Promise((resolve, reject) => {
-+     let messages = [];
-+
-+     client.attachConsole(form.consoleActor, ["ConsoleAPI"], (aResponse, aWebConsoleClient) => {
-+       aResponse = SpecialPowers.wrap(aResponse);
-+       aWebConsoleClient = SpecialPowers.wrap(aWebConsoleClient);
-+
-+       if (aResponse.error) {
-+         dump(`ERROR: ${aResponse.error}\n`);
-+         reject();
-+       }
-+       else {
-+         client.addListener("consoleAPICall", (evt, res) => {
-+           messages.push(SpecialPowers.wrap(res));
-+
-+           if (messages.length >= 3) {
-+             resolve(messages);
-+           }
-+         });
-+         aWebConsoleClient.startListeners(["consoleAPICall"]);
-+       }
-+     });
-+   })
-+
-+   messages = yield waitConsoleMessages;
-+
-+   ok(messages.length >= 3, "console messages received");
-+   is(messages[0].message.arguments[0], "background1.js", "background1.js log received");
-+   is(messages[1].message.arguments[0], "background2.js", "background2.js log received");
-+   is(messages[2].message.arguments[0], "background3.js", "background3.js log received");
++   ok(messagesPostAttach.length >= 3, "all addon console messages received");
++   is(messagesPostAttach[0].arguments[0], "background1.js", "background1.js log received");
++   is(messagesPostAttach[1].arguments[0], "background2.js", "background2.js log received");
++   is(messagesPostAttach[2].arguments[0], "background3.js", "background3.js log received");
 +
 +  info("extension unloaded successfully");
 +});
