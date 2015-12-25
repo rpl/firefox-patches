@@ -5,9 +5,9 @@ Bug 1219229 - add testcase to check background script loading order on debugging
 
 ---
  .../test/mochitest/file_ext_load_extension.js      |  27 +++
- .../extensions/test/mochitest/mochitest.ini        |   2 +
+ .../extensions/test/mochitest/mochitest.ini        |   3 +
  .../test_ext_background_debugger_attached.html     | 203 +++++++++++++++++++++
- 3 files changed, 232 insertions(+)
+ 3 files changed, 233 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 
@@ -45,7 +45,7 @@ index 0000000..6cf5f67
 +  });
 +});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 29970a6..4e99997 100644
+index 29970a6..d1b31a8 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
 @@ -15,16 +15,17 @@ support-files =
@@ -66,17 +66,22 @@ index 29970a6..4e99997 100644
  [test_ext_generate.html]
  [test_ext_localStorage.html]
  [test_ext_notifications.html]
-@@ -42,8 +43,9 @@ support-files =
+@@ -37,13 +38,15 @@ support-files =
+ [test_ext_storage.html]
+ [test_ext_background_runtime_connect_params.html]
+ [test_ext_cookies.html]
+ [test_ext_bookmarks.html]
+ [test_ext_alarms.html]
  [test_ext_background_window_properties.html]
  [test_ext_background_sub_windows.html]
  [test_ext_background_api_injection.html]
++[test_ext_background_debugger_attached.html]
++skip-if = e10s # Uses the AddonManager which can't be used from a content process. This test case reproduces a bug that doesn't need to run in a tab content process in any case.
  [test_ext_jsversion.html]
  skip-if = e10s # Uses a console monitor which doesn't work from a content process. The code being tested doesn't run in a tab content process in any case.
  [test_ext_i18n.html]
  [test_ext_webrequest.html]
  [test_ext_webnavigation.html]
-+[test_ext_background_debugger_attached.html]
-\ No newline at end of file
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 new file mode 100644
 index 0000000..f329b07

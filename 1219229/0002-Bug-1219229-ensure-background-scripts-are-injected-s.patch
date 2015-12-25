@@ -1,0 +1,86 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1219229 - ensure background scripts are injected sequentially
+
+This commit ensure that WebExtension's background scripts are injected
+in the page sequentially to prevents the next injected script to thaw the
+frozen window, which will then load the new script before the debugger
+has completely handled the previous one.
+---
+ .../components/extensions/ext-backgroundPage.js    | 49 ++++++++++++++++------
+ 1 file changed, 36 insertions(+), 13 deletions(-)
+
+diff --git a/toolkit/components/extensions/ext-backgroundPage.js b/toolkit/components/extensions/ext-backgroundPage.js
+index e2bf117..672ebc6 100644
+--- a/toolkit/components/extensions/ext-backgroundPage.js
++++ b/toolkit/components/extensions/ext-backgroundPage.js
+@@ -54,31 +54,54 @@ BackgroundPage.prototype = {
+ 
+     // TODO: Right now we run onStartup after the background page
+     // finishes. See if this is what Chrome does.
+     let loadListener = event => {
+       if (event.target != window.document) {
+         return;
+       }
+       event.currentTarget.removeEventListener("load", loadListener, true);
++
++      // NOTE: this helper function inject background scripts into the generated
++      // background page sequentially to prevents the next inject script to
++      // thaw the frozen window and mess up with the loading order of the scripts
++      // when the debugger is attached to the addon (see Bug 1219229 for rationale)
++      function injectBackgroundScripts(extension, scripts, document) {
++        return scripts.reduce((previousPromise, script) => {
++          return previousPromise.then(() => {
++            return new Promise((resolve, reject) => {
++              let url = extension.baseURI.resolve(script);
++
++              if (!extension.isExtensionURL(url)) {
++                extension.manifestError("Background scripts must be files within the extension");
++                resolve();
++              }
++
++              let scriptTag = document.createElement("script");
++              scriptTag.setAttribute("src", url);
++              scriptTag.async = false;
++              // wait the load event to be sure we do not force
++              // the debugger to process a new script when the
++              // window should be frozen
++              let scriptLoadedListener = () => {
++                scriptTag.removeEventListener("load", scriptLoadedListener, true);
++                scriptTag.removeEventListener("error", scriptLoadedListener, true);
++                resolve();
++              };
++              scriptTag.addEventListener("load", scriptLoadedListener, true);
++              scriptTag.addEventListener("error", scriptLoadedListener, true);
++              document.body.appendChild(scriptTag);
++            });
++          });
++        }, Promise.resolve());
++      }
++
+       if (this.scripts) {
+         let doc = window.document;
+-        for (let script of this.scripts) {
+-          let url = this.extension.baseURI.resolve(script);
+-
+-          if (!this.extension.isExtensionURL(url)) {
+-            this.extension.manifestError("Background scripts must be files within the extension");
+-            continue;
+-          }
+-
+-          let tag = doc.createElement("script");
+-          tag.setAttribute("src", url);
+-          tag.async = false;
+-          doc.body.appendChild(tag);
+-        }
++        injectBackgroundScripts(this.extension, this.scripts, doc);
+       }
+ 
+       if (this.extension.onStartup) {
+         this.extension.onStartup();
+       }
+     };
+     window.windowRoot.addEventListener("load", loadListener, true);
+   },
+
