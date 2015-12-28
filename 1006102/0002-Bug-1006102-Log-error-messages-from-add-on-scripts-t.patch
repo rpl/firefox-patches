@@ -265,10 +265,10 @@ index 97917f4..c0eb206 100644
  nsScriptErrorBase::SetStack(JS::HandleValue aStack) {
      return NS_OK;
 diff --git a/js/xpconnect/src/xpcprivate.h b/js/xpconnect/src/xpcprivate.h
-index e754c5b..dc453c8 100644
+index 5a05540..c23996b 100644
 --- a/js/xpconnect/src/xpcprivate.h
 +++ b/js/xpconnect/src/xpcprivate.h
-@@ -2992,16 +2992,17 @@ protected:
+@@ -2993,16 +2993,17 @@ protected:
      InitializeOnMainThread();
  
      nsString mMessage;
