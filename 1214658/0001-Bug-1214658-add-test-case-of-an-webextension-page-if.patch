@@ -10,14 +10,14 @@ Bug 1214658 - add test case of an webextension page iframe created from a conten
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 29970a6..c7d556f 100644
+index 7f458d2..fbc2f85 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -19,16 +19,17 @@ support-files =
-   file_script_xhr.js
+@@ -20,16 +20,17 @@ support-files =
    file_sample.html
    file_privilege_escalation.html
    file_ext_background_api_injection.js
+   file_permission_xhr.html
  
  [test_ext_simple.html]
  [test_ext_geturl.html]
@@ -26,14 +26,14 @@ index 29970a6..c7d556f 100644
  [test_ext_i18n_css.html]
  [test_ext_generate.html]
  [test_ext_localStorage.html]
+ [test_ext_onmessage_removelistener.html]
  [test_ext_notifications.html]
+ [test_ext_permission_xhr.html]
  [test_ext_runtime_connect.html]
- [test_ext_runtime_disconnect.html]
- [test_ext_runtime_getPlatformInfo.html]
- [test_ext_sandbox_var.html]
+ [test_ext_runtime_connect2.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..e6b4b9c
+index 0000000..3b50b8f
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 @@ -0,0 +1,145 @@
@@ -172,7 +172,7 @@ index 0000000..e6b4b9c
 +
 +  ok(!getManifest, "getManifest should be undefined");
 +
-+  const DESTROYED_EXT_METHOD_EXCEPTION = "Error: WebExtension API method called on a destroyed extension context.";
++  const DESTROYED_EXT_METHOD_EXCEPTION = "TypeError: GET_MANIFEST is not a function";
 +  is(getManifestException && getManifestException.toString(), DESTROYED_EXT_METHOD_EXCEPTION,
 +     `expected DESTROYED_EXT_METHOD_EXCEPTION exception received`);
 +

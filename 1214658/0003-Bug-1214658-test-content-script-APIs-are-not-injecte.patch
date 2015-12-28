@@ -51,10 +51,10 @@ index 0000000..93ea999
 +  }
 +});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index c7d556f..3ea2f43 100644
+index fbc2f85..5b18d34 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -14,22 +14,23 @@ support-files =
+@@ -14,23 +14,24 @@ support-files =
    file_style_bad.css
    file_style_redirect.css
    file_script_good.js
@@ -64,6 +64,7 @@ index c7d556f..3ea2f43 100644
    file_sample.html
    file_privilege_escalation.html
 -  file_ext_background_api_injection.js
+   file_permission_xhr.html
 +  file_ext_test_api_injection.js
  
  [test_ext_simple.html]
@@ -74,11 +75,11 @@ index c7d556f..3ea2f43 100644
  [test_ext_i18n_css.html]
  [test_ext_generate.html]
  [test_ext_localStorage.html]
+ [test_ext_onmessage_removelistener.html]
  [test_ext_notifications.html]
+ [test_ext_permission_xhr.html]
  [test_ext_runtime_connect.html]
- [test_ext_runtime_disconnect.html]
- [test_ext_runtime_getPlatformInfo.html]
- [test_ext_sandbox_var.html]
+ [test_ext_runtime_connect2.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_api_injection.html b/toolkit/components/extensions/test/mochitest/test_ext_background_api_injection.html
 index c655eeb..7efa539 100644
 --- a/toolkit/components/extensions/test/mochitest/test_ext_background_api_injection.html
