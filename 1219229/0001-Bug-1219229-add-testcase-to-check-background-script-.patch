@@ -6,8 +6,8 @@ Bug 1219229 - add testcase to check background script loading order on debugging
 ---
  .../test/mochitest/file_ext_load_extension.js      |  27 +++
  .../extensions/test/mochitest/mochitest.ini        |   3 +
- .../test_ext_background_debugger_attached.html     | 203 +++++++++++++++++++++
- 3 files changed, 233 insertions(+)
+ .../test_ext_background_debugger_attached.html     | 202 +++++++++++++++++++++
+ 3 files changed, 232 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_load_extension.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 
@@ -45,11 +45,10 @@ index 0000000..6cf5f67
 +  });
 +});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 29970a6..d1b31a8 100644
+index 7f458d2..0146291 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -15,16 +15,17 @@ support-files =
-   file_style_redirect.css
+@@ -16,16 +16,17 @@ support-files =
    file_script_good.js
    file_script_bad.js
    file_script_redirect.js
@@ -57,6 +56,7 @@ index 29970a6..d1b31a8 100644
    file_sample.html
    file_privilege_escalation.html
    file_ext_background_api_injection.js
+   file_permission_xhr.html
 +  file_ext_load_extension.js
  
  [test_ext_simple.html]
@@ -65,11 +65,11 @@ index 29970a6..d1b31a8 100644
  [test_ext_i18n_css.html]
  [test_ext_generate.html]
  [test_ext_localStorage.html]
- [test_ext_notifications.html]
-@@ -37,13 +38,15 @@ support-files =
- [test_ext_storage.html]
- [test_ext_background_runtime_connect_params.html]
+ [test_ext_onmessage_removelistener.html]
+@@ -44,13 +45,15 @@ support-files =
  [test_ext_cookies.html]
+ [test_ext_cookies_permissions.html]
+ skip-if = e10s # Uses cookie service via SpecialPowers.Services, which does not support e10s.
  [test_ext_bookmarks.html]
  [test_ext_alarms.html]
  [test_ext_background_window_properties.html]
@@ -84,10 +84,10 @@ index 29970a6..d1b31a8 100644
  [test_ext_webnavigation.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 new file mode 100644
-index 0000000..f329b07
+index 0000000..f3fac99
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,202 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -149,7 +149,6 @@ index 0000000..f329b07
 +  });
 +
 +  return Promise.all([ chromeForm, addonForm ]).then((results) => {
-+    console.log("RESULTS", results);
 +    return results;
 +  });
 +}

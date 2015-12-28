@@ -4,23 +4,21 @@
 Bug 1219229 - eval background scripts injection in the target window
 
 ---
- toolkit/components/extensions/ext-backgroundPage.js | 17 +++++++++++------
- 1 file changed, 11 insertions(+), 6 deletions(-)
+ toolkit/components/extensions/ext-backgroundPage.js | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
 
 diff --git a/toolkit/components/extensions/ext-backgroundPage.js b/toolkit/components/extensions/ext-backgroundPage.js
-index e2bf117..59a44d0 100644
+index 075abdc..81bf05f 100644
 --- a/toolkit/components/extensions/ext-backgroundPage.js
 +++ b/toolkit/components/extensions/ext-backgroundPage.js
-@@ -54,30 +54,35 @@ BackgroundPage.prototype = {
- 
-     // TODO: Right now we run onStartup after the background page
+@@ -72,29 +72,33 @@ BackgroundPage.prototype = {
      // finishes. See if this is what Chrome does.
      let loadListener = event => {
        if (event.target != window.document) {
          return;
        }
        event.currentTarget.removeEventListener("load", loadListener, true);
-+
+ 
        if (this.scripts) {
 -        let doc = window.document;
          for (let script of this.scripts) {
@@ -52,5 +50,5 @@ index e2bf117..59a44d0 100644
          this.extension.onStartup();
        }
      };
-     window.windowRoot.addEventListener("load", loadListener, true);
+     browser.addEventListener("load", loadListener, true);
 

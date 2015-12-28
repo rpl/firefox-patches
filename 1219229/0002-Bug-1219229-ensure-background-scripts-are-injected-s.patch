@@ -8,15 +8,14 @@ in the page sequentially to prevents the next injected script to thaw the
 frozen window, which will then load the new script before the debugger
 has completely handled the previous one.
 ---
- .../components/extensions/ext-backgroundPage.js    | 49 ++++++++++++++++------
- 1 file changed, 36 insertions(+), 13 deletions(-)
+ .../components/extensions/ext-backgroundPage.js    | 49 +++++++++++++++-------
+ 1 file changed, 35 insertions(+), 14 deletions(-)
 
 diff --git a/toolkit/components/extensions/ext-backgroundPage.js b/toolkit/components/extensions/ext-backgroundPage.js
-index e2bf117..672ebc6 100644
+index 075abdc..6f190b5 100644
 --- a/toolkit/components/extensions/ext-backgroundPage.js
 +++ b/toolkit/components/extensions/ext-backgroundPage.js
-@@ -54,31 +54,54 @@ BackgroundPage.prototype = {
- 
+@@ -71,31 +71,52 @@ BackgroundPage.prototype = {
      // TODO: Right now we run onStartup after the background page
      // finishes. See if this is what Chrome does.
      let loadListener = event => {
@@ -24,7 +23,7 @@ index e2bf117..672ebc6 100644
          return;
        }
        event.currentTarget.removeEventListener("load", loadListener, true);
-+
+ 
 +      // NOTE: this helper function inject background scripts into the generated
 +      // background page sequentially to prevents the next inject script to
 +      // thaw the frozen window and mess up with the loading order of the scripts
@@ -60,7 +59,7 @@ index e2bf117..672ebc6 100644
 +      }
 +
        if (this.scripts) {
-         let doc = window.document;
+-        let doc = window.document;
 -        for (let script of this.scripts) {
 -          let url = this.extension.baseURI.resolve(script);
 -
@@ -74,13 +73,13 @@ index e2bf117..672ebc6 100644
 -          tag.async = false;
 -          doc.body.appendChild(tag);
 -        }
-+        injectBackgroundScripts(this.extension, this.scripts, doc);
++        injectBackgroundScripts(this.extension, this.scripts, window.document);
        }
  
        if (this.extension.onStartup) {
          this.extension.onStartup();
        }
      };
-     window.windowRoot.addEventListener("load", loadListener, true);
+     browser.addEventListener("load", loadListener, true);
    },
 
