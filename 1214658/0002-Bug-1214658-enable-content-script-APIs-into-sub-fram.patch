@@ -10,7 +10,7 @@ Bug 1214658 - enable content script APIs into sub-frames pointed to a valid add-
  3 files changed, 105 insertions(+), 25 deletions(-)
 
 diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
-index 71c210a..779484f 100644
+index 71c210a..89ebc04 100644
 --- a/toolkit/components/extensions/Extension.jsm
 +++ b/toolkit/components/extensions/Extension.jsm
 @@ -353,22 +353,26 @@ GlobalManager = {
@@ -36,7 +36,7 @@ index 71c210a..779484f 100644
 +
 +    let id = ExtensionManagement.getAddonIdForWindow(contentWindow);
 +
-+    // We don't inject privileged apis if the addonid is null
++    // We don't inject privileged APIs if the addonId is null
 +    // or doesn't exist.
      if (!this.extensionMap.has(id)) {
        return;
@@ -210,7 +210,7 @@ index 6fe9e9c..2408196 100644
        let id = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
        if (!this.windows.has(id)) {
 diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
-index 40125b8..11fd72c 100644
+index 40125b8..a13f427 100644
 --- a/toolkit/components/extensions/ExtensionManagement.jsm
 +++ b/toolkit/components/extensions/ExtensionManagement.jsm
 @@ -186,33 +186,70 @@ var Service = {
@@ -254,7 +254,7 @@ index 40125b8..11fd72c 100644
 +function getAPILevelForWindow(window) {
 +  const { NO_PRIVILEGES, CONTENTSCRIPT_PRIVILEGES, FULL_PRIVILEGES } = API_LEVELS;
 +
-+  // Non WebExtension urls has no access to APIs
++  // Non WebExtension URLs has no access to APIs
 +  if (!getAddonIdForWindow(window)) {
 +    return NO_PRIVILEGES;
 +  }

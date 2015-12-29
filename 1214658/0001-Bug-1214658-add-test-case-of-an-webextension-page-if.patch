@@ -56,7 +56,7 @@ index 7f458d2..cce010f 100644
  [test_ext_runtime_connect2.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..ed83115
+index 0000000..b0bb3c9
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 @@ -0,0 +1,184 @@
@@ -142,7 +142,7 @@ index 0000000..ed83115
 +    files: {
 +      "content_script.js": "(" + contentScript + ")()",
 +      "content_script_iframe.html": document.querySelector("#test-asset").textContent,
-+      "non_web_accessible.html": "<h1>This should not be loaded in an iframe inside a content url</h1>"
++      "non_web_accessible.html": "<h1>This should not be loaded in an iframe inside a content URL</h1>"
 +    },
 +  };
 +
