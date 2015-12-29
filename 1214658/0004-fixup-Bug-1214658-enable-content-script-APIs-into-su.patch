@@ -1,0 +1,186 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+fixup! Bug 1214658 - enable content script APIs into sub-frames pointed to a valid add-on url r=kmag
+
+---
+ toolkit/components/extensions/ExtensionContent.jsm | 58 ++++++++++++++++------
+ 1 file changed, 44 insertions(+), 14 deletions(-)
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+index 2408196..31614c3 100644
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -210,20 +210,21 @@ function getWindowMessageManager(contentWindow) {
+   }
+ }
+ 
+ var ExtensionManager;
+ 
+ // Scope in which extension content script code can run. It uses
+ // Cu.Sandbox to run the code. There is a separate scope for each
+ // frame.
+-function ExtensionContext(extensionId, contentWindow) {
++function ExtensionContext(extensionId, contentWindow, isContentScript = true) {
+   this.extension = ExtensionManager.get(extensionId);
+   this.extensionId = extensionId;
+   this.contentWindow = contentWindow;
++  this.isContentScript = isContentScript;
+ 
+   this.onClose = new Set();
+ 
+   let utils = contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
+                            .getInterface(Ci.nsIDOMWindowUtils);
+   let outerWindowId = utils.outerWindowID;
+   let frameId = contentWindow == contentWindow.top ? 0 : outerWindowId;
+   this.frameId = frameId;
+@@ -237,21 +238,18 @@ function ExtensionContext(extensionId, contentWindow) {
+   if (ssm.isSystemPrincipal(contentPrincipal)) {
+     // Make sure we don't hand out the system principal by accident.
+     prin = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
+   } else {
+     let extensionPrincipal = ssm.createCodebasePrincipal(this.extension.baseURI, {addonId: extensionId});
+     prin = [contentPrincipal, extensionPrincipal];
+   }
+ 
+-  if (ExtensionManagement.getAddonIdForWindow(this.contentWindow) == extensionId) {
+-    // This has the unfortunate side-effect of changing the way we handle
+-    // content scripts injected into extension documents. It would probably be
+-    // better to create a separate ExtensionContext object for extension
+-    // windows, rather than using the one returned by |getContext|.
++  if (!isContentScript && ExtensionManagement.getAddonIdForWindow(this.contentWindow) == extensionId) {
++    // This is an iframe with content script API enabled. (See Bug 1214568 for rationale)
+     this.sandbox = Cu.Sandbox(contentWindow, {
+       sandboxPrototype: contentWindow,
+       wantXrays: false,
+       isWebExtensionContentScript: true,
+     });
+   } else {
+     this.sandbox = Cu.Sandbox(prin, {
+       sandboxPrototype: contentWindow,
+@@ -278,16 +276,20 @@ function ExtensionContext(extensionId, contentWindow) {
+ 
+   this.chromeObj = Cu.createObjectIn(this.sandbox, {defineAs: "browser"});
+ 
+   // Sandboxes don't get Xrays for some weird compatibility
+   // reason. However, we waive here anyway in case that changes.
+   Cu.waiveXrays(this.sandbox).chrome = this.chromeObj;
+ 
+   injectAPI(api(this), this.chromeObj);
++
++  if (!isContentScript) {
++    this.injectAPIIntoContentWindow();
++  }
+ }
+ 
+ ExtensionContext.prototype = {
+   get cloneScope() {
+     return this.sandbox;
+   },
+ 
+   injectAPIIntoContentWindow() {
+@@ -315,17 +317,18 @@ ExtensionContext.prototype = {
+     for (let obj of this.onClose) {
+       obj.close();
+     }
+     Cu.nukeSandbox(this.sandbox);
+     this.sandbox = null;
+ 
+     // Overwrite the content script APIs with an empty object if the APIs objects have been
+     // injected in the content window.
+-    if (ExtensionManagement.getAddonIdForWindow(this.contentWindow) == this.extensionId) {
++    if (!this.isContentScript &&
++        ExtensionManagement.getAddonIdForWindow(this.contentWindow) == this.extensionId) {
+       Cu.createObjectIn(this.contentWindow, { defineAs: "browser" });
+       Cu.createObjectIn(this.contentWindow, { defineAs: "chrome" });
+     }
+   },
+ };
+ 
+ function windowId(window) {
+   return window.QueryInterface(Ci.nsIInterfaceRequestor)
+@@ -378,19 +381,19 @@ var DocumentManager = {
+       }
+ 
+       // Enable the content script APIs should be available in subframes' window
+       // if it is recognized as a valid addon id (see Bug 1214658 for rationale).
+       const { CONTENTSCRIPT_PRIVILEGES } = ExtensionManagement.API_LEVELS;
+       let extensionId = ExtensionManagement.getAddonIdForWindow(window);
+ 
+       if (ExtensionManagement.getAPILevelForWindow(window) == CONTENTSCRIPT_PRIVILEGES &&
+-          ExtensionManager.get(extensionId)) {
+-        let extension = DocumentManager.getContext(extensionId, window);
+-        extension.injectAPIIntoContentWindow();
++          ExtensionManager.get(extensionId) &&
++          !DocumentManager.hasContext(extensionId, window)) {
++        DocumentManager.createExtensionContext(extensionId, window, false);
+ 
+         return;
+       }
+ 
+       this.trigger("document_start", window);
+       /* eslint-disable mozilla/balanced-listeners */
+       window.addEventListener("DOMContentLoaded", this, true);
+       window.addEventListener("load", this, true);
+@@ -450,29 +453,56 @@ var DocumentManager = {
+     yield [window, this.getWindowState(window)];
+ 
+     for (let i = 0; i < docShell.childCount; i++) {
+       let child = docShell.getChildAt(i).QueryInterface(Ci.nsIDocShell);
+       yield* this.enumerateWindows(child);
+     }
+   },
+ 
+-  getContext(extensionId, window) {
++  getExtensionsForWindow(window) {
+     let winId = windowId(window);
+     if (!this.windows.has(winId)) {
+       this.windows.set(winId, new Map());
+     }
+-    let extensions = this.windows.get(winId);
++
++    return this.windows.get(winId);
++  },
++
++  hasContext(extensionId, window) {
++    let extensions = this.getExtensionsForWindow(window);
++
++    if (!extensions.has(extensionId)) {
++      return false;
++    }
++
++    return true;
++  },
++
++  getContext(extensionId, window) {
++    let extensions = this.getExtensionsForWindow(window);
+     if (!extensions.has(extensionId)) {
+-      let context = new ExtensionContext(extensionId, window);
+-      extensions.set(extensionId, context);
++      return this.createExtensionContext(extensionId, window);
+     }
++
+     return extensions.get(extensionId);
+   },
+ 
++  createExtensionContext(extensionId, window, isContentScript = true) {
++    let extensions = this.getExtensionsForWindow(window);
++    if (extensions.has(extensionId)) {
++      throw Error("This window already had an extension context");
++    }
++
++    let context = new ExtensionContext(extensionId, window, isContentScript);
++    extensions.set(extensionId, context);
++
++    return context;
++  },
++
+   startupExtension(extensionId) {
+     if (this.extensionCount == 0) {
+       this.init();
+     }
+     this.extensionCount++;
+ 
+     let extension = ExtensionManager.get(extensionId);
+     for (let global of ExtensionContent.globals.keys()) {
+
