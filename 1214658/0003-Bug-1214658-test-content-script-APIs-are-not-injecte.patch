@@ -51,10 +51,10 @@ index 0000000..93ea999
 +  }
 +});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index fbc2f85..5b18d34 100644
+index cce010f..435b827 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -14,23 +14,24 @@ support-files =
+@@ -14,24 +14,25 @@ support-files =
    file_style_bad.css
    file_style_redirect.css
    file_script_good.js
@@ -64,8 +64,9 @@ index fbc2f85..5b18d34 100644
    file_sample.html
    file_privilege_escalation.html
 -  file_ext_background_api_injection.js
-   file_permission_xhr.html
 +  file_ext_test_api_injection.js
+   file_permission_xhr.html
+   file_ext_collect_security_errors.js
  
  [test_ext_simple.html]
  [test_ext_geturl.html]
