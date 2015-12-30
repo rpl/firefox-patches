@@ -1,0 +1,208 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - add test case on collected addon log script error and addon console
+
+---
+ .../file_ext_collect_addon_messages_and_errors.js  |  40 ++++++++
+ .../extensions/test/mochitest/mochitest.ini        |   2 +
+ .../test_ext_console_messages_and_errors.html      | 110 +++++++++++++++++++++
+ 3 files changed, 152 insertions(+)
+ create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_collect_addon_messages_and_errors.js
+ create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
+
+diff --git a/toolkit/components/extensions/test/mochitest/file_ext_collect_addon_messages_and_errors.js b/toolkit/components/extensions/test/mochitest/file_ext_collect_addon_messages_and_errors.js
+new file mode 100644
+index 0000000..4e9869f
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_ext_collect_addon_messages_and_errors.js
+@@ -0,0 +1,40 @@
++/* globals addMessageListener */
++
++"use strict";
++
++Components.utils.import("resource://gre/modules/Services.jsm");
++
++let expectedConsoleID;
++let numberOfExpectedMessages;
++let numberOfCollectedMessages = 0;
++let messages = [];
++
++function trackReceivedMessage(message) {
++  if (message.consoleID == expectedConsoleID) {
++    numberOfCollectedMessages++;
++    messages.push({
++      message: message.arguments ?
++        message.arguments.join(" ") : message.message,
++      consoleID: message.consoleID,
++    });
++  }
++
++  if (numberOfCollectedMessages >= numberOfExpectedMessages) {
++    sendAsyncMessage("collected-addon-messages-and-errors", messages);
++  }
++}
++
++Services.console.registerListener((message) => {
++  if (message instanceof Components.interfaces.nsIScriptError) {
++    trackReceivedMessage(message);
++  }
++});
++
++Services.obs.addObserver((message) => {
++  trackReceivedMessage(message.wrappedJSObject);
++}, "console-api-log-event", false);
++
++addMessageListener("get-collected-addon-messages-and-errors", (message) => {
++  expectedConsoleID = message.expectedConsoleID;
++  numberOfExpectedMessages = message.numberOfExpectedMessages;
++});
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+index 7f458d2..bf8c686 100644
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -16,16 +16,17 @@ support-files =
+   file_script_good.js
+   file_script_bad.js
+   file_script_redirect.js
+   file_script_xhr.js
+   file_sample.html
+   file_privilege_escalation.html
+   file_ext_background_api_injection.js
+   file_permission_xhr.html
++  file_ext_collect_addon_messages_and_errors.js
+ 
+ [test_ext_simple.html]
+ [test_ext_geturl.html]
+ [test_ext_contentscript.html]
+ [test_ext_i18n_css.html]
+ [test_ext_generate.html]
+ [test_ext_localStorage.html]
+ [test_ext_onmessage_removelistener.html]
+@@ -49,8 +50,9 @@ skip-if = e10s # Uses cookie service via SpecialPowers.Services, which does not
+ [test_ext_background_window_properties.html]
+ [test_ext_background_sub_windows.html]
+ [test_ext_background_api_injection.html]
+ [test_ext_jsversion.html]
+ skip-if = e10s # Uses a console monitor which doesn't work from a content process. The code being tested doesn't run in a tab content process in any case.
+ [test_ext_i18n.html]
+ [test_ext_webrequest.html]
+ [test_ext_webnavigation.html]
++[test_ext_console_messages_and_errors.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
+new file mode 100644
+index 0000000..9a8da6e
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
+@@ -0,0 +1,110 @@
++<!DOCTYPE HTML>
++<html>
++  <head>
++    <title>Test for privilege escalation into content pages</title>
++    <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++    <script type="text/javascript" src="/tests/SimpleTest/SpawnTask.js"></script>
++    <script type="text/javascript" src="/tests/SimpleTest/ExtensionTestUtils.js"></script>
++    <script type="text/javascript" src="head.js"></script>
++    <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
++  </head>
++  <body>
++
++    <textarea id="assets-tab-html">
++      <!DOCTYPE html>
++      <html>
++        <head>
++          <meta charset="utf-8">
++          <script>
++           console.log("tab page log message");
++           tabPageScriptError();
++          </script>
++        </head>
++      </html>
++    </textarea>
++
++    <script type="application/javascript;version=1.8">
++     "use strict";
++
++     function waitForCollectedAddonMessages(opts) {
++       let {
++         numberOfExpectedMessages,
++         expectedConsoleID
++       } = opts;
++
++       let chromeScript = SpecialPowers.loadChromeScript(
++         SimpleTest.getTestFileURL("file_ext_collect_addon_messages_and_errors.js"));
++
++       return new Promise(resolve => {
++         chromeScript.addMessageListener("collected-addon-messages-and-errors", resolve);
++         chromeScript.sendAsyncMessage("get-collected-addon-messages-and-errors", {
++           numberOfExpectedMessages,
++           expectedConsoleID
++         });
++       });
++     }
++
++     add_task(function* testBackgroundWindow() {
++       let extension = ExtensionTestUtils.loadExtension({
++         background: "new " + function() {
++           browser.tabs.create({
++             url: browser.runtime.getURL("tab.html")
++           })
++
++           console.log("background page log message");
++           backgroundPageScriptError();
++         },
++         files: {
++           "content-script.js": "new " + function() {
++             console.log("content script log message");
++             contentScriptError();
++           },
++           "tab.html": document.querySelector("#assets-tab-html").textContent
++         },
++         manifest: {
++           "content_scripts": [
++             {
++               "matches": "<all_urls>",
++               "js": ["content-script.js"],
++             }
++           ]
++         }
++       });
++
++       const EXPECTED_NUMBER_OF_ADDON_MESSAGES = 4;
++       let waitCollectedMessages = waitForCollectedAddonMessages({
++         numberOfExpectedMessages: EXPECTED_NUMBER_OF_ADDON_MESSAGES,
++         expectedConsoleID: `addon/${extension.id}`
++       })
++
++       yield extension.startup();
++
++       let messages = yield waitCollectedMessages;
++
++       yield extension.unload();
++
++       for (let message of messages) {
++         console.log("MESSAGE", message);
++       }
++
++       is(messages.length, EXPECTED_NUMBER_OF_ADDON_MESSAGES,
++          "expected number of console messages and script errors collected");
++
++       let backgroundScriptConsoleMessages = messages.filter((msg) => {
++         return msg.message == "background page log message";
++       });
++       is(backgroundScriptConsoleMessages.length, 1,
++          "expected console API message received from background page");
++
++       let backgroundScriptErrors = messages.filter((msg) => {
++         return msg.message.indexOf("[JavaScript Error:") == 0 &&
++                msg.message.indexOf("backgroundPageScriptError is not defined") >= 0;
++       });
++       is(backgroundScriptErrors.length, 1, "expected script error received from background page");
++
++     });
++
++    </script>
++
++  </body>
++</html>
+
