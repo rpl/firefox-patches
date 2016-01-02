@@ -1,0 +1,212 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - add custom consoleID on content script injection and content script errors to the test case
+
+---
+ toolkit/components/extensions/ExtensionContent.jsm | 10 +++++---
+ toolkit/components/extensions/ExtensionUtils.jsm   | 11 ++++++++-
+ .../test_ext_console_messages_and_errors.html      | 27 ++++++++++++++++++++--
+ 3 files changed, 42 insertions(+), 6 deletions(-)
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+index f99a94e..b56adff 100644
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -148,32 +148,36 @@ Script.prototype = {
+     }
+ 
+     // TODO: match_about_blank.
+ 
+     return true;
+   },
+ 
+   tryInject(extension, window, sandbox, shouldRun) {
++    let _runSafeSyncWithoutClone = runSafeSyncWithoutClone.bind({
++      extension
++    });
++
+     if (!this.matches(window)) {
+       return;
+     }
+ 
+     if (shouldRun("document_start")) {
+       let winUtils = window.QueryInterface(Ci.nsIInterfaceRequestor)
+                            .getInterface(Ci.nsIDOMWindowUtils);
+ 
+       for (let url of this.css) {
+         url = extension.baseURI.resolve(url);
+-        runSafeSyncWithoutClone(winUtils.loadSheetUsingURIString, url, winUtils.AUTHOR_SHEET);
++        _runSafeSyncWithoutClone(winUtils.loadSheetUsingURIString, url, winUtils.AUTHOR_SHEET);
+       }
+ 
+       if (this.options.cssCode) {
+         let url = "data:text/css;charset=utf-8," + encodeURIComponent(this.options.cssCode);
+-        runSafeSyncWithoutClone(winUtils.loadSheetUsingURIString, url, winUtils.AUTHOR_SHEET);
++        _runSafeSyncWithoutClone(winUtils.loadSheetUsingURIString, url, winUtils.AUTHOR_SHEET);
+       }
+     }
+ 
+     let scheduled = this.run_at || "document_idle";
+     if (shouldRun(scheduled)) {
+       for (let url of this.js) {
+         // On gonk we need to load the resources asynchronously because the
+         // app: channels only support asyncOpen. This is safe only in the
+@@ -183,17 +187,17 @@ Script.prototype = {
+         }
+         url = extension.baseURI.resolve(url);
+ 
+         let options = {
+           target: sandbox,
+           charset: "UTF-8",
+           async: AppConstants.platform == "gonk",
+         };
+-        runSafeSyncWithoutClone(Services.scriptloader.loadSubScriptWithOptions, url, options);
++        _runSafeSyncWithoutClone(Services.scriptloader.loadSubScriptWithOptions, url, options);
+       }
+ 
+       if (this.options.jsCode) {
+         Cu.evalInSandbox(this.options.jsCode, sandbox, "latest");
+       }
+     }
+   },
+ };
+diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
+index 0c6fb08..807df50 100644
+--- a/toolkit/components/extensions/ExtensionUtils.jsm
++++ b/toolkit/components/extensions/ExtensionUtils.jsm
+@@ -17,18 +17,21 @@ Cu.import("resource://gre/modules/Services.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "Locale",
+                                   "resource://gre/modules/Locale.jsm");
+ 
+ // Run a function and report exceptions.
+ function runSafeSyncWithoutClone(f, ...args) {
+   try {
+     return f(...args);
+   } catch (e) {
+-    dump(`Extension error: ${e} ${e.fileName} ${e.lineNumber}\n[[Exception stack\n${e.stack}Current stack\n${Error().stack}]]\n`);
++    if (this && this.extension) {
++      e.consoleID = `addon/${this.extension.id}`;
++    }
+     Cu.reportError(e);
++    dump(`Extension error: ${e} ${e.fileName} ${e.lineNumber}\n[[Exception stack\n${e.stack}Current stack\n${Error().stack}]]\n`);
+   }
+ }
+ 
+ // Run a function and report exceptions.
+ function runSafeWithoutClone(f, ...args) {
+   if (typeof(f) != "function") {
+     dump(`Extension error: expected function\n${Error().stack}`);
+     return;
+@@ -40,28 +43,34 @@ function runSafeWithoutClone(f, ...args) {
+ }
+ 
+ // Run a function, cloning arguments into context.cloneScope, and
+ // report exceptions. |f| is expected to be in context.cloneScope.
+ function runSafeSync(context, f, ...args) {
+   try {
+     args = Cu.cloneInto(args, context.cloneScope);
+   } catch (e) {
++    if (this && this.extension) {
++      e.consoleID = `addon/${this.extension.id}`;
++    }
+     Cu.reportError(e);
+     dump(`runSafe failure: cloning into ${context.cloneScope}: ${e}\n\n${Error().stack}`);
+   }
+   return runSafeSyncWithoutClone(f, ...args);
+ }
+ 
+ // Run a function, cloning arguments into context.cloneScope, and
+ // report exceptions. |f| is expected to be in context.cloneScope.
+ function runSafe(context, f, ...args) {
+   try {
+     args = Cu.cloneInto(args, context.cloneScope);
+   } catch (e) {
++    if (this && this.extension) {
++      e.consoleID = `addon/${this.extension.id}`;
++    }
+     Cu.reportError(e);
+     dump(`runSafe failure: cloning into ${context.cloneScope}: ${e}\n\n${Error().stack}`);
+   }
+   return runSafeWithoutClone(f, ...args);
+ }
+ 
+ // Return true if the given value is an instance of the given
+ // native type.
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
+index e2fff54..0501764 100644
+--- a/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
+@@ -52,31 +52,34 @@
+            })
+ 
+            console.log("background page log message");
+            backgroundPageScriptError();
+          },
+          files: {
+            "content-script.js": "new " + function() {
+              console.log("content script log message");
+-             contentScriptError();
++             window.setTimeout(function() {
++               contentScriptErrorOnWindowSetTimeout();
++             }, 5);
++             contentScriptErrorOnLoad();
+            },
+            "tab.html": document.querySelector("#assets-tab-html").textContent
+          },
+          manifest: {
+            "content_scripts": [
+              {
+                "matches": "<all_urls>",
+                "js": ["content-script.js"],
+              }
+            ]
+          }
+        });
+ 
+-       const EXPECTED_NUMBER_OF_ADDON_MESSAGES = 4;
++       const EXPECTED_NUMBER_OF_ADDON_MESSAGES = 7;
+        let waitCollectedMessages = waitForCollectedAddonMessages({
+          numberOfExpectedMessages: EXPECTED_NUMBER_OF_ADDON_MESSAGES,
+          expectedConsoleID: `addon/${extension.id}`
+        })
+ 
+        yield extension.startup();
+ 
+        let messages = yield waitCollectedMessages;
+@@ -93,14 +96,34 @@
+           "expected console API message received from background page");
+ 
+        let backgroundScriptErrors = messages.filter((msg) => {
+          return msg.message.indexOf("[JavaScript Error:") == 0 &&
+                 msg.message.indexOf("backgroundPageScriptError is not defined") >= 0;
+        });
+        is(backgroundScriptErrors.length, 1, "expected script error received from background page");
+ 
++       let contentScriptConsoleMessages = messages.filter((msg) => {
++         return msg.message == "content script log message";
++       });
++       is(contentScriptConsoleMessages.length, 1,
++          "expected console API message received from content script");
++
++       let contentScriptErrorsOnLoad = messages.filter((msg) => {
++         return msg.message.indexOf("[JavaScript Error:") == 0 &&
++         msg.message.indexOf("contentScriptErrorOnLoad is not defined") >= 0;
++       });
++       is(contentScriptErrorsOnLoad.length, 1, "expected script error on load received from content script");
++
++       let contentScriptErrorsOnWindowSetTimeout = messages.filter((msg) => {
++         return msg.message.indexOf("[JavaScript Error:") == 0 &&
++         msg.message.indexOf("contentScriptErrorOnWindowSetTimeout is not defined") >= 0;
++       });
++       is(contentScriptErrorsOnWindowSetTimeout.length, 1,
++          "expected script error on window set timeout received from content script");
++
++
+      });
+ 
+     </script>
+ 
+   </body>
+ </html>
+

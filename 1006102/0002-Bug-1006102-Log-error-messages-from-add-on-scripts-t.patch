@@ -7,9 +7,9 @@ Bug 1006102 - Log error messages from add-on scripts to the add-on console
  devtools/server/actors/addon.js     | 10 +++++++++-
  devtools/shared/webconsole/utils.js | 29 ++++++++++++++++++++++++++++-
  js/xpconnect/idl/nsIScriptError.idl |  3 +++
- js/xpconnect/src/nsScriptError.cpp  | 27 ++++++++++++++++++++++++++-
+ js/xpconnect/src/nsScriptError.cpp  | 19 ++++++++++++++++++-
  js/xpconnect/src/xpcprivate.h       |  1 +
- 5 files changed, 67 insertions(+), 3 deletions(-)
+ 5 files changed, 59 insertions(+), 3 deletions(-)
 
 diff --git a/devtools/server/actors/addon.js b/devtools/server/actors/addon.js
 index 5cfa8d9..85a8fc6 100644
@@ -186,10 +186,10 @@ index 8968a8e..dc01bba 100644
      readonly attribute string category;
  
 diff --git a/js/xpconnect/src/nsScriptError.cpp b/js/xpconnect/src/nsScriptError.cpp
-index 97917f4..c0eb206 100644
+index 97917f4..df916c9 100644
 --- a/js/xpconnect/src/nsScriptError.cpp
 +++ b/js/xpconnect/src/nsScriptError.cpp
-@@ -41,31 +41,50 @@ void
+@@ -41,31 +41,42 @@ void
  nsScriptErrorBase::InitializeOnMainThread()
  {
      MOZ_ASSERT(NS_IsMainThread());
@@ -224,14 +224,6 @@ index 97917f4..c0eb206 100644
 +                    consoleId.Insert(NS_LITERAL_CSTRING("addon/"), 0);
 +                    CopyUTF8toUTF16(consoleId, mConsoleID);
 +                }
-+                /*
-+                nsresult rv = winPrincipal->GetAddonId(addonId);
-+                if (!NS_FAILED(rv) && !addonId.IsEmpty()) {
-+                    nsAutoCString consoleId;
-+                    consoleId.Insert(NS_LITERAL_CSTRING("addon/"), 0);
-+                    consoleId.Append(addonId);
-+                    mConsoleID.Append(consoleId);
-+                    }*/
 +            }
          }
      }
@@ -241,7 +233,7 @@ index 97917f4..c0eb206 100644
  
  // nsIConsoleMessage methods
  NS_IMETHODIMP
-@@ -137,16 +156,22 @@ nsScriptErrorBase::GetFlags(uint32_t* result) {
+@@ -137,16 +148,22 @@ nsScriptErrorBase::GetFlags(uint32_t* result) {
  
  NS_IMETHODIMP
  nsScriptErrorBase::GetCategory(char** result) {

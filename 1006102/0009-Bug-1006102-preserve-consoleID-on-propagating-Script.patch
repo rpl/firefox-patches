@@ -1,0 +1,141 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - preserve consoleID on propagating ScriptErrors from the content to the parent process
+
+---
+ dom/ipc/ContentChild.cpp  |  9 ++++++++-
+ dom/ipc/ContentParent.cpp | 17 +++++++++++------
+ dom/ipc/ContentParent.h   |  3 ++-
+ dom/ipc/PContent.ipdl     |  2 +-
+ 4 files changed, 22 insertions(+), 9 deletions(-)
+
+diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
+index 14a7302..7c103c7 100644
+--- a/dom/ipc/ContentChild.cpp
++++ b/dom/ipc/ContentChild.cpp
+@@ -452,18 +452,25 @@ ConsoleListener::Observe(nsIConsoleMessage* aMessage)
+         rv = scriptError->GetCategory(getter_Copies(category));
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetLineNumber(&lineNum);
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetColumnNumber(&colNum);
+         NS_ENSURE_SUCCESS(rv, rv);
+         rv = scriptError->GetFlags(&flags);
+         NS_ENSURE_SUCCESS(rv, rv);
++
++        // Propagate consoleID from the child to the parent process.
++        // (See Bug 1006102 for rationale)
++        nsString consoleID;
++        rv = scriptError->GetConsoleID(consoleID);
++        NS_ENSURE_SUCCESS(rv, rv);
++
+         mChild->SendScriptError(msg, sourceName, sourceLine,
+-                               lineNum, colNum, flags, category);
++                                lineNum, colNum, flags, category, consoleID);
+         return NS_OK;
+     }
+ 
+     nsXPIDLString msg;
+     nsresult rv = aMessage->GetMessageMoz(getter_Copies(msg));
+     NS_ENSURE_SUCCESS(rv, rv);
+     mChild->SendConsoleMessage(msg);
+     return NS_OK;
+diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
+index 7e401b6..4162896 100755
+--- a/dom/ipc/ContentParent.cpp
++++ b/dom/ipc/ContentParent.cpp
+@@ -4663,34 +4663,39 @@ ContentParent::RecvConsoleMessage(const nsString& aMessage)
+ 
+     RefPtr<nsConsoleMessage> msg(new nsConsoleMessage(aMessage.get()));
+     consoleService->LogMessageWithMode(msg, nsConsoleService::SuppressLog);
+     return true;
+ }
+ 
+ bool
+ ContentParent::RecvScriptError(const nsString& aMessage,
+-                                      const nsString& aSourceName,
+-                                      const nsString& aSourceLine,
+-                                      const uint32_t& aLineNumber,
+-                                      const uint32_t& aColNumber,
+-                                      const uint32_t& aFlags,
+-                                      const nsCString& aCategory)
++                               const nsString& aSourceName,
++                               const nsString& aSourceLine,
++                               const uint32_t& aLineNumber,
++                               const uint32_t& aColNumber,
++                               const uint32_t& aFlags,
++                               const nsCString& aCategory,
++                               const nsString& consoleID)
+ {
+     RefPtr<nsConsoleService> consoleService = GetConsoleService();
+     if (!consoleService) {
+         return true;
+     }
+ 
+     nsCOMPtr<nsIScriptError> msg(do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
+     nsresult rv = msg->Init(aMessage, aSourceName, aSourceLine,
+                             aLineNumber, aColNumber, aFlags, aCategory.get());
+     if (NS_FAILED(rv))
+         return true;
+ 
++    // Copy the consoleID attribute from the content to the parent
++    // script error. (See Bug 1006102 for rationale)
++    msg->SetConsoleID(consoleID);
++
+     consoleService->LogMessageWithMode(msg, nsConsoleService::SuppressLog);
+     return true;
+ }
+ 
+ bool
+ ContentParent::RecvPrivateDocShellsExist(const bool& aExist)
+ {
+     if (!sPrivateContent)
+diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
+index c8010e6..56ee3c2 100644
+--- a/dom/ipc/ContentParent.h
++++ b/dom/ipc/ContentParent.h
+@@ -828,17 +828,18 @@ private:
+ 
+     virtual bool RecvConsoleMessage(const nsString& aMessage) override;
+     virtual bool RecvScriptError(const nsString& aMessage,
+                                  const nsString& aSourceName,
+                                  const nsString& aSourceLine,
+                                  const uint32_t& aLineNumber,
+                                  const uint32_t& aColNumber,
+                                  const uint32_t& aFlags,
+-                                 const nsCString& aCategory) override;
++                                 const nsCString& aCategory,
++                                 const nsString& consoleID) override;
+ 
+     virtual bool RecvPrivateDocShellsExist(const bool& aExist) override;
+ 
+     virtual bool RecvFirstIdle() override;
+ 
+     virtual bool RecvAudioChannelChangeDefVolChannel(const int32_t& aChannel,
+                                                      const bool& aHidden) override;
+ 
+diff --git a/dom/ipc/PContent.ipdl b/dom/ipc/PContent.ipdl
+index 077a020..d4c9304 100644
+--- a/dom/ipc/PContent.ipdl
++++ b/dom/ipc/PContent.ipdl
+@@ -904,17 +904,17 @@ parent:
+ 
+     AddGeolocationListener(Principal principal, bool highAccuracy);
+     RemoveGeolocationListener();
+     SetGeolocationHigherAccuracy(bool enable);
+ 
+     ConsoleMessage(nsString message);
+     ScriptError(nsString message, nsString sourceName, nsString sourceLine,
+                 uint32_t lineNumber, uint32_t colNumber, uint32_t flags,
+-                nsCString category);
++                nsCString category, nsString consoleID);
+ 
+     // nsIPermissionManager messages
+     sync ReadPermissions() returns (Permission[] permissions);
+ 
+     // Places the items within dataTransfer on the clipboard.
+     SetClipboard(IPCDataTransfer aDataTransfer,
+                  bool aIsPrivateData,
+                  int32_t aWhichClipboard);
+

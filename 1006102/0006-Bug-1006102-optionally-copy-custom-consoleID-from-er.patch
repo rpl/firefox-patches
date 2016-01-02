@@ -1,0 +1,44 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - optionally copy custom consoleID from error object on Cu.reportError without an innerWindowID
+
+---
+ js/xpconnect/src/XPCComponents.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/js/xpconnect/src/XPCComponents.cpp b/js/xpconnect/src/XPCComponents.cpp
+index 982c615..e55581a 100644
+--- a/js/xpconnect/src/XPCComponents.cpp
++++ b/js/xpconnect/src/XPCComponents.cpp
+@@ -2319,16 +2319,29 @@ nsXPCComponents_Utils::ReportError(HandleValue error, JSContext* cx)
+         nsresult rv = scripterr->InitWithWindowID(
+                 ucmessage ? nsDependentString(ucmessage) : EmptyString(),
+                 fileUni,
+                 uclinebuf ? nsDependentString(uclinebuf) : EmptyString(),
+                 err->lineno,
+                 column, err->flags, "XPConnect JavaScript", innerWindowID);
+         NS_ENSURE_SUCCESS(rv, NS_OK);
+ 
++        if (innerWindowID == 0) {
++            // try to get a console ID from the error object
++            JS::RootedValue consoleID(cx);
++            if (JS_GetProperty(cx, errorObj, "consoleID", &consoleID)) {
++                nsAutoJSString str;
++                if (str.init(consoleID)) {
++                    scripterr->SetConsoleID(str);
++                }
++            } else {
++                JS_ClearPendingException(cx); // catch and ignore any exceptions
++            }
++        }
++
+         console->LogMessage(scripterr);
+         return NS_OK;
+     }
+ 
+     // It's not a JS Error object, so we synthesize as best we're able.
+     RootedString msgstr(cx, ToString(cx, error));
+     if (!msgstr)
+         return NS_OK;
+

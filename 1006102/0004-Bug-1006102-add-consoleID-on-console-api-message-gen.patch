@@ -1,0 +1,67 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - add consoleID on console api message generated from a content script
+
+---
+ dom/base/Console.cpp                               | 12 ++++++++++++
+ toolkit/components/extensions/ExtensionContent.jsm |  2 ++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
+index 42289a8..3faa3b5 100644
+--- a/dom/base/Console.cpp
++++ b/dom/base/Console.cpp
+@@ -777,16 +777,28 @@ Console::Observe(nsISupports* aSubject, const char* aTopic,
+   }
+ 
+   return NS_OK;
+ }
+ 
+ JSObject*
+ Console::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
+ {
++  // customize the consoleID if the current global has an addonId
++  if (JSObject* global = JS::CurrentGlobalOrNull(aCx)) {
++    if (JSAddonId* id = JS::AddonIdOfObject(global)) {
++      JSString* jss = JS::StringOfAddonId(id);
++      char* ss = JS_EncodeString(aCx, jss);
++      nsAutoCString consoleId;
++      consoleId.Insert(NS_LITERAL_CSTRING("addon/"), 0);
++      consoleId.Append(ss);
++      CopyUTF8toUTF16(consoleId, mConsoleID);
++    }
++  }
++
+   return ConsoleBinding::Wrap(aCx, this, aGivenProto);
+ }
+ 
+ #define METHOD(name, string)                                          \
+   void                                                                \
+   Console::name(JSContext* aCx, const Sequence<JS::Value>& aData)     \
+   {                                                                   \
+     Method(aCx, Method##name, NS_LITERAL_STRING(string), aData);      \
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+index 6fe9e9c..f99a94e 100644
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -242,16 +242,18 @@ function ExtensionContext(extensionId, contentWindow) {
+     prin = [contentPrincipal, extensionPrincipal];
+   }
+ 
+   this.sandbox = Cu.Sandbox(prin, {
+     sandboxPrototype: contentWindow,
+     wantXrays: true,
+     isWebExtensionContentScript: true,
+     wantGlobalProperties: ["XMLHttpRequest"],
++    addonId: this.extensionId,
++    metadata: { addonID: this.extensionId }
+   });
+ 
+   let delegate = {
+     getSender(context, target, sender) {
+       // Nothing to do here.
+     },
+   };
+ 
+

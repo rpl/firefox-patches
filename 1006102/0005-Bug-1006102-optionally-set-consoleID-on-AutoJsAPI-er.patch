@@ -1,0 +1,166 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - optionally set consoleID on AutoJsAPI error report based on the current global addonId
+
+---
+ dom/base/ScriptSettings.cpp         | 12 ++++++++++++
+ js/xpconnect/idl/nsIScriptError.idl |  6 +++---
+ js/xpconnect/src/nsScriptError.cpp  |  6 ++++++
+ js/xpconnect/src/nsXPConnect.cpp    |  5 +++++
+ js/xpconnect/src/xpcpublic.h        |  1 +
+ 5 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/dom/base/ScriptSettings.cpp b/dom/base/ScriptSettings.cpp
+index cb7d097..36540b4 100644
+--- a/dom/base/ScriptSettings.cpp
++++ b/dom/base/ScriptSettings.cpp
+@@ -512,16 +512,28 @@ AutoJSAPI::ReportException()
+   js::ErrorReport jsReport(cx());
+   if (StealException(&exn) && jsReport.init(cx(), exn)) {
+     if (mIsMainThread) {
+       RefPtr<xpc::ErrorReport> xpcReport = new xpc::ErrorReport();
+       nsCOMPtr<nsPIDOMWindow> win = xpc::WindowGlobalOrNull(errorGlobal);
+       xpcReport->Init(jsReport.report(), jsReport.message(),
+                       nsContentUtils::IsCallerChrome(),
+                       win ? win->WindowID() : 0);
++
++      if (JSObject* global = JS::CurrentGlobalOrNull(cx())) {
++        if (JSAddonId* id = JS::AddonIdOfObject(global)) {
++          JSString* jss = JS::StringOfAddonId(id);
++          char* ss = JS_EncodeString(cx(), jss);
++          nsAutoCString consoleId;
++          consoleId.Insert(NS_LITERAL_CSTRING("addon/"), 0);
++          consoleId.Append(ss);
++          CopyUTF8toUTF16(consoleId, xpcReport->mConsoleID);
++        }
++      }
++
+       if (win) {
+         DispatchScriptErrorEvent(win, JS_GetRuntime(cx()), xpcReport, exn);
+       } else {
+         xpcReport->LogToConsole();
+       }
+     } else {
+       // On a worker, we just use the worker error reporting mechanism and don't
+       // bother with xpc::ErrorReport.  This will ensure that all the right
+diff --git a/js/xpconnect/idl/nsIScriptError.idl b/js/xpconnect/idl/nsIScriptError.idl
+index dc01bba..85a78f6 100644
+--- a/js/xpconnect/idl/nsIScriptError.idl
++++ b/js/xpconnect/idl/nsIScriptError.idl
+@@ -43,19 +43,16 @@ interface nsIScriptError : nsIConsoleMessage
+     readonly attribute AString errorMessage;
+ 
+     readonly attribute AString sourceName;
+     readonly attribute AString sourceLine;
+     readonly attribute uint32_t lineNumber;
+     readonly attribute uint32_t columnNumber;
+     readonly attribute uint32_t flags;
+ 
+-    /** message is tagged with a consoleID (e.g. "addon/ID") */
+-    readonly attribute AString consoleID;
+-
+     /**
+      * Categories I know about -
+      * XUL javascript
+      * content javascript (both of these from nsDocShell, currently)
+      * system javascript (errors in JS components and other system JS)
+      */
+     readonly attribute string category;
+ 
+@@ -64,16 +61,19 @@ interface nsIScriptError : nsIConsoleMessage
+     readonly attribute unsigned long long outerWindowID;
+ 
+     /* Get the inner window id this was initialized with.  Zero will be
+        returned if init() was used instead of initWithWindowID(). */
+     readonly attribute unsigned long long innerWindowID;
+ 
+     readonly attribute boolean isFromPrivateWindow;
+ 
++    /** message is tagged with a consoleID (e.g. "addon/ID") */
++    attribute AString consoleID;
++
+     attribute jsval stack;
+ 
+     void init(in AString message,
+               in AString sourceName,
+               in AString sourceLine,
+               in uint32_t lineNumber,
+               in uint32_t columnNumber,
+               in uint32_t flags,
+diff --git a/js/xpconnect/src/nsScriptError.cpp b/js/xpconnect/src/nsScriptError.cpp
+index df916c9..160731d 100644
+--- a/js/xpconnect/src/nsScriptError.cpp
++++ b/js/xpconnect/src/nsScriptError.cpp
+@@ -154,16 +154,22 @@ nsScriptErrorBase::GetCategory(char** result) {
+ 
+ NS_IMETHODIMP
+ nsScriptErrorBase::GetConsoleID(nsAString& aResult) {
+     aResult.Assign(mConsoleID);
+     return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
++nsScriptErrorBase::SetConsoleID(const nsAString& aConsoleID) {
++    mConsoleID.Assign(aConsoleID);
++    return NS_OK;
++}
++
++NS_IMETHODIMP
+ nsScriptErrorBase::GetStack(JS::MutableHandleValue aStack) {
+     aStack.setUndefined();
+     return NS_OK;
+ }
+ 
+ NS_IMETHODIMP
+ nsScriptErrorBase::SetStack(JS::HandleValue aStack) {
+     return NS_OK;
+diff --git a/js/xpconnect/src/nsXPConnect.cpp b/js/xpconnect/src/nsXPConnect.cpp
+index 801ee25..54c26db 100644
+--- a/js/xpconnect/src/nsXPConnect.cpp
++++ b/js/xpconnect/src/nsXPConnect.cpp
+@@ -259,16 +259,21 @@ xpc::ErrorReport::LogToConsoleWithStack(JS::HandleObject aStack)
+       errorObject = new nsScriptError();
+     }
+     NS_ENSURE_TRUE_VOID(consoleService && errorObject);
+ 
+     nsresult rv = errorObject->InitWithWindowID(mErrorMsg, mFileName, mSourceLine,
+                                                 mLineNumber, mColumn, mFlags,
+                                                 mCategory, mWindowID);
+     NS_ENSURE_SUCCESS_VOID(rv);
++
++    if (!mConsoleID.IsEmpty()) {
++        errorObject->SetConsoleID(mConsoleID);
++    }
++
+     consoleService->LogMessage(errorObject);
+ 
+ }
+ 
+ /***************************************************************************/
+ 
+ 
+ nsresult
+diff --git a/js/xpconnect/src/xpcpublic.h b/js/xpconnect/src/xpcpublic.h
+index 9d2c644..eea6116 100644
+--- a/js/xpconnect/src/xpcpublic.h
++++ b/js/xpconnect/src/xpcpublic.h
+@@ -512,16 +512,17 @@ class ErrorReport {
+     void Init(JSErrorReport* aReport, const char* aFallbackMessage,
+               bool aIsChrome, uint64_t aWindowID);
+     void LogToConsole();
+     void LogToConsoleWithStack(JS::HandleObject aStack);
+ 
+   public:
+ 
+     nsCString mCategory;
++    nsString mConsoleID;
+     nsString mErrorMsg;
+     nsString mFileName;
+     nsString mSourceLine;
+     uint64_t mWindowID;
+     uint32_t mLineNumber;
+     uint32_t mColumn;
+     uint32_t mFlags;
+     bool mIsMuted;
+

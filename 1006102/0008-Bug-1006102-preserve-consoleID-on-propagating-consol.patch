@@ -1,0 +1,32 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1006102 - preserve consoleID on propagating console API messages from the content to the parent process
+
+---
+ toolkit/components/processsingleton/ContentProcessSingleton.js | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/toolkit/components/processsingleton/ContentProcessSingleton.js b/toolkit/components/processsingleton/ContentProcessSingleton.js
+index bab9aea..34472f9 100644
+--- a/toolkit/components/processsingleton/ContentProcessSingleton.js
++++ b/toolkit/components/processsingleton/ContentProcessSingleton.js
+@@ -32,16 +32,17 @@ ContentProcessSingleton.prototype = {
+       let consoleMsg = subject.wrappedJSObject;
+ 
+       let msgData = {
+         level: consoleMsg.level,
+         filename: consoleMsg.filename,
+         lineNumber: consoleMsg.lineNumber,
+         functionName: consoleMsg.functionName,
+         timeStamp: consoleMsg.timeStamp,
++        consoleID: consoleMsg.consoleID,
+         arguments: [],
+       };
+ 
+       // We can't send objects over the message manager, so we sanitize
+       // them out.
+       for (let arg of consoleMsg.arguments) {
+         if ((typeof arg == "object" || typeof arg == "function") && arg !== null) {
+           msgData.arguments.push("<unavailable>");
+

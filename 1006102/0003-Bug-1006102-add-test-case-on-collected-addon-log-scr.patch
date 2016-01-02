@@ -6,8 +6,8 @@ Bug 1006102 - add test case on collected addon log script error and addon consol
 ---
  .../file_ext_collect_addon_messages_and_errors.js  |  40 ++++++++
  .../extensions/test/mochitest/mochitest.ini        |   2 +
- .../test_ext_console_messages_and_errors.html      | 110 +++++++++++++++++++++
- 3 files changed, 152 insertions(+)
+ .../test_ext_console_messages_and_errors.html      | 106 +++++++++++++++++++++
+ 3 files changed, 148 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_collect_addon_messages_and_errors.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
 
@@ -91,10 +91,10 @@ index 7f458d2..bf8c686 100644
 +[test_ext_console_messages_and_errors.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
 new file mode 100644
-index 0000000..9a8da6e
+index 0000000..e2fff54
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,106 @@
 +<!DOCTYPE HTML>
 +<html>
 +  <head>
@@ -179,10 +179,6 @@ index 0000000..9a8da6e
 +       let messages = yield waitCollectedMessages;
 +
 +       yield extension.unload();
-+
-+       for (let message of messages) {
-+         console.log("MESSAGE", message);
-+       }
 +
 +       is(messages.length, EXPECTED_NUMBER_OF_ADDON_MESSAGES,
 +          "expected number of console messages and script errors collected");
