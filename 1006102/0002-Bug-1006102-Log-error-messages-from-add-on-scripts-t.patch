@@ -1,15 +1,22 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1006102 - Log error messages from add-on scripts to the add-on console
+Bug 1006102 - Log error messages from add-on scripts to the add-on
+console
 
+- optional consoleID filtering to webconsole ConsoleServiceListener
+  (with the same existent behaviour of the ConsoleAPIListener)
+- support for PageError listener to the addon console actor
+- new consoleID attribute to the nsIScriptError idl
+- support for optionally retrive the addonId from the principal of
+  the document loaded in the current window in the nsScriptError
 ---
  devtools/server/actors/addon.js     | 10 +++++++++-
  devtools/shared/webconsole/utils.js | 29 ++++++++++++++++++++++++++++-
  js/xpconnect/idl/nsIScriptError.idl |  3 +++
- js/xpconnect/src/nsScriptError.cpp  | 19 ++++++++++++++++++-
+ js/xpconnect/src/nsScriptError.cpp  | 20 +++++++++++++++++++-
  js/xpconnect/src/xpcprivate.h       |  1 +
- 5 files changed, 59 insertions(+), 3 deletions(-)
+ 5 files changed, 60 insertions(+), 3 deletions(-)
 
 diff --git a/devtools/server/actors/addon.js b/devtools/server/actors/addon.js
 index 5cfa8d9..85a8fc6 100644
@@ -60,7 +67,7 @@ index 5cfa8d9..85a8fc6 100644
            startedListeners.push(listener);
            break;
 diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/utils.js
-index 7b2757f..8ff8241 100644
+index c7d8be1..598bf4e 100644
 --- a/devtools/shared/webconsole/utils.js
 +++ b/devtools/shared/webconsole/utils.js
 @@ -709,35 +709,46 @@ WebConsoleUtils.l10n.prototype = {
@@ -75,7 +82,7 @@ index 7b2757f..8ff8241 100644
 + * @param string aConsoleID
 + *        Options - The consoleID that this listener should listen to (used in
 + *        the addon webconsole to filter log messages and script errors related
-+ *        to the consoleID in the form "addon/ID")
++ *        to the consoleID in the form "addon/ID").
   */
 -function ConsoleServiceListener(aWindow, aListener)
 +function ConsoleServiceListener(aWindow, aListener, aConsoleID)
@@ -120,8 +127,8 @@ index 7b2757f..8ff8241 100644
        }
      }
  
-+    // if this.consoleID, we're in an addon console and we want to filter
-+    // script errors based on their consoleID
++    // If this.consoleID is defined, we're in an addon console and we want to filter
++    // script errors based on their consoleID.
 +    if (this.consoleID && (aMessage instanceof Ci.nsIScriptError) && aMessage.consoleID !== this.consoleID) {
 +      return;
 +    }
@@ -143,8 +150,8 @@ index 7b2757f..8ff8241 100644
    {
      let errors = Services.console.getMessageArray() || [];
  
-+    // if this.consoleID, we're in an addon console and we want to filter
-+    // script errors based on their consoleID
++    // If this.consoleID is defined, we're in an addon console and we want to filter
++    // script errors based on their consoleID.
 +    if (this.consoleID) {
 +      errors = errors.filter((aError) => {
 +        if (aError instanceof Ci.nsIScriptError) {
@@ -162,7 +169,7 @@ index 7b2757f..8ff8241 100644
              return false;
            }
 diff --git a/js/xpconnect/idl/nsIScriptError.idl b/js/xpconnect/idl/nsIScriptError.idl
-index 8968a8e..dc01bba 100644
+index 8968a8e..ac8c054 100644
 --- a/js/xpconnect/idl/nsIScriptError.idl
 +++ b/js/xpconnect/idl/nsIScriptError.idl
 @@ -43,16 +43,19 @@ interface nsIScriptError : nsIConsoleMessage
@@ -174,7 +181,7 @@ index 8968a8e..dc01bba 100644
      readonly attribute uint32_t columnNumber;
      readonly attribute uint32_t flags;
  
-+    /** message is tagged with a consoleID (e.g. "addon/ID") */
++    /** The error message can tagged with a consoleID (e.g. "addon/ID") */
 +    readonly attribute AString consoleID;
 +
      /**
@@ -186,10 +193,10 @@ index 8968a8e..dc01bba 100644
      readonly attribute string category;
  
 diff --git a/js/xpconnect/src/nsScriptError.cpp b/js/xpconnect/src/nsScriptError.cpp
-index 97917f4..df916c9 100644
+index 97917f4..4b55a8e 100644
 --- a/js/xpconnect/src/nsScriptError.cpp
 +++ b/js/xpconnect/src/nsScriptError.cpp
-@@ -41,31 +41,42 @@ void
+@@ -41,31 +41,43 @@ void
  nsScriptErrorBase::InitializeOnMainThread()
  {
      MOZ_ASSERT(NS_IsMainThread());
@@ -216,6 +223,7 @@ index 97917f4..df916c9 100644
                                         !nsContentUtils::IsSystemPrincipal(winPrincipal);
              }
 +
++            // Customize the consoleID if the window principal has an addonId.
 +            if (winPrincipal) {
 +                PrincipalOriginAttributes poa = BasePrincipal::Cast(winPrincipal)->OriginAttributesRef();
 +                if (!poa.mAddonId.IsEmpty()) {
@@ -233,7 +241,7 @@ index 97917f4..df916c9 100644
  
  // nsIConsoleMessage methods
  NS_IMETHODIMP
-@@ -137,16 +148,22 @@ nsScriptErrorBase::GetFlags(uint32_t* result) {
+@@ -137,16 +149,22 @@ nsScriptErrorBase::GetFlags(uint32_t* result) {
  
  NS_IMETHODIMP
  nsScriptErrorBase::GetCategory(char** result) {

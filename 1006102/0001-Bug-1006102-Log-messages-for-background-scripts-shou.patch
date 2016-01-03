@@ -15,7 +15,7 @@ Bug 1006102 - Log messages for background scripts should appear in extension deb
  4 files changed, 27 insertions(+)
 
 diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/utils.js
-index 45dc8be..7b2757f 100644
+index 45dc8be..c7d8be1 100644
 --- a/devtools/shared/webconsole/utils.js
 +++ b/devtools/shared/webconsole/utils.js
 @@ -1030,16 +1030,22 @@ ConsoleAPIListener.prototype =
@@ -27,8 +27,8 @@ index 45dc8be..7b2757f 100644
        return messages;
      }
  
-+    // if this.consoleID, we're in an addon console. We need to filter
-+    // messages errors related to the addon id
++    // If this.consoleID is defined, we're in an addon console. We need to filter
++    // messages errors related to the addon id.
 +    if (this.consoleID) {
 +      messages = messages.filter(msg => msg.consoleID == this.consoleID);
 +    }
@@ -42,7 +42,7 @@ index 45dc8be..7b2757f 100644
    destroy: function CAL_destroy()
    {
 diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
-index e1b35a9..42289a8 100644
+index e1b35a9..e3a1ca9 100644
 --- a/dom/base/Console.cpp
 +++ b/dom/base/Console.cpp
 @@ -151,16 +151,18 @@ public:
@@ -74,8 +74,8 @@ index e1b35a9..42289a8 100644
        mOuterID = outerWindow->WindowID();
      }
 +
-+    // customize the consoleId if the script object principal has
-+    // an addonId
++    // Customize the consoleID if the script object principal has
++    // an addonId.
 +    nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
 +    if (sop) {
 +      nsIPrincipal* principal = sop->GetPrincipal();

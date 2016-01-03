@@ -3,13 +3,15 @@
 
 Bug 1006102 - add consoleID on console api message generated from a content script
 
+- tag sandbox created for the content scripts in ExtensionContent.jsm
+- optionally retrive the consoleID from the current global in dom/base/Console
 ---
  dom/base/Console.cpp                               | 12 ++++++++++++
  toolkit/components/extensions/ExtensionContent.jsm |  2 ++
  2 files changed, 14 insertions(+)
 
 diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
-index 42289a8..3faa3b5 100644
+index e3a1ca9..6c7499f 100644
 --- a/dom/base/Console.cpp
 +++ b/dom/base/Console.cpp
 @@ -777,16 +777,28 @@ Console::Observe(nsISupports* aSubject, const char* aTopic,
@@ -21,7 +23,7 @@ index 42289a8..3faa3b5 100644
  JSObject*
  Console::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
  {
-+  // customize the consoleID if the current global has an addonId
++  // Customize the consoleID if the current global has an addonId.
 +  if (JSObject* global = JS::CurrentGlobalOrNull(aCx)) {
 +    if (JSAddonId* id = JS::AddonIdOfObject(global)) {
 +      JSString* jss = JS::StringOfAddonId(id);
