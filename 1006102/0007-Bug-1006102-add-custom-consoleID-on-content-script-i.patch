@@ -4,10 +4,10 @@
 Bug 1006102 - add custom consoleID on content script injection and content script errors to the test case
 
 ---
- toolkit/components/extensions/ExtensionContent.jsm | 10 +++++---
+ toolkit/components/extensions/ExtensionContent.jsm | 10 ++++++---
  toolkit/components/extensions/ExtensionUtils.jsm   | 11 ++++++++-
- .../test_ext_console_messages_and_errors.html      | 27 ++++++++++++++++++++--
- 3 files changed, 42 insertions(+), 6 deletions(-)
+ .../test_ext_console_messages_and_errors.html      | 26 ++++++++++++++++++++--
+ 3 files changed, 41 insertions(+), 6 deletions(-)
 
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
 index f99a94e..b56adff 100644
@@ -134,7 +134,7 @@ index 0c6fb08..807df50 100644
  // Return true if the given value is an instance of the given
  // native type.
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
-index e2fff54..0501764 100644
+index 199f922..b4ed9e9 100644
 --- a/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
 @@ -52,31 +52,34 @@
@@ -174,14 +174,14 @@ index e2fff54..0501764 100644
         yield extension.startup();
  
         let messages = yield waitCollectedMessages;
-@@ -93,14 +96,34 @@
-           "expected console API message received from background page");
+@@ -105,14 +108,33 @@
+           "expected console API message received from tab page");
  
-        let backgroundScriptErrors = messages.filter((msg) => {
+        let tabScriptErrors = messages.filter((msg) => {
           return msg.message.indexOf("[JavaScript Error:") == 0 &&
-                 msg.message.indexOf("backgroundPageScriptError is not defined") >= 0;
+          msg.message.indexOf("tabPageScriptError is not defined") >= 0;
         });
-        is(backgroundScriptErrors.length, 1, "expected script error received from background page");
+        is(tabScriptErrors.length, 1, "expected script error received from tab page");
  
 +       let contentScriptConsoleMessages = messages.filter((msg) => {
 +         return msg.message == "content script log message";
@@ -201,7 +201,6 @@ index e2fff54..0501764 100644
 +       });
 +       is(contentScriptErrorsOnWindowSetTimeout.length, 1,
 +          "expected script error on window set timeout received from content script");
-+
 +
       });
  

@@ -4,10 +4,10 @@
 Bug 1006102 - add test case on collected addon log script error and addon console
 
 ---
- .../file_ext_collect_addon_messages_and_errors.js  |  40 ++++++++
+ .../file_ext_collect_addon_messages_and_errors.js  |  40 +++++++
  .../extensions/test/mochitest/mochitest.ini        |   2 +
- .../test_ext_console_messages_and_errors.html      | 106 +++++++++++++++++++++
- 3 files changed, 148 insertions(+)
+ .../test_ext_console_messages_and_errors.html      | 118 +++++++++++++++++++++
+ 3 files changed, 160 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_collect_addon_messages_and_errors.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
 
@@ -91,10 +91,10 @@ index 7f458d2..bf8c686 100644
 +[test_ext_console_messages_and_errors.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
 new file mode 100644
-index 0000000..e2fff54
+index 0000000..199f922
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_console_messages_and_errors.html
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,118 @@
 +<!DOCTYPE HTML>
 +<html>
 +  <head>
@@ -194,6 +194,18 @@ index 0000000..e2fff54
 +                msg.message.indexOf("backgroundPageScriptError is not defined") >= 0;
 +       });
 +       is(backgroundScriptErrors.length, 1, "expected script error received from background page");
++
++       let tabPageConsoleMessages = messages.filter((msg) => {
++         return msg.message == "tab page log message";
++       });
++       is(tabPageConsoleMessages.length, 1,
++          "expected console API message received from tab page");
++
++       let tabScriptErrors = messages.filter((msg) => {
++         return msg.message.indexOf("[JavaScript Error:") == 0 &&
++         msg.message.indexOf("tabPageScriptError is not defined") >= 0;
++       });
++       is(tabScriptErrors.length, 1, "expected script error received from tab page");
 +
 +     });
 +
