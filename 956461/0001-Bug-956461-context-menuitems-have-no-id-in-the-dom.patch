@@ -1,0 +1,214 @@
+# HG changeset patch
+# User Brett Zamir <brettz9@yahoo.com>
+
+Bug 956461 - context menuitems have no id in the dom.
+
+---
+ addon-sdk/source/lib/sdk/context-menu.js   | 28 ++++++++++++++
+ addon-sdk/source/test/test-context-menu.js | 60 ++++++++++++++++++++++++++++--
+ 2 files changed, 84 insertions(+), 4 deletions(-)
+
+diff --git a/addon-sdk/source/lib/sdk/context-menu.js b/addon-sdk/source/lib/sdk/context-menu.js
+index f0a3868..350e331 100644
+--- a/addon-sdk/source/lib/sdk/context-menu.js
++++ b/addon-sdk/source/lib/sdk/context-menu.js
+@@ -251,16 +251,27 @@ var baseItemRules = {
+ 
+ var labelledItemRules =  mix(baseItemRules, {
+   label: {
+     map: stringOrNull,
+     is: ["string"],
+     ok: v => !!v,
+     msg: "The item must have a non-empty string label."
+   },
++  id: {
++    map: stringOrNull,
++    is: ["string", "undefined", "null"],
++    ok: v => {
++      if (!v) {
++        return true;
++      }
++      return typeof v == "string";
++    },
++    msg: "The item must have a non-empty string id"
++  },
+   accesskey: {
+     map: stringOrNull,
+     is: ["string", "undefined", "null"],
+     ok: (v) => {
+       if (!v) {
+         return true;
+       }
+       return typeof v == "string" && v.length === 1;
+@@ -481,16 +492,26 @@ var LabelledItem = Class({
+   },
+ 
+   set label(val) {
+     internal(this).options.label = val;
+ 
+     MenuManager.updateItem(this);
+   },
+ 
++  get id() {
++    return internal(this).options.id;
++  },
++
++  set id(val) {
++    internal(this).options.id = val;
++
++    MenuManager.updateItem(this);
++  },
++
+   get accesskey() {
+     return internal(this).options.accesskey;
+   },
+ 
+   set accesskey(val) {
+     internal(this).options.accesskey = val;
+ 
+     MenuManager.updateItem(this);
+@@ -857,16 +878,18 @@ var MenuWrapper = Class({
+       type = "menu";
+     else if (item instanceof Separator)
+       type = "menuseparator";
+ 
+     let xulNode = this.window.document.createElement(type);
+     xulNode.setAttribute("class", ITEM_CLASS);
+     if (item instanceof LabelledItem) {
+       xulNode.setAttribute("label", item.label);
++      if (item.id)
++       xulNode.setAttribute("id", item.id);
+       if (item.accesskey)
+         xulNode.setAttribute("accesskey", item.accesskey);
+       if (item.image) {
+         xulNode.setAttribute("image", item.image);
+         if (item instanceof Menu)
+           xulNode.classList.add("menu-iconic");
+         else
+           xulNode.classList.add("menuitem-iconic");
+@@ -902,16 +925,21 @@ var MenuWrapper = Class({
+       return;
+ 
+     let xulNode = this.getXULNodeForItem(item);
+ 
+     // TODO figure out why this requires setAttribute
+     xulNode.setAttribute("label", item.label);
+     xulNode.setAttribute("accesskey", item.accesskey || "");
+ 
++    if (item.id)
++      xulNode.setAttribute("id", item.id);
++    else
++      xulNode.removeAttribute("id");
++
+     if (item.image) {
+       xulNode.setAttribute("image", item.image);
+       if (item instanceof Menu)
+         xulNode.classList.add("menu-iconic");
+       else
+         xulNode.classList.add("menuitem-iconic");
+     }
+     else {
+diff --git a/addon-sdk/source/test/test-context-menu.js b/addon-sdk/source/test/test-context-menu.js
+index f9f156d..3da8f22 100644
+--- a/addon-sdk/source/test/test-context-menu.js
++++ b/addon-sdk/source/test/test-context-menu.js
+@@ -2683,42 +2683,94 @@ exports.testItemNoData = function (assert, done) {
+           });
+         });
+       });
+     });
+   });
+ }
+ 
+ 
++exports.testItemNoId = function (assert, done) {
++  let test = new TestHelper(assert, done);
++  let loader = test.newLoader();
++
++  let item1 = new loader.cm.Item({ label: "item 1" });
++  let item2 = new loader.cm.Item({ label: "item 2", id: null });
++  let item3 = new loader.cm.Item({ label: "item 3", id: undefined });
++
++  assert.equal(item1.id, undefined, "Should be no defined id");
++  assert.equal(item2.id, null, "Should be no defined id");
++  assert.equal(item3.id, undefined, "Should be no defined id");
++
++  test.showMenu().
++  then((popup) => test.checkMenu([item1, item2, item3], [], [])).
++  then(test.done).
++  catch(assert.fail);
++}
++
++
++// Test id support.
++exports.testItemId = function (assert, done) {
++  let test = new TestHelper(assert, done);
++  let loader = test.newLoader();
++
++  let item = new loader.cm.Item({ label: "item", id: "abc" });
++  assert.equal(item.id, "abc", "Should have set the id to abc");
++
++  let menu = new loader.cm.Menu({ label: "menu", id: "def", items: [
++    loader.cm.Item({ label: "subitem" })
++  ]});
++  assert.equal(menu.id, "def", "Should have set the id to def");
++
++  test.showMenu().then((popup) => {
++    test.checkMenu([item, menu], [], []);
++
++    let id = "xyz";
++    menu.id = item.id = id;
++    assert.equal(item.id, id, "Should have set the id to " + id);
++    assert.equal(menu.id, id, "Should have set the id to " + id);
++    test.checkMenu([item, menu], [], []);
++
++    item.id = null;
++    menu.id = null;
++    assert.equal(item.id, null, "Should have set the id to " + id);
++    assert.equal(menu.id, null, "Should have set the id to " + id);
++    test.checkMenu([item, menu], [], []);
++  }).
++  then(test.done).
++  catch(assert.fail);
++};
++
++
+ exports.testItemNoAccessKey = function (assert, done) {
+   let test = new TestHelper(assert, done);
+   let loader = test.newLoader();
+ 
+   let item1 = new loader.cm.Item({ label: "item 1" });
+   let item2 = new loader.cm.Item({ label: "item 2", accesskey: null });
+   let item3 = new loader.cm.Item({ label: "item 3", accesskey: undefined });
+ 
+-  assert.equal(item1.accesskey, undefined, "Should be no defined image");
+-  assert.equal(item2.accesskey, null, "Should be no defined image");
+-  assert.equal(item3.accesskey, undefined, "Should be no defined image");
++  assert.equal(item1.accesskey, undefined, "Should be no defined accesskey");
++  assert.equal(item2.accesskey, null, "Should be no defined accesskey");
++  assert.equal(item3.accesskey, undefined, "Should be no defined accesskey");
+ 
+   test.showMenu().
+   then((popup) => test.checkMenu([item1, item2, item3], [], [])).
+   then(test.done).
+   catch(assert.fail);
+ }
+ 
+ 
+ // Test accesskey support.
+ exports.testItemAccessKey = function (assert, done) {
+   let test = new TestHelper(assert, done);
+   let loader = test.newLoader();
+ 
+   let item = new loader.cm.Item({ label: "item", accesskey: "i" });
+-  assert.equal(item.accesskey, "i", "Should have set the image to i");
++  assert.equal(item.accesskey, "i", "Should have set the accesskey to i");
+ 
+   let menu = new loader.cm.Menu({ label: "menu", accesskey: "m", items: [
+     loader.cm.Item({ label: "subitem" })
+   ]});
+   assert.equal(menu.accesskey, "m", "Should have set the accesskey to m");
+ 
+   test.showMenu().then((popup) => {
+     test.checkMenu([item, menu], [], []);
+
