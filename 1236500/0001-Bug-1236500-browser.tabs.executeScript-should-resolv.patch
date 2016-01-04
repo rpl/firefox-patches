@@ -1,11 +1,14 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
 
-Bug 1236500 - browser.tabs.executeScript should resolve file URLs based on the add-on baseURI
+Bug 1236500 - browser.tabs.executeScript should resolve file URLs based on the add-on baseURI r=kmag
 
 ---
- browser/components/extensions/ext-tabs.js | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ browser/components/extensions/ext-tabs.js          |  2 +-
+ .../components/extensions/test/browser/browser.ini |  1 +
+ .../browser_ext_tabs_executeScript_resolve_url.js  | 53 ++++++++++++++++++++++
+ 3 files changed, 55 insertions(+), 1 deletion(-)
+ create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_executeScript_resolve_url.js
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
 index 17f0263..268445d 100644
@@ -30,4 +33,78 @@ index 17f0263..268445d 100644
          }
          if (details.allFrames) {
            options.all_frames = details.allFrames;
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+index 31ba3d3..56713eb 100644
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -25,8 +25,9 @@ support-files =
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_getCurrent.js]
+ [browser_ext_tabs_update.js]
+ [browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+ [browser_ext_tab_runtimeConnect.js]
++[browser_ext_tabs_executeScript_resolve_url.js]
+\ No newline at end of file
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_executeScript_resolve_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_executeScript_resolve_url.js
+new file mode 100644
+index 0000000..614a47d
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_executeScript_resolve_url.js
+@@ -0,0 +1,53 @@
++/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set sts=2 sw=2 et tw=80: */
++"use strict";
++
++add_task(function* testTabsExecuteScriptResolveURL() {
++  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "http://mochi.test:8888/", true);
++
++  info("Test tabs.executeScript resolve file URLs relative to addon baseURI ");
++
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "permissions": ["http://mochi.test/"],
++      "background": {
++        "page": "background/page.html"
++      }
++    },
++    files: {
++      "background/page.html": `
++        <!DOCTYPE html>
++        <html>
++          <head>
++            <meta charset="utf-8">
++            <script src="./script.js"></script>
++          </head>
++          <body>
++          </body>
++        </html>
++      `,
++      "background/script.js": "new " + function() {
++        browser.runtime.onConnect.addListener((port) => {
++          browser.test.assertTrue(!!port, "content script correctly executed");
++
++          browser.test.notifyPass("tabs_executeScript_resolve_url.pass");
++        });
++
++        browser.tabs.executeScript({ file: "content-scripts/script.js" });
++
++        console.log(browser.runtime.getURL("content-scripts/script.js"));
++      },
++      "content-scripts/script.js": "new " + function() {
++        browser.runtime.connect();
++      },
++    },
++  });
++
++  yield extension.startup();
++
++  yield extension.awaitFinish("tabs_executeScript_resolve_url.pass");
++
++  yield extension.unload();
++
++  yield BrowserTestUtils.removeTab(tab);
++});
 
