@@ -11,10 +11,10 @@ Bug 1006102 - preserve consoleID on propagating ScriptErrors from the content to
  4 files changed, 22 insertions(+), 9 deletions(-)
 
 diff --git a/dom/ipc/ContentChild.cpp b/dom/ipc/ContentChild.cpp
-index 14a7302..7c103c7 100644
+index c5a904b..313393e 100644
 --- a/dom/ipc/ContentChild.cpp
 +++ b/dom/ipc/ContentChild.cpp
-@@ -452,18 +452,25 @@ ConsoleListener::Observe(nsIConsoleMessage* aMessage)
+@@ -453,18 +453,25 @@ ConsoleListener::Observe(nsIConsoleMessage* aMessage)
          rv = scriptError->GetCategory(getter_Copies(category));
          NS_ENSURE_SUCCESS(rv, rv);
          rv = scriptError->GetLineNumber(&lineNum);
@@ -42,10 +42,10 @@ index 14a7302..7c103c7 100644
      mChild->SendConsoleMessage(msg);
      return NS_OK;
 diff --git a/dom/ipc/ContentParent.cpp b/dom/ipc/ContentParent.cpp
-index 7e401b6..4162896 100755
+index 9d66751..9b4fdea 100755
 --- a/dom/ipc/ContentParent.cpp
 +++ b/dom/ipc/ContentParent.cpp
-@@ -4663,34 +4663,39 @@ ContentParent::RecvConsoleMessage(const nsString& aMessage)
+@@ -4676,34 +4676,39 @@ ContentParent::RecvConsoleMessage(const nsString& aMessage)
  
      RefPtr<nsConsoleMessage> msg(new nsConsoleMessage(aMessage.get()));
      consoleService->LogMessageWithMode(msg, nsConsoleService::SuppressLog);
@@ -92,10 +92,10 @@ index 7e401b6..4162896 100755
  {
      if (!sPrivateContent)
 diff --git a/dom/ipc/ContentParent.h b/dom/ipc/ContentParent.h
-index c8010e6..56ee3c2 100644
+index d28ac05..e3cb907 100644
 --- a/dom/ipc/ContentParent.h
 +++ b/dom/ipc/ContentParent.h
-@@ -828,17 +828,18 @@ private:
+@@ -832,17 +832,18 @@ private:
  
      virtual bool RecvConsoleMessage(const nsString& aMessage) override;
      virtual bool RecvScriptError(const nsString& aMessage,
@@ -116,10 +116,10 @@ index c8010e6..56ee3c2 100644
                                                       const bool& aHidden) override;
  
 diff --git a/dom/ipc/PContent.ipdl b/dom/ipc/PContent.ipdl
-index 077a020..d4c9304 100644
+index d516cb7..d4cf8a6 100644
 --- a/dom/ipc/PContent.ipdl
 +++ b/dom/ipc/PContent.ipdl
-@@ -904,17 +904,17 @@ parent:
+@@ -915,17 +915,17 @@ parent:
  
      AddGeolocationListener(Principal principal, bool highAccuracy);
      RemoveGeolocationListener();

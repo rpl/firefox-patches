@@ -58,15 +58,15 @@ index 0000000..4e9869f
 +  numberOfExpectedMessages = message.numberOfExpectedMessages;
 +});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 7f458d2..bf8c686 100644
+index cc3fb37..4e656a8 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -16,16 +16,17 @@ support-files =
-   file_script_good.js
+@@ -17,16 +17,17 @@ support-files =
    file_script_bad.js
    file_script_redirect.js
    file_script_xhr.js
    file_sample.html
+   redirection.sjs
    file_privilege_escalation.html
    file_ext_background_api_injection.js
    file_permission_xhr.html
@@ -79,7 +79,7 @@ index 7f458d2..bf8c686 100644
  [test_ext_generate.html]
  [test_ext_localStorage.html]
  [test_ext_onmessage_removelistener.html]
-@@ -49,8 +50,9 @@ skip-if = e10s # Uses cookie service via SpecialPowers.Services, which does not
+@@ -50,8 +51,9 @@ skip-if = e10s # Uses cookie service via SpecialPowers.Services, which does not
  [test_ext_background_window_properties.html]
  [test_ext_background_sub_windows.html]
  [test_ext_background_api_injection.html]

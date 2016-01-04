@@ -122,7 +122,7 @@ index 4b55a8e..1b6edf3 100644
  nsScriptErrorBase::SetStack(JS::HandleValue aStack) {
      return NS_OK;
 diff --git a/js/xpconnect/src/nsXPConnect.cpp b/js/xpconnect/src/nsXPConnect.cpp
-index 801ee25..f8bd9d5 100644
+index cf5c614..0527dbb 100644
 --- a/js/xpconnect/src/nsXPConnect.cpp
 +++ b/js/xpconnect/src/nsXPConnect.cpp
 @@ -259,16 +259,23 @@ xpc::ErrorReport::LogToConsoleWithStack(JS::HandleObject aStack)
