@@ -3,7 +3,7 @@
 
 Bug 1006102 - Log messages for background scripts should appear in extension debugger
 
-- add GetAddonId method to BasePrincipal which returns originAttributes.addonId
+- get the addonId from the Principal origin attributes
 - tag addon Console API messages with a custom consoleID ("addon/ID"),
   which is how the Addon Console RDP Actor recognize the messages that have to be
   collected and shown in the Addon Console Panel
