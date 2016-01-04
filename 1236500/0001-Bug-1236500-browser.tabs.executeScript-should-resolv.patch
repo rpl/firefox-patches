@@ -1,0 +1,33 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1236500 - browser.tabs.executeScript should resolve file URLs based on the add-on baseURI
+
+---
+ browser/components/extensions/ext-tabs.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+index 17f0263..268445d 100644
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -472,17 +472,17 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+         } else {
+           options.matchesHost = extension.whiteListedHosts.serialize();
+         }
+ 
+         if (details.code !== null) {
+           options[kind + "Code"] = details.code;
+         }
+         if (details.file !== null) {
+-          let url = context.uri.resolve(details.file);
++          let url = context.extension.baseURI.resolve(details.file);
+           if (extension.isExtensionURL(url)) {
+             // We should really set |lastError| here, and go straight to
+             // the callback, but we don't have |lastError| yet.
+             options[kind].push(url);
+           }
+         }
+         if (details.allFrames) {
+           options.all_frames = details.allFrames;
+
