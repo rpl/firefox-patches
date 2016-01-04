@@ -1,0 +1,81 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1227451 - chrome.alarms API doesn't check 'alarms' permission r=billm
+
+---
+ toolkit/components/extensions/ext-alarms.js        |  2 +-
+ .../extensions/test/mochitest/test_ext_alarms.html | 26 ++++++++++++++++++++++
+ 2 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/toolkit/components/extensions/ext-alarms.js b/toolkit/components/extensions/ext-alarms.js
+index 30b89e0..27c56d9 100644
+--- a/toolkit/components/extensions/ext-alarms.js
++++ b/toolkit/components/extensions/ext-alarms.js
+@@ -86,17 +86,17 @@ extensions.on("shutdown", (type, extension) => {
+   for (let alarm of alarmsMap.get(extension)) {
+     alarm.clear();
+   }
+   alarmsMap.delete(extension);
+   alarmCallbacksMap.delete(extension);
+ });
+ /* eslint-enable mozilla/balanced-listeners */
+ 
+-extensions.registerAPI((extension, context) => {
++extensions.registerPrivilegedAPI("alarms", (extension, context) => {
+   return {
+     alarms: {
+       create: function(...args) {
+         let name = "", alarmInfo;
+         if (args.length == 1) {
+           alarmInfo = args[0];
+         } else {
+           [name, alarmInfo] = args;
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_alarms.html b/toolkit/components/extensions/test/mochitest/test_ext_alarms.html
+index 9b72b6d..73efdb1 100644
+--- a/toolkit/components/extensions/test/mochitest/test_ext_alarms.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_alarms.html
+@@ -8,16 +8,42 @@
+   <script type="text/javascript" src="head.js"></script>
+   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
+ </head>
+ <body>
+ 
+ <script type="text/javascript">
+ "use strict";
+ 
++ add_task(function* test_alarm_without_permissions() {
++   function backgroundScript() {
++     let ALARM_NAME = "test_ext_alarms";
++     browser.test.log("running alarm script");
++
++     browser.test.assertTrue(!browser.alarms,
++                             "alarm API should not be available if the alarm permission is not required")
++     browser.test.notifyPass("alarms_permission");
++   }
++
++   let extensionData = {
++     background: "(" + backgroundScript.toString() + ")()",
++     manifest: {
++       permissions: [],
++     },
++   };
++
++   let extension = ExtensionTestUtils.loadExtension(extensionData);
++   yield extension.startup();
++   info("extension loaded");
++   yield extension.awaitFinish("alarms_permission");
++   yield extension.unload();
++   info("extension unloaded");
++ });
++
++
+ add_task(function* test_alarm_fires() {
+   function backgroundScript() {
+     let ALARM_NAME = "test_ext_alarms";
+     browser.test.log("running alarm script");
+ 
+     chrome.alarms.onAlarm.addListener(function(alarm) {
+       browser.test.assertEq(alarm.name, ALARM_NAME, "alarm should have the correct name");
+       browser.test.notifyPass("alarms");
+
