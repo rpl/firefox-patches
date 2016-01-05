@@ -1,0 +1,41 @@
+# HG changeset patch
+# User Tom Schuster <evilpies@gmail.com>
+
+Bug 1098617 - Remove one useless __iterator__ use
+
+---
+ addon-sdk/source/lib/sdk/util/array.js | 10 ++--------
+ 1 file changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/addon-sdk/source/lib/sdk/util/array.js b/addon-sdk/source/lib/sdk/util/array.js
+index 1d61a97..a99eaec 100644
+--- a/addon-sdk/source/lib/sdk/util/array.js
++++ b/addon-sdk/source/lib/sdk/util/array.js
+@@ -93,24 +93,18 @@ exports.flatten = function flatten(array){
+    for (var i = 0, l = array.length; i < l; i++) {
+     flat = flat.concat(Array.isArray(array[i]) ? flatten(array[i]) : array[i]);
+    }
+    return flat;
+ };
+ 
+ function fromIterator(iterator) {
+   let array = [];
+-  if (iterator.__iterator__) {
+-    for (let item of iterator)
+-      array.push(item);
+-  }
+-  else {
+-    for (let item of iterator)
+-      array.push(item);
+-  }
++  for (let item of iterator)
++    array.push(item);
+   return array;
+ }
+ exports.fromIterator = fromIterator;
+ 
+ function find(array, predicate, fallback) {
+   var index = 0;
+   var count = array.length;
+   while (index < count) {
+
