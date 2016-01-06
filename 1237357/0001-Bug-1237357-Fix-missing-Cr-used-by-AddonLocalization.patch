@@ -1,0 +1,32 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1237357 - Fix missing Cr used by AddonLocalizationConverter in simpleServices r=kmag
+
+---
+ toolkit/components/utils/simpleServices.js | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/toolkit/components/utils/simpleServices.js b/toolkit/components/utils/simpleServices.js
+index 9343cd7..4ad42d7 100644
+--- a/toolkit/components/utils/simpleServices.js
++++ b/toolkit/components/utils/simpleServices.js
+@@ -10,16 +10,17 @@
+  * eagerly loaded at startup.
+  */
+ 
+ "use strict";
+ 
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Ci = Components.interfaces;
++const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                   "resource://gre/modules/NetUtil.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
+ 
+
