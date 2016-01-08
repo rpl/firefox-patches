@@ -4,34 +4,40 @@
 Bug 1237357 - Fix missing Cr used by AddonLocalizationConverter in simpleServices r=kmag
 
 ---
- toolkit/components/extensions/test/xpcshell/test_locale_converter.js | 4 ++++
- toolkit/components/utils/simpleServices.js                           | 1 +
- 2 files changed, 5 insertions(+)
+ .../extensions/test/xpcshell/test_locale_converter.js          | 10 ++++++++--
+ toolkit/components/utils/simpleServices.js                     |  1 +
+ 2 files changed, 9 insertions(+), 2 deletions(-)
 
 diff --git a/toolkit/components/extensions/test/xpcshell/test_locale_converter.js b/toolkit/components/extensions/test/xpcshell/test_locale_converter.js
-index 7164355..93940bc 100644
+index 7164355..8715fa1 100644
 --- a/toolkit/components/extensions/test/xpcshell/test_locale_converter.js
 +++ b/toolkit/components/extensions/test/xpcshell/test_locale_converter.js
-@@ -104,16 +104,20 @@ add_task(function* testAsyncConvert() {
+@@ -102,18 +102,24 @@ add_task(function* testAsyncConvert() {
+ 
+ 
  // Test that attempting to initialize a converter with the URI of a
  // nonexistent WebExtension fails.
  add_task(function* testInvalidUUID() {
    let uri = NetUtil.newURI("moz-extension://eb4f3be8-41c9-4970-aa6d-b84d1ecc02b2/file.css");
    let stream = StringStream("Foo __MSG_xxx__ bar __MSG_yyy__ baz");
  
++  // Assert.throws raise a TypeError exception when the expected param
++  // is an arrow function. (See Bug 1237961 for rationale)
++  let expectInvalidContextException = function(e) {
++    return e.result === Cr.NS_ERROR_INVALID_ARG && /Invalid context/.test(e);
++  };
++
    Assert.throws(() => {
      convService.convert(stream, FROM_TYPE, TO_TYPE, uri);
-+  }, function(e) {
-+    return e.result === Cr.NS_ERROR_INVALID_ARG;
-   });
+-  });
++  }, expectInvalidContextException);
  
    Assert.throws(() => {
      let listener = { QueryInterface: XPCOMUtils.generateQI([Ci.nsIStreamListener]) };
  
      convService.asyncConvertData(FROM_TYPE, TO_TYPE, listener, uri);
-+  }, function(e) {
-+    return e.result === Cr.NS_ERROR_INVALID_ARG;
-   });
+-  });
++  }, expectInvalidContextException);
  });
 diff --git a/toolkit/components/utils/simpleServices.js b/toolkit/components/utils/simpleServices.js
 index 9343cd7..4ad42d7 100644
