@@ -45,15 +45,15 @@ index 0000000..6cf5f67
 +  });
 +});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 7f458d2..0146291 100644
+index f1364ed..d58ee83 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -16,16 +16,17 @@ support-files =
-   file_script_good.js
+@@ -17,16 +17,17 @@ support-files =
    file_script_bad.js
    file_script_redirect.js
    file_script_xhr.js
    file_sample.html
+   redirection.sjs
    file_privilege_escalation.html
    file_ext_background_api_injection.js
    file_permission_xhr.html
@@ -62,15 +62,15 @@ index 7f458d2..0146291 100644
  [test_ext_simple.html]
  [test_ext_geturl.html]
  [test_ext_contentscript.html]
+ skip-if = buildapp == 'b2g' # runat != document_idle is not supported.
  [test_ext_i18n_css.html]
  [test_ext_generate.html]
  [test_ext_localStorage.html]
- [test_ext_onmessage_removelistener.html]
-@@ -44,13 +45,15 @@ support-files =
- [test_ext_cookies.html]
+@@ -53,15 +54,17 @@ skip-if = buildapp == 'b2g' # sender.tab is undefined on b2g.
  [test_ext_cookies_permissions.html]
- skip-if = e10s # Uses cookie service via SpecialPowers.Services, which does not support e10s.
+ skip-if = e10s || buildapp == 'b2g' # Uses cookie service via SpecialPowers.Services, which does not support e10s.
  [test_ext_bookmarks.html]
+ skip-if = buildapp == 'b2g' # unimplemented api.
  [test_ext_alarms.html]
  [test_ext_background_window_properties.html]
  [test_ext_background_sub_windows.html]
@@ -78,10 +78,12 @@ index 7f458d2..0146291 100644
 +[test_ext_background_debugger_attached.html]
 +skip-if = e10s # Uses the AddonManager which can't be used from a content process. This test case reproduces a bug that doesn't need to run in a tab content process in any case.
  [test_ext_jsversion.html]
- skip-if = e10s # Uses a console monitor which doesn't work from a content process. The code being tested doesn't run in a tab content process in any case.
+ skip-if = e10s || buildapp == 'b2g' # Uses a console monitor which doesn't work from a content process. The code being tested doesn't run in a tab content process in any case.
  [test_ext_i18n.html]
  [test_ext_webrequest.html]
+ skip-if = buildapp == 'b2g' # webrequest api uninplemented (bug 1199504)
  [test_ext_webnavigation.html]
+ skip-if = buildapp == 'b2g' # needs TabManager which is not yet implemented
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
 new file mode 100644
 index 0000000..f3fac99

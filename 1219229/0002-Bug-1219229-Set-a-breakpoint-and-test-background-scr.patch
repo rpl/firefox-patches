@@ -1,0 +1,61 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1219229 - Set a breakpoint and test background script loading order.
+
+---
+ .../mochitest/test_ext_background_debugger_attached.html     | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
+index f3fac99..129fd09 100644
+--- a/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_background_debugger_attached.html
+@@ -112,38 +112,42 @@ function installAddon(extensionData) {
+       chromeScript.sendAsyncMessage("load-extension", extensionData);
+     });
+   }
+ 
+   return installAndWait();
+ }
+ 
+ function attachAddonDebugger(client, form) {
+-  return new Promise((resolve) => {
++   return new Promise((resolve) => {
+     client.attachAddon(form.actor, (response) => {
+       response = SpecialPowers.wrap(response);
+ 
+       client.attachThread(response.threadActor, (response, threadClient) => {
+         threadClient = SpecialPowers.wrap(threadClient);
+         response = SpecialPowers.wrap(response);
+         if (threadClient.paused) {
+           threadClient.resume();
+         }
++        client.addOneTimeListener("paused", (event, packet) => {
++          threadClient.resume();
++        });
++
+         resolve();
+       })
+     });
+   });
+ }
+ 
+ add_task(function* test_backgroundPageDebuggerAttach() {
+    let extensionData = {
+      files: {
+-       "background1.js": "console.log('background1.js')",
+-       "background2.js": "console.log('background2.js')",
+-       "background3.js": "console.log('background3.js')",
++       "background1.js": "debugger; console.log('background1.js');",
++       "background2.js": "console.log('background2.js');",
++       "background3.js": "console.log('background3.js');",
+      },
+      manifest: {
+        id: "test@prova.it",
+        background: {
+          scripts: ["background1.js", "background2.js", "background3.js"]
+        }
+      }
+    };
+
