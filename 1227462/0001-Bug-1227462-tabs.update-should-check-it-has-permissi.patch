@@ -1,0 +1,95 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1227462 - tabs.update should check it has permission to execute javascript in the target tab r=kmag
+
+---
+ browser/components/extensions/ext-tabs.js   | 21 ++++++++++++++++++++-
+ toolkit/components/extensions/Extension.jsm | 20 ++++++++++++++++++++
+ 2 files changed, 40 insertions(+), 1 deletion(-)
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+index 8ae7d93..31e9879 100644
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -324,18 +324,37 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+         if (callback) {
+           runSafe(context, callback);
+         }
+       },
+ 
+       update: function(tabId, updateProperties, callback) {
+         let tab = tabId !== null ? TabManager.getTab(tabId) : TabManager.activeTab;
+         let tabbrowser = tab.ownerDocument.defaultView.gBrowser;
++
++        let matchesHost;
++
++
++        if (TabManager.for(extension).hasActiveTabPermission(tab)) {
++          // If we have the "activeTab" permission for this tab, ignore
++          // the host whitelist.
++          matchesHost = ["<all_urls>"];
++        } else {
++          matchesHost = extension.whiteListedHosts.serialize();
++        }
++
+         if (updateProperties.url !== null) {
+-          tab.linkedBrowser.loadURI(updateProperties.url);
++          let updateURI = Services.io.newURI(updateProperties.url, null, null);
++          let targetPrincipal = tab.linkedBrowser.contentDocument.nodePrincipal;
++
++          // TODO: checkAccessTarget should set runtime.lastError
++          if (updateURI.scheme !== "javascript" ||
++              context.checkAccessTargetPrincipal(targetPrincipal, matchesHost)) {
++            tab.linkedBrowser.loadURI(updateProperties.url);
++          }
+         }
+         if (updateProperties.active !== null) {
+           if (updateProperties.active) {
+             tabbrowser.selectedTab = tab;
+           } else {
+             // Not sure what to do here? Which tab should we select?
+           }
+         }
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+index 9a35ac4..089e880 100644
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -243,16 +243,36 @@ ExtensionPage.prototype = {
+   get cloneScope() {
+     return this.contentWindow;
+   },
+ 
+   get principal() {
+     return this.contentWindow.document.nodePrincipal;
+   },
+ 
++  checkAccessTargetPrincipal(targetPrincipal, matchesHost) {
++    if (targetPrincipal.isSystemPrincipal) {
++      Cu.reportError(`Cannot access a ${targetPrincipal.origin} URL`);
++      return false;
++    } else if (targetPrincipal.originAttributes.addonId.length > 0 &&
++               targetPrincipal.originAttributes.addonId != this.extension.id) {
++      Cu.reportError(`Cannot access a ${targetPrincipal.URI.scheme}:// URL of different extension`);
++      return false;
++    }
++
++    let matches = new MatchPattern(matchesHost);
++
++    if (!matches.matches(targetPrincipal.URI)) {
++      Cu.reportError(`Cannot access contents of URL "${targetPrincipal.URI.asciiSpec}". Extension manifest must request permission to access this host.`);
++      return false;
++    }
++
++    return true;
++  },
++
+   checkLoadURL(url, options = {}) {
+     let ssm = Services.scriptSecurityManager;
+ 
+     let flags = ssm.STANDARD;
+     if (!options.allowScript) {
+       flags |= ssm.DISALLOW_SCRIPT;
+     }
+     if (!options.allowInheritsPrincipal) {
+
