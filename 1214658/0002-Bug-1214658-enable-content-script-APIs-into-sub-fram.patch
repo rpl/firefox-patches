@@ -6,11 +6,11 @@ Bug 1214658 - enable content script APIs into sub-frames pointed to a valid add-
 ---
  toolkit/components/extensions/Extension.jsm        | 20 ++---
  toolkit/components/extensions/ExtensionContent.jsm | 89 ++++++++++++++++++----
- .../components/extensions/ExtensionManagement.jsm  | 51 +++++++++++--
- 3 files changed, 130 insertions(+), 30 deletions(-)
+ .../components/extensions/ExtensionManagement.jsm  | 52 +++++++++++--
+ 3 files changed, 131 insertions(+), 30 deletions(-)
 
 diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
-index 9a35ac4..3c24474 100644
+index 9a35ac4..6e9de43 100644
 --- a/toolkit/components/extensions/Extension.jsm
 +++ b/toolkit/components/extensions/Extension.jsm
 @@ -355,22 +355,26 @@ GlobalManager = {
@@ -28,13 +28,13 @@ index 9a35ac4..3c24474 100644
 -    // API into webAccessibleResources or remote web pages.
 -    let principal = contentWindow.document.nodePrincipal;
 -    let id = principal.originAttributes.addonId;
++    let id = ExtensionManagement.getAddonIdForWindow(contentWindow);
++
 +    // We don't inject privileged APIs into sub-frames of a UI page.
 +    const { FULL_PRIVILEGES } = ExtensionManagement.API_LEVELS;
-+    if (ExtensionManagement.getAPILevelForWindow(contentWindow) !== FULL_PRIVILEGES) {
++    if (ExtensionManagement.getAPILevelForWindow(contentWindow, id) !== FULL_PRIVILEGES) {
 +      return;
 +    }
-+
-+    let id = ExtensionManagement.getAddonIdForWindow(contentWindow);
 +
 +    // We don't inject privileged APIs if the addonId is null
 +    // or doesn't exist.
@@ -68,7 +68,7 @@ index 9a35ac4..3c24474 100644
      let eventHandler = docShell.chromeEventHandler;
      let listener = event => {
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
-index bcc2c95..b3e0bde 100644
+index bcc2c95..86355c9 100644
 --- a/toolkit/components/extensions/ExtensionContent.jsm
 +++ b/toolkit/components/extensions/ExtensionContent.jsm
 @@ -211,17 +211,19 @@ function getWindowMessageManager(contentWindow) {
@@ -208,7 +208,7 @@ index bcc2c95..b3e0bde 100644
 +      const { CONTENTSCRIPT_PRIVILEGES } = ExtensionManagement.API_LEVELS;
 +      let extensionId = ExtensionManagement.getAddonIdForWindow(window);
 +
-+      if (ExtensionManagement.getAPILevelForWindow(window) == CONTENTSCRIPT_PRIVILEGES &&
++      if (ExtensionManagement.getAPILevelForWindow(window, extensionId) == CONTENTSCRIPT_PRIVILEGES &&
 +          ExtensionManager.get(extensionId)) {
 +        DocumentManager.createExtensionContext(extensionId, window, { isExtensionPage: true });
 +
@@ -275,10 +275,10 @@ index bcc2c95..b3e0bde 100644
      let extension = ExtensionManager.get(extensionId);
      for (let global of ExtensionContent.globals.keys()) {
 diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
-index 36c29a7..04bd23b 100644
+index 36c29a7..99aa42d 100644
 --- a/toolkit/components/extensions/ExtensionManagement.jsm
 +++ b/toolkit/components/extensions/ExtensionManagement.jsm
-@@ -197,33 +197,72 @@ var Service = {
+@@ -197,33 +197,73 @@ var Service = {
    checkAddonMayLoad(extension, uri) {
      return extension.whiteListedHosts.matchesIgnoringPath(uri);
    },
@@ -318,24 +318,25 @@ index 36c29a7..04bd23b 100644
 +
 +// Finds the API Level ("FULL_PRIVILEGES", "CONTENTSCRIPT_PRIVILEGES", "NO_PRIVILEGES")
 +// with a given a window object.
-+function getAPILevelForWindow(window) {
++function getAPILevelForWindow(window, addonId) {
 +  const { NO_PRIVILEGES, CONTENTSCRIPT_PRIVILEGES, FULL_PRIVILEGES } = API_LEVELS;
 +
-+  // Non WebExtension URLs has no access to APIs
-+  if (!getAddonIdForWindow(window)) {
++  // Non WebExtension URLs and WebExtension URLs from a different extension
++  // has no access to APIs.
++  if (!addonId && getAddonIdForWindow(window) != addonId) {
 +    return NO_PRIVILEGES;
 +  }
 +
 +  let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
 +        .getInterface(Ci.nsIDocShell);
 +
-+  // WebExtension URLs loaded into sub-frame UI have "content script API level privileges"
++  // WebExtension URLs loaded into sub-frame UI have "content script API level privileges".
 +  // (see Bug 1214658 for rationale)
 +  if (docShell.sameTypeParent) {
 +    return CONTENTSCRIPT_PRIVILEGES;
 +  }
 +
-+  // WebExtension URLs loaded into top frames UI could have full API level privileges
++  // WebExtension URLs loaded into top frames UI could have full API level privileges.
 +  return FULL_PRIVILEGES;
 +}
 +
