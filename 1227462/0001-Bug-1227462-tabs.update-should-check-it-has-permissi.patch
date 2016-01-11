@@ -4,15 +4,15 @@
 Bug 1227462 - tabs.update should check it has permission to execute javascript in the target tab r=kmag
 
 ---
- browser/components/extensions/ext-tabs.js   | 21 ++++++++++++++++++++-
- toolkit/components/extensions/Extension.jsm | 20 ++++++++++++++++++++
- 2 files changed, 40 insertions(+), 1 deletion(-)
+ browser/components/extensions/ext-tabs.js   | 24 +++++++++++++++++++++++-
+ toolkit/components/extensions/Extension.jsm | 24 ++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+), 1 deletion(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index 8ae7d93..31e9879 100644
+index 8ae7d93..f54ec90 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -324,18 +324,37 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+@@ -324,18 +324,40 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
          if (callback) {
            runSafe(context, callback);
          }
@@ -24,6 +24,7 @@ index 8ae7d93..31e9879 100644
 +
 +        let matchesHost;
 +
++        TabManager.for(extension).addActiveTabPermission(TabManager.activeTab);
 +
 +        if (TabManager.for(extension).hasActiveTabPermission(tab)) {
 +          // If we have the "activeTab" permission for this tab, ignore
@@ -32,6 +33,8 @@ index 8ae7d93..31e9879 100644
 +        } else {
 +          matchesHost = extension.whiteListedHosts.serialize();
 +        }
++
++        TabManager.for(extension).hasTabPermissionFor.delete(TabManager.activeTab);
 +
          if (updateProperties.url !== null) {
 -          tab.linkedBrowser.loadURI(updateProperties.url);
@@ -52,10 +55,10 @@ index 8ae7d93..31e9879 100644
            }
          }
 diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
-index 9a35ac4..089e880 100644
+index 9a35ac4..968995a 100644
 --- a/toolkit/components/extensions/Extension.jsm
 +++ b/toolkit/components/extensions/Extension.jsm
-@@ -243,16 +243,36 @@ ExtensionPage.prototype = {
+@@ -243,16 +243,40 @@ ExtensionPage.prototype = {
    get cloneScope() {
      return this.contentWindow;
    },
@@ -68,8 +71,12 @@ index 9a35ac4..089e880 100644
 +    if (targetPrincipal.isSystemPrincipal) {
 +      Cu.reportError(`Cannot access a ${targetPrincipal.origin} URL`);
 +      return false;
-+    } else if (targetPrincipal.originAttributes.addonId.length > 0 &&
-+               targetPrincipal.originAttributes.addonId != this.extension.id) {
++    } else if (targetPrincipal.originAttributes.addonId.length > 0) {
++      // The context has always access to pages from the same extension
++      if (targetPrincipal.originAttributes.addonId == this.extension.id) {
++        return true;
++      }
++
 +      Cu.reportError(`Cannot access a ${targetPrincipal.URI.scheme}:// URL of different extension`);
 +      return false;
 +    }

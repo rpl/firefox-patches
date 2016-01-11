@@ -1,0 +1,170 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1227462 - Test tabs.update on javascript URLs. r=kmag
+
+---
+ .../test/browser/browser_ext_tabs_update.js        | 147 +++++++++++++++++++++
+ 1 file changed, 147 insertions(+)
+
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_update.js b/browser/components/extensions/test/browser/browser_ext_tabs_update.js
+index 8e56a74..8c949a3 100644
+--- a/browser/components/extensions/test/browser/browser_ext_tabs_update.js
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_update.js
+@@ -38,8 +38,155 @@ add_task(function* () {
+ 
+   ok(gBrowser.selectedTab == tab2, "correct tab selected");
+ 
+   yield extension.unload();
+ 
+   yield BrowserTestUtils.removeTab(tab1);
+   yield BrowserTestUtils.removeTab(tab2);
+ });
++
++Components.utils.import("resource://gre/modules/Services.jsm");
++let ConsoleAPIStorage = Components.classes["@mozilla.org/consoleAPI-storage;1"]
++      .getService(Components.interfaces.nsIConsoleAPIStorage);
++
++function* testAccessTarget(url, permissions) {
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "permissions": ["tabs"].concat(permissions),
++      "webAccessibleResources": [ "tab.html" ],
++    },
++
++    files: {
++      "tab.html": `
++        <!DOCTYPE>
++        <html>
++          <head>
++            <meta charset="utf-8">
++          </head>
++          <body>
++            <h1>tab page</h1>
++          </body>
++        </html>`,
++    },
++
++    background: function() {
++      browser.test.sendMessage("ready", browser.runtime.getURL("tab.html"));
++      browser.test.onMessage.addListener(() => {
++        browser.tabs.query({ lastFocusedWindow: true }, function(tabs) {
++          let updates = [];
++
++          for (let tab of tabs.slice(1)) {
++            updates.push(new Promise((resolve, reject) => {
++              browser.tabs.update(tab.id, {
++                url: 'javascript:console.log("Permitted javascript url on: " + window.location);',
++              }, resolve);
++            }));
++          }
++
++          Promise.all(updates).then(() => {
++            browser.test.sendMessage("done");
++          });
++        });
++      });
++    },
++  });
++
++  let awaitExtensionTabURL = extension.awaitMessage("ready");
++
++  yield extension.startup();
++
++  if (url == "self") {
++    url = yield awaitExtensionTabURL;
++  }
++
++  info(`Testing on tab with URL ${url}`);
++
++
++  let tab1 = yield BrowserTestUtils.openNewForegroundTab(gBrowser, url);
++  gBrowser.selectedTab = tab1;
++
++  extension.sendMessage("start");
++  yield extension.awaitMessage("done");
++
++  yield BrowserTestUtils.removeTab(tab1);
++  yield extension.unload();
++
++  let errors = Services.console.getMessageArray() || [];
++  let messages = ConsoleAPIStorage.getEvents() || [];
++
++  Services.console.reset();
++  ConsoleAPIStorage.clearEvents();
++
++  return {
++    errors, messages,
++  };
++}
++
++add_task(function* () {
++  info("Start testing tabs.update on javascript URLs");
++
++  let testCases = [{
++    tabURL: "http://example.net",
++    extensionSpecialPermissions: ["activeTab"],
++    expected: [{ expectedMessage: /Permitted javascript url on/ }],
++  }, {
++    tabURL: "http://example.net",
++    extensionSpecialPermissions: ["<all_urls>"],
++    expected: [{ expectedMessage: /Permitted javascript url on/ }],
++  }, {
++    tabURL: "http://example.net",
++    extensionSpecialPermissions: ["http://*/*"],
++    expected: [{ expectedMessage: /Permitted javascript url on/ }],
++  }, {
++    tabURL: "http://example.net",
++    extensionSpecialPermissions: ["http://example.net/*"],
++    expected: [{ expectedMessage: /Permitted javascript url on/ }],
++  }, {
++    tabURL: "http://example.net",
++    extensionSpecialPermissions: ["*://example.net/*"],
++    expected: [{ expectedMessage: /Permitted javascript url on/ }],
++  }, {
++    tabURL: "http://example.net",
++    extensionSpecialPermissions: [],
++    expected: [{ expectedError: /Extension manifest must request permission to access this host/ }],
++  }, {
++    tabURL: "about:config",
++    extensionSpecialPermissions: [],
++    expected: [{ expectedError: /Cannot access a \[System Principal\] URL/ }],
++  }, {
++    tabURL: "about:config",
++    extensionSpecialPermissions: ["activeTab"],
++    expected: [{ expectedError: /Cannot access a \[System Principal\] URL/ }],
++  }, {
++    tabURL: "self",
++    extensionSpecialPermissions: [],
++    expected: [{ expectedMessage: /Permitted javascript url on/ }],
++  }];
++
++  for (let { tabURL, extensionSpecialPermissions, expected } of testCases) {
++    let { errors, messages } = yield* testAccessTarget(tabURL, extensionSpecialPermissions);
++
++    expected.forEach(({ expectedError, expectedMessage }) => {
++      if (expectedError) {
++        info(`Search expect ${expectedError} error`);
++
++        let errorCount = errors.filter((error) => {
++          return expectedError.test(error);
++        }).length;
++
++        is(errorCount, 1, `Expected error found`);
++      }
++
++      if (expectedMessage) {
++        info(`Search expect ${expectedMessage} message`);
++
++        let messageCount = messages.filter((message) => {
++          return expectedMessage.test(message.arguments[0]);
++        }).length;
++
++        is(messageCount, 1, `Expected message found`);
++      }
++    });
++  }
++
++  info("done");
++});
+
