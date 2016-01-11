@@ -6,8 +6,8 @@ Bug 1214658 - add test case of an webextension page iframe created from a conten
 ---
  .../mochitest/file_ext_collect_security_errors.js  |  10 ++
  .../extensions/test/mochitest/mochitest.ini        |   2 +
- .../test_ext_contentscript_create_iframe.html      | 184 +++++++++++++++++++++
- 3 files changed, 196 insertions(+)
+ .../test_ext_contentscript_create_iframe.html      | 188 +++++++++++++++++++++
+ 3 files changed, 200 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_collect_security_errors.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 
@@ -28,15 +28,15 @@ index 0000000..8974d4b
 +  }
 +});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 7f458d2..cce010f 100644
+index f1364ed..678e286 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -16,20 +16,22 @@ support-files =
-   file_script_good.js
+@@ -17,21 +17,23 @@ support-files =
    file_script_bad.js
    file_script_redirect.js
    file_script_xhr.js
    file_sample.html
+   redirection.sjs
    file_privilege_escalation.html
    file_ext_background_api_injection.js
    file_permission_xhr.html
@@ -45,6 +45,7 @@ index 7f458d2..cce010f 100644
  [test_ext_simple.html]
  [test_ext_geturl.html]
  [test_ext_contentscript.html]
+ skip-if = buildapp == 'b2g' # runat != document_idle is not supported.
 +[test_ext_contentscript_create_iframe.html]
  [test_ext_i18n_css.html]
  [test_ext_generate.html]
@@ -52,14 +53,14 @@ index 7f458d2..cce010f 100644
  [test_ext_onmessage_removelistener.html]
  [test_ext_notifications.html]
  [test_ext_permission_xhr.html]
+ skip-if = buildapp == 'b2g' # JavaScript error: jar:remoteopenfile:///data/local/tmp/generated-extension.xpi!/content.js, line 46: NS_ERROR_ILLEGAL_VALUE:
  [test_ext_runtime_connect.html]
- [test_ext_runtime_connect2.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..b0bb3c9
+index 0000000..26367ed
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,188 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -78,28 +79,20 @@ index 0000000..b0bb3c9
 +  <html>
 +    <head>
 +      <meta charset="utf-8">
-+      <script>
-+       var manifest = browser.runtime.getManifest();
-+       browser.runtime.sendMessage({
-+         name: "content-script-iframe-loaded",
-+         availableAPIs: Object.keys(browser),
-+         manifest
-+       });
-+      </script>
++      <script type="text/javascript" src="content_script_iframe.js"></script>
 +    </head>
 +  </html>
 +</textarea>
 +
-+<script type="application/javascript;version=1.8">
++<script type="text/javascript">
 +"use strict";
 +
-+add_task(function* test_contentscript_create_iframe()
-+{
++add_task(function* test_contentscript_create_iframe() {
 +  function backgroundScript() {
 +    browser.runtime.onMessage.addListener((msg, sender) => {
-+      var { name, availableAPIs, manifest } = msg;
-+      var hasExtTabsAPI = availableAPIs.indexOf("tabs") > 0;
-+      var hasExtWindowsAPI = availableAPIs.indexOf("windows") > 0;
++      let { name, availableAPIs, manifest } = msg;
++      let hasExtTabsAPI = availableAPIs.indexOf("tabs") > 0;
++      let hasExtWindowsAPI = availableAPIs.indexOf("windows") > 0;
 +
 +      browser.test.assertFalse(hasExtTabsAPI, "the created iframe should not be able to use privileged APIs (tabs)");
 +      browser.test.assertFalse(hasExtWindowsAPI, "the created iframe should not be able to use privileged APIs (windows)");
@@ -107,20 +100,31 @@ index 0000000..b0bb3c9
 +      browser.test.assertTrue(
 +        JSON.stringify(manifest) == JSON.stringify(chrome.runtime.getManifest()),
 +        "the add-on manifest should be accessible from the created iframe"
-+      )
++      );
 +
 +      browser.test.sendMessage(name);
 +    });
 +  }
 +
 +  function contentScript() {
-+    var failToLoadIframe = document.createElement("iframe");
++    let failToLoadIframe = document.createElement("iframe");
 +    failToLoadIframe.setAttribute("src", browser.runtime.getURL("non_web_accessible.html"));
 +    document.body.appendChild(failToLoadIframe);
 +
-+    var iframe = document.createElement("iframe");
++    let iframe = document.createElement("iframe");
 +    iframe.setAttribute("src", browser.runtime.getURL("content_script_iframe.html"));
 +    document.body.appendChild(iframe);
++  }
++
++  function contentScriptIframe() {
++    let manifest = browser.runtime.getManifest();
++    let availableAPIs = Object.keys(browser);
++
++    browser.runtime.sendMessage({
++      name: "content-script-iframe-loaded",
++      availableAPIs,
++      manifest,
++    });
 +  }
 +
 +  let extensionData = {
@@ -129,20 +133,21 @@ index 0000000..b0bb3c9
 +        {
 +          "matches": ["http://mochi.test/*/file_sample.html"],
 +          "js": ["content_script.js"],
-+          "run_at": "document_end"
-+        }
++          "run_at": "document_end",
++        },
 +      ],
 +      "web_accessible_resources": [
 +        "content_script_iframe.html",
-+      ]
++      ],
 +    },
 +
 +    background: "(" + backgroundScript + ")()",
 +
 +    files: {
-+      "content_script.js": "(" + contentScript + ")()",
++      "content_script.js": "new " + contentScript,
 +      "content_script_iframe.html": document.querySelector("#test-asset").textContent,
-+      "non_web_accessible.html": "<h1>This should not be loaded in an iframe inside a content URL</h1>"
++      "content_script_iframe.js": "new " + contentScriptIframe,
++      "non_web_accessible.html": "<h1>This should not be loaded in an iframe inside a content URL</h1>",
 +    },
 +  };
 +
@@ -157,12 +162,12 @@ index 0000000..b0bb3c9
 +
 +  let win = window.open("file_sample.html");
 +
-+   let awaitSecurityError = new Promise(resolve => {
-+     let chromeScript = SpecialPowers.loadChromeScript(
-+       SimpleTest.getTestFileURL("file_ext_collect_security_errors.js"));
++  let awaitSecurityError = new Promise(resolve => {
++    let chromeScript = SpecialPowers.loadChromeScript(
++      SimpleTest.getTestFileURL("file_ext_collect_security_errors.js"));
 +
-+     chromeScript.addMessageListener("security-error-message", resolve);
-+   });
++    chromeScript.addMessageListener("security-error-message", resolve);
++  });
 +
 +  yield Promise.all([waitForLoad(win), contentScriptIframeCreatedPromise]);
 +  info("content script privileged iframe loaded and executed");
@@ -186,7 +191,7 @@ index 0000000..b0bb3c9
 +
 +  const SECURITY_ERROR_REGEXP = /Security Error: Content at (.*) may not load or link to (.*)/;
 +  let securityErrorMessage = yield awaitSecurityError;
-+  let matchSecurityError = securityErrorMessage.message.match(SECURITY_ERROR_REGEXP)
++  let matchSecurityError = securityErrorMessage.message.match(SECURITY_ERROR_REGEXP);
 +
 +  if (matchSecurityError) {
 +    ok(/non_web_accessible\.html/.test(matchSecurityError[2]), "non web accesible URLs are blocked " +
@@ -199,7 +204,7 @@ index 0000000..b0bb3c9
 +  iframeWindow.eval("window.GET_MANIFEST = browser.runtime.getManifest.bind(null);");
 +
 +  let expectedManifest = iframeWindow.eval("GET_MANIFEST()");
-+  ok(!!expectedManifest.content_scripts, "GET_MANIFEST() returns manifest data before extension unload")
++  ok(!!expectedManifest.content_scripts, "GET_MANIFEST() returns manifest data before extension unload");
 +
 +  yield extension.unload();
 +  info("extension unloaded");
@@ -213,7 +218,7 @@ index 0000000..b0bb3c9
 +
 +  try {
 +    manifest = iframeWindow.eval("browser.runtime.getManifest()");
-+  } catch(e) {
++  } catch (e) {
 +    manifestException = e;
 +  }
 +
@@ -228,7 +233,7 @@ index 0000000..b0bb3c9
 +
 +  try {
 +    getManifest = iframeWindow.eval("GET_MANIFEST()");
-+  } catch(e) {
++  } catch (e) {
 +    getManifestException = e;
 +  }
 +
