@@ -1,0 +1,40 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1227462 - tabs.update should call checkLoadURL r=kmag
+
+---
+ browser/components/extensions/ext-tabs.js | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+index 8ae7d93..c5bd26f 100644
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -324,18 +324,24 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+         if (callback) {
+           runSafe(context, callback);
+         }
+       },
+ 
+       update: function(tabId, updateProperties, callback) {
+         let tab = tabId !== null ? TabManager.getTab(tabId) : TabManager.activeTab;
+         let tabbrowser = tab.ownerDocument.defaultView.gBrowser;
++
+         if (updateProperties.url !== null) {
+-          tab.linkedBrowser.loadURI(updateProperties.url);
++          if (context.checkLoadURL(updateProperties.url)) {
++            tab.linkedBrowser.loadURI(updateProperties.url);
++          } else {
++            // TODO: runtime.lastError should be set
++            Cu.reportError(`Permission denied on tabs.update an url to the target tab ${tabId}`);
++          }
+         }
+         if (updateProperties.active !== null) {
+           if (updateProperties.active) {
+             tabbrowser.selectedTab = tab;
+           } else {
+             // Not sure what to do here? Which tab should we select?
+           }
+         }
+
