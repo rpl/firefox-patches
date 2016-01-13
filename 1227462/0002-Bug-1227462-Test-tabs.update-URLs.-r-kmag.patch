@@ -8,7 +8,7 @@ Bug 1227462 - Test tabs.update URLs. r=kmag
  1 file changed, 144 insertions(+)
 
 diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_update.js b/browser/components/extensions/test/browser/browser_ext_tabs_update.js
-index 8e56a74..3f3437f 100644
+index 8e56a74..ff947b3 100644
 --- a/browser/components/extensions/test/browser/browser_ext_tabs_update.js
 +++ b/browser/components/extensions/test/browser/browser_ext_tabs_update.js
 @@ -38,8 +38,152 @@ add_task(function* () {
@@ -110,12 +110,12 @@ index 8e56a74..3f3437f 100644
 +      expectedError: false,
 +    },
 +    {
-+      tabsUpdateURL: "about:addons",
++      tabsUpdateURL: "self",
 +      expectedError: false,
 +    },
 +    {
-+      tabsUpdateURL: "self",
-+      expectedError: false,
++      tabsUpdateURL: "about:addons",
++      expectedError: true,
 +    },
 +    {
 +      tabsUpdateURL: "javascript:console.log('tabs.update execute javascript')",
@@ -139,7 +139,7 @@ index 8e56a74..3f3437f 100644
 +    </html>`;
 +
 +  let existentTabURLList = [
-+    "http://example.net", "about:robots", "self", dataURLPage,
++    "http://example.net", "about:addons", "self", dataURLPage,
 +  ];
 +
 +  let testCases = existentTabURLList.reduce((acc, existentTabURL) => {
