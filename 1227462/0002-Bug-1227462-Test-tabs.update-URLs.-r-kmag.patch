@@ -4,14 +4,14 @@
 Bug 1227462 - Test tabs.update URLs. r=kmag
 
 ---
- .../test/browser/browser_ext_tabs_update.js        | 144 +++++++++++++++++++++
- 1 file changed, 144 insertions(+)
+ .../test/browser/browser_ext_tabs_update.js        | 154 +++++++++++++++++++++
+ 1 file changed, 154 insertions(+)
 
 diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_update.js b/browser/components/extensions/test/browser/browser_ext_tabs_update.js
-index 8e56a74..ff947b3 100644
+index 8e56a74..1c59bc5 100644
 --- a/browser/components/extensions/test/browser/browser_ext_tabs_update.js
 +++ b/browser/components/extensions/test/browser/browser_ext_tabs_update.js
-@@ -38,8 +38,152 @@ add_task(function* () {
+@@ -38,8 +38,162 @@ add_task(function* () {
  
    ok(gBrowser.selectedTab == tab2, "correct tab selected");
  
@@ -104,29 +104,6 @@ index 8e56a74..ff947b3 100644
 +
 +  let errorRegExp = /Permission denied on tabs.update/;
 +
-+  let checkList = [
-+    {
-+      tabsUpdateURL: "http://example.net",
-+      expectedError: false,
-+    },
-+    {
-+      tabsUpdateURL: "self",
-+      expectedError: false,
-+    },
-+    {
-+      tabsUpdateURL: "about:addons",
-+      expectedError: true,
-+    },
-+    {
-+      tabsUpdateURL: "javascript:console.log('tabs.update execute javascript')",
-+      expectedError: true,
-+    },
-+    {
-+      tabsUpdateURL: "data:text/html,<h1>data url page</h1>",
-+      expectedError: true,
-+    },
-+  ];
-+
 +  let dataURLPage = `
 +    data:text/html,<!DOCTYPE html>
 +    <html>
@@ -139,7 +116,38 @@ index 8e56a74..ff947b3 100644
 +    </html>`;
 +
 +  let existentTabURLList = [
-+    "http://example.net", "about:addons", "self", dataURLPage,
++    "http://example.net", "self", "about:blank", "about:robots", "about:addons", dataURLPage,
++  ];
++
++  let checkList = [
++    {
++      tabsUpdateURL: "http://example.net",
++      expectedError: false,
++    },
++    {
++      tabsUpdateURL: "self",
++      expectedError: false,
++    },
++    {
++      tabsUpdateURL: "about:blank",
++      expectedError: false,
++    },
++    {
++      tabsUpdateURL: "about:robots",
++      expectedError: false,
++    },
++    {
++      tabsUpdateURL: "about:addons",
++      expectedError: true,
++    },
++    {
++      tabsUpdateURL: "javascript:console.log('tabs.update execute javascript')",
++      expectedError: true,
++    },
++    {
++      tabsUpdateURL: dataURLPage,
++      expectedError: true,
++    },
 +  ];
 +
 +  let testCases = existentTabURLList.reduce((acc, existentTabURL) => {
@@ -155,10 +163,12 @@ index 8e56a74..ff947b3 100644
 +
 +    let errorCount = errors.filter((error) => errorRegExp.test(error)).length;
 +
++    let msg = `should be logged on update a "${existentTabURL}" tab with an "${tabsUpdateURL}" url`;
++
 +    if (expectedError) {
-+      is(errorCount, 1, "The number of errors found should be 1");
++      is(errorCount, 1, `An error ${msg}`);
 +    } else {
-+      is(errorCount, 0, "The number of errors found should be 0");
++      is(errorCount, 0, `No errors ${msg}`);
 +    }
 +  }
 +
