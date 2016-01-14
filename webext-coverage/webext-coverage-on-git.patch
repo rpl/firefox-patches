@@ -1,0 +1,14 @@
+diff --git a/toolkit/components/extensions/test_coverage.sh b/toolkit/components/extensions/test_coverage.sh
+index 1d186ae..3d803af 100755
+--- a/toolkit/components/extensions/test_coverage.sh
++++ b/toolkit/components/extensions/test_coverage.sh
+@@ -2,7 +2,8 @@
+ set -e
+ 
+ IFS="$(echo)"
+-cd $(hg root)
++REPO_ROOT_DIR="$(hg root || git rev-parse --show-toplevel)"
++PATH=$PATH:$(pwd)
+ 
+ echo Instrumenting WebExtension code
+ ${PYTHON:-python} toolkit/components/extensions/instrument_code.py
