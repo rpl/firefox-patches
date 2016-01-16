@@ -26,7 +26,7 @@ index e6e16af..d92e71f 100644
 \ No newline at end of file
 diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
 new file mode 100644
-index 0000000..dd835e8
+index 0000000..e81817b
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
 @@ -0,0 +1,66 @@
@@ -71,7 +71,7 @@ index 0000000..dd835e8
 +  info("error occurred");
 +
 +  let {
-+    errorOccurredDetails, getAllFramesDetails, getFrameDetail
++    errorOccurredDetails, getAllFramesDetails, getFrameDetail,
 +  } = yield extension.awaitMessage("getAllFrames.details");
 +
 +  is(errorOccurredDetails.url, NO_CERT_URL, "an onErrorOccurred event should has been raised with the expected URL");

@@ -6,12 +6,12 @@ Bug 1190685 - [webext] Implements webNavigation.getFrame/getAllFrames API method
 ---
  toolkit/components/extensions/ext-webNavigation.js | 23 ++++++
  .../extensions/schemas/web_navigation.json         |  6 +-
- toolkit/modules/addons/WebNavigation.jsm           | 63 +++++++++++++++-
- toolkit/modules/addons/WebNavigationContent.js     | 85 ++++++++++++++++++++++
- 4 files changed, 172 insertions(+), 5 deletions(-)
+ toolkit/modules/addons/WebNavigation.jsm           | 92 +++++++++++++++++++++-
+ toolkit/modules/addons/WebNavigationContent.js     | 85 ++++++++++++++++++++
+ 4 files changed, 201 insertions(+), 5 deletions(-)
 
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
-index e3fac12..fe9ef02 100644
+index e3fac12..7fac822 100644
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js
 @@ -55,21 +55,44 @@ function WebNavigationEventManager(context, eventName) {
@@ -46,13 +46,13 @@ index e3fac12..fe9ef02 100644
        onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
 +      getAllFrames(details, callback) {
 +        let tab = TabManager.getTab(details.tabId);
-+        WebNavigation.getAllFrames(tab, extension, details, (results) => {
++        WebNavigation.getAllFrames(tab, context, details, (results) => {
 +          runSafe(context, callback, results.map(convertGetFrameResult.bind(null, details.tabId)));
 +        });
 +      },
 +      getFrame(details, callback) {
 +        let tab = TabManager.getTab(details.tabId);
-+        WebNavigation.getFrame(tab, extension, details, (result) => {
++        WebNavigation.getFrame(tab, context, details, (result) => {
 +          runSafe(context, callback, convertGetFrameResult(details.tabId, result));
 +        });
 +      },
@@ -121,11 +121,10 @@ index 9236bc6..9df5a96 100644
              "items": { "$ref": "events.UrlFilter" },
              "description": "Conditions that the URL being navigated to must satisfy. The 'schemes' and 'ports' fields of UrlFilter are ignored for this event."
 diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
-index b62e321..eb41a6f 100644
+index b62e321..26e29df 100644
 --- a/toolkit/modules/addons/WebNavigation.jsm
 +++ b/toolkit/modules/addons/WebNavigation.jsm
-@@ -16,34 +16,45 @@ Cu.import("resource://gre/modules/Services.jsm");
- // TODO:
+@@ -17,33 +17,46 @@ Cu.import("resource://gre/modules/Services.jsm");
  // Transition types and qualifiers
  // onReferenceFragmentUpdated also triggers for pushState
  // getFrames, getAllFrames
@@ -133,10 +132,12 @@ index b62e321..eb41a6f 100644
  
  var Manager = {
    listeners: new Map(),
+ 
++  lastReqId: 0,
 +  requests: new Map(),
 +
 +  initialized: false,
- 
++
    init() {
 +    this.lastReqId = 0;
      Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
@@ -171,7 +172,7 @@ index b62e321..eb41a6f 100644
      }
      let listeners = this.listeners.get(type);
      listeners.add(listener);
-@@ -72,16 +83,61 @@ var Manager = {
+@@ -72,16 +85,88 @@ var Manager = {
  
        case "Extension:LocationChange":
          this.onLocationChange(target, data);
@@ -190,31 +191,58 @@ index b62e321..eb41a6f 100644
 +    }
 +  },
 +
-+  getFrame(tab, extension, details, callback) {
-+    if (!this.initialized) {
-+      this.init();
-+    }
++  addExtensionRequest(context, callback) {
++    let requestId = `${context.extension.uuid}-${++this.lastReqId}`;
 +
-+    let data = { details, reqId: ++this.lastReqId };
-+    let mm = tab.linkedBrowser.messageManager;
-+    mm.sendAsyncMessage("Extension:GetFrame:Req", data);
-+    this.requests[data.reqId] = callback;
++    let cleanupOnClose = {
++      close: () => this.requests.delete(requestId),
++    };
++    context.callOnClose(cleanupOnClose);
++
++    this.requests.set(requestId, (...args) => {
++      context.forgetOnClose(cleanupOnClose);
++      callback.apply(null, args);
++    });
++
++    return requestId;
 +  },
 +
-+  getAllFrames(tab, extension, details, callback) {
++  popExtensionRequest(requestId) {
++    if (!this.requests.has(requestId)) {
++      return null;
++    }
++
++    let callback = this.requests.get(requestId);
++    this.requests.delete(requestId);
++
++    return callback;
++  },
++
++  getFrame(tab, context, details, callback) {
 +    if (!this.initialized) {
 +      this.init();
 +    }
 +
-+    let data = { details, reqId: ++this.lastReqId };
++    let reqId = this.addExtensionRequest(context, callback);
++    let data = { details, reqId };
++    let mm = tab.linkedBrowser.messageManager;
++    mm.sendAsyncMessage("Extension:GetFrame:Req", data);
++  },
++
++  getAllFrames(tab, context, details, callback) {
++    if (!this.initialized) {
++      this.init();
++    }
++
++    let reqId = this.addExtensionRequest(context, callback);
++    let data = { details, reqId };
 +    let mm = tab.linkedBrowser.messageManager;
 +    mm.sendAsyncMessage("Extension:GetAllFrames:Req", data);
-+    this.requests[data.reqId] = callback;
 +  },
 +
 +  onGetFrameResponse(browser, data) {
 +    let { reqId, details } = data;
-+    let cb = this.requests[reqId];
++    let cb = this.popExtensionRequest(reqId);
 +    if (cb) {
 +      cb(details);
 +    }
@@ -222,7 +250,7 @@ index b62e321..eb41a6f 100644
 +
 +  onGetAllFramesResponse(browser, data) {
 +    let { reqId, details } = data;
-+    let cb = this.requests[reqId];
++    let cb = this.popExtensionRequest(reqId);
 +    if (cb) {
 +      cb(details);
      }
@@ -233,7 +261,7 @@ index b62e321..eb41a6f 100644
      if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW) {
        let url = data.requestURL;
        if (stateFlags & Ci.nsIWebProgressListener.STATE_START) {
-@@ -142,16 +198,19 @@ const EVENTS = [
+@@ -142,16 +227,19 @@ const EVENTS = [
    "onCompleted",
    "onErrorOccurred",
    "onReferenceFragmentUpdated",
