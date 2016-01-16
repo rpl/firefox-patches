@@ -1,0 +1,355 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1190685 - [webext] Implements webNavigation.getFrame/getAllFrames API methods. r=kmag
+
+---
+ toolkit/components/extensions/ext-webNavigation.js | 23 ++++++
+ .../extensions/schemas/web_navigation.json         |  6 +-
+ toolkit/modules/addons/WebNavigation.jsm           | 63 +++++++++++++++-
+ toolkit/modules/addons/WebNavigationContent.js     | 85 ++++++++++++++++++++++
+ 4 files changed, 172 insertions(+), 5 deletions(-)
+
+diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
+index e3fac12..fe9ef02 100644
+--- a/toolkit/components/extensions/ext-webNavigation.js
++++ b/toolkit/components/extensions/ext-webNavigation.js
+@@ -55,21 +55,44 @@ function WebNavigationEventManager(context, eventName) {
+     };
+   };
+ 
+   return SingletonEventManager.call(this, context, name, register);
+ }
+ 
+ WebNavigationEventManager.prototype = Object.create(SingletonEventManager.prototype);
+ 
++function convertGetFrameResult(tabId, data) {
++  return {
++    errorOccurred: data.errorOccurred,
++    url: data.url,
++    tabId,
++    frameId: ExtensionManagement.getFrameId(data.windowId),
++    parentFrameId: ExtensionManagement.getParentFrameId(data.parentWindowId, data.windowId),
++  };
++}
++
+ extensions.registerSchemaAPI("webNavigation", "webNavigation", (extension, context) => {
+   return {
+     webNavigation: {
+       onBeforeNavigate: new WebNavigationEventManager(context, "onBeforeNavigate").api(),
+       onCommitted: new WebNavigationEventManager(context, "onCommitted").api(),
+       onDOMContentLoaded: new WebNavigationEventManager(context, "onDOMContentLoaded").api(),
+       onCompleted: new WebNavigationEventManager(context, "onCompleted").api(),
+       onErrorOccurred: new WebNavigationEventManager(context, "onErrorOccurred").api(),
+       onReferenceFragmentUpdated: new WebNavigationEventManager(context, "onReferenceFragmentUpdated").api(),
++      onHistoryStateUpdated: ignoreEvent(context, "webNavigation.onHistoryStateUpdated"),
+       onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
++      getAllFrames(details, callback) {
++        let tab = TabManager.getTab(details.tabId);
++        WebNavigation.getAllFrames(tab, extension, details, (results) => {
++          runSafe(context, callback, results.map(convertGetFrameResult.bind(null, details.tabId)));
++        });
++      },
++      getFrame(details, callback) {
++        let tab = TabManager.getTab(details.tabId);
++        WebNavigation.getFrame(tab, extension, details, (result) => {
++          runSafe(context, callback, convertGetFrameResult(details.tabId, result));
++        });
++      },
+     },
+   };
+ });
+diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit/components/extensions/schemas/web_navigation.json
+index 9236bc6..9df5a96 100644
+--- a/toolkit/components/extensions/schemas/web_navigation.json
++++ b/toolkit/components/extensions/schemas/web_navigation.json
+@@ -17,17 +17,17 @@
+         "id": "TransitionQualifier",
+         "type": "string",
+         "enum": ["client_redirect", "server_redirect", "forward_back", "from_address_bar"]
+       }
+     ],
+     "functions": [
+       {
+         "name": "getFrame",
+-        "unsupported": true,
++        "unsupported": false,
+         "type": "function",
+         "description": "Retrieves information about the given frame. A frame refers to an &lt;iframe&gt; or a &lt;frame&gt; of a web page and is identified by a tab ID and a frame ID.",
+         "parameters": [
+           {
+             "type": "object",
+             "name": "details",
+             "description": "Information about the frame to retrieve information about.",
+             "properties": {
+@@ -59,17 +59,17 @@
+                 }
+               }
+             ]
+           }
+         ]
+       },
+       {
+         "name": "getAllFrames",
+-        "unsupported": true,
++        "unsupported": false,
+         "type": "function",
+         "description": "Retrieves information about all frames of a given tab.",
+         "parameters": [
+           {
+             "type": "object",
+             "name": "details",
+             "description": "Information about the tab to retrieve all frames from.",
+             "properties": {
+@@ -320,17 +320,17 @@
+               "tabId": {"type": "integer", "description": "The ID of the tab that replaced the old tab."},
+               "timeStamp": {"type": "number", "description": "The time when the replacement happened, in milliseconds since the epoch."}
+             }
+           }
+         ]
+       },
+       {
+         "name": "onHistoryStateUpdated",
+-        "unsupported": true,
++        "unsupported": false,
+         "type": "function",
+         "description": "Fired when the frame's history was updated to a new URL. All future events for that frame will use the updated URL.",
+         "filters": [
+           {
+             "name": "url",
+             "type": "array",
+             "items": { "$ref": "events.UrlFilter" },
+             "description": "Conditions that the URL being navigated to must satisfy. The 'schemes' and 'ports' fields of UrlFilter are ignored for this event."
+diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
+index b62e321..eb41a6f 100644
+--- a/toolkit/modules/addons/WebNavigation.jsm
++++ b/toolkit/modules/addons/WebNavigation.jsm
+@@ -16,34 +16,45 @@ Cu.import("resource://gre/modules/Services.jsm");
+ // TODO:
+ // Transition types and qualifiers
+ // onReferenceFragmentUpdated also triggers for pushState
+ // getFrames, getAllFrames
+ // onCreatedNavigationTarget, onHistoryStateUpdated
+ 
+ var Manager = {
+   listeners: new Map(),
++  requests: new Map(),
++
++  initialized: false,
+ 
+   init() {
++    this.lastReqId = 0;
+     Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
+     Services.mm.addMessageListener("Extension:StateChange", this);
+     Services.mm.addMessageListener("Extension:LocationChange", this);
++    Services.mm.addMessageListener("Extension:GetFrame:Res", this);
++    Services.mm.addMessageListener("Extension:GetAllFrames:Res", this);
+     Services.mm.loadFrameScript("resource://gre/modules/WebNavigationContent.js", true);
++    this.initialized = true;
+   },
+ 
+   uninit() {
++    this.lastReqId = 0;
+     Services.mm.removeMessageListener("Extension:StateChange", this);
+     Services.mm.removeMessageListener("Extension:LocationChange", this);
+     Services.mm.removeMessageListener("Extension:DOMContentLoaded", this);
++    Services.mm.removeMessageListener("Extension:GetFrame:Res", this);
++    Services.mm.removeMessageListener("Extension:GetAllFrames:Res", this);
+     Services.mm.removeDelayedFrameScript("resource://gre/modules/WebNavigationContent.js");
+     Services.mm.broadcastAsyncMessage("Extension:DisableWebNavigation");
++    this.initialized = false;
+   },
+ 
+   addListener(type, listener) {
+-    if (this.listeners.size == 0) {
++    if (!this.initialized) {
+       this.init();
+     }
+ 
+     if (!this.listeners.has(type)) {
+       this.listeners.set(type, new Set());
+     }
+     let listeners = this.listeners.get(type);
+     listeners.add(listener);
+@@ -72,16 +83,61 @@ var Manager = {
+ 
+       case "Extension:LocationChange":
+         this.onLocationChange(target, data);
+         break;
+ 
+       case "Extension:DOMContentLoaded":
+         this.onLoad(target, data);
+         break;
++      case "Extension:GetFrame:Res":
++        this.onGetFrameResponse(target, data);
++        break;
++      case "Extension:GetAllFrames:Res":
++        this.onGetAllFramesResponse(target, data);
++        break;
++
++    }
++  },
++
++  getFrame(tab, extension, details, callback) {
++    if (!this.initialized) {
++      this.init();
++    }
++
++    let data = { details, reqId: ++this.lastReqId };
++    let mm = tab.linkedBrowser.messageManager;
++    mm.sendAsyncMessage("Extension:GetFrame:Req", data);
++    this.requests[data.reqId] = callback;
++  },
++
++  getAllFrames(tab, extension, details, callback) {
++    if (!this.initialized) {
++      this.init();
++    }
++
++    let data = { details, reqId: ++this.lastReqId };
++    let mm = tab.linkedBrowser.messageManager;
++    mm.sendAsyncMessage("Extension:GetAllFrames:Req", data);
++    this.requests[data.reqId] = callback;
++  },
++
++  onGetFrameResponse(browser, data) {
++    let { reqId, details } = data;
++    let cb = this.requests[reqId];
++    if (cb) {
++      cb(details);
++    }
++  },
++
++  onGetAllFramesResponse(browser, data) {
++    let { reqId, details } = data;
++    let cb = this.requests[reqId];
++    if (cb) {
++      cb(details);
+     }
+   },
+ 
+   onStateChange(browser, data) {
+     let stateFlags = data.stateFlags;
+     if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW) {
+       let url = data.requestURL;
+       if (stateFlags & Ci.nsIWebProgressListener.STATE_START) {
+@@ -142,16 +198,19 @@ const EVENTS = [
+   "onCompleted",
+   "onErrorOccurred",
+   "onReferenceFragmentUpdated",
+ 
+   // "onCreatedNavigationTarget",
+   // "onHistoryStateUpdated",
+ ];
+ 
+-var WebNavigation = {};
++var WebNavigation = {
++  getFrame: Manager.getFrame.bind(Manager),
++  getAllFrames: Manager.getAllFrames.bind(Manager),
++};
+ 
+ for (let event of EVENTS) {
+   WebNavigation[event] = {
+     addListener: Manager.addListener.bind(Manager, event),
+     removeListener: Manager.removeListener.bind(Manager, event),
+   };
+ }
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+index ae27b73..7f079a2 100644
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -93,8 +93,93 @@ addEventListener("unload", () => {
+   if (!disabled) {
+     WebProgressListener.uninit();
+   }
+ });
+ addMessageListener("Extension:DisableWebNavigation", () => {
+   disabled = true;
+   WebProgressListener.uninit();
+ });
++
++function getChildDocShells(docShell) {
++  let docShellsEnum = docShell.getDocShellEnumerator(
++    Ci.nsIDocShellTreeItem.typeAll,
++    Ci.nsIDocShell.ENUMERATE_FORWARDS
++  );
++
++  let docShells = [];
++  while (docShellsEnum.hasMoreElements()) {
++    let docShell = docShellsEnum.getNext();
++    docShell.QueryInterface(Ci.nsIInterfaceRequestor)
++      .getInterface(Ci.nsIWebProgress);
++    docShells.push(docShell);
++  }
++  return docShells;
++}
++
++// Compute the Error Page loadType value. (See Bug 1190685 for rationale)
++// - LOAD_CMD_NORMAL (as defined in "docshell/base/nsIDocShell.idl"):
++// - LOAD_FLAGS_ERROR_PAGE (as defined in "docshell/base/nsDocShellLoadTypes.h")
++// - MAKE_LOAD_TYPE (as defined in "docshell/base/nsDocShellLoadTypes.h")
++// - LOAD_ERROR_PAGE (as defined in "docshell/base/nsDocShellLoadTypes.h")
++const LOAD_CMD_NORMAL = 0x1;
++const LOAD_FLAGS_ERROR_PAGE = 0x1;
++const MAKE_LOAD_TYPE = (type, flags) => (type | (flags << 16));
++const LOAD_ERROR_PAGE = MAKE_LOAD_TYPE(LOAD_CMD_NORMAL, LOAD_FLAGS_ERROR_PAGE);
++
++function docShellToWindow(docShell) {
++  return docShell.QueryInterface(Ci.nsIInterfaceRequestor)
++    .getInterface(Ci.nsIDOMWindow);
++}
++
++function convertWindowToFrameDetail(window) {
++  return {
++    windowId: getWindowId(window),
++    parentWindowId: getParentWindowId(window),
++    url: window.location.toString(),
++  };
++}
++
++function convertDocShellToFrameDetail(docShell) {
++  if (!docShell instanceof Ci.nsIDocShell) {
++    return null;
++  }
++  let window = docShellToWindow(docShell);
++
++  return Object.assign(convertWindowToFrameDetail(window), {
++    errorOccurred: (docShell.loadType == LOAD_ERROR_PAGE),
++  });
++}
++
++function findDocShell(detail, docShell) {
++  let docShellsEnum = docShell.getDocShellEnumerator(
++    Ci.nsIDocShellTreeItem.typeAll,
++    Ci.nsIDocShell.ENUMERATE_FORWARDS
++  );
++
++  while (docShellsEnum.hasMoreElements()) {
++    let docShell = docShellsEnum.getNext();
++    let frameDetail = convertDocShellToFrameDetail(docShell);
++    if (frameDetail.windowId == detail.windowId &&
++        frameDetail.parentWindowId == detail.parentWindowId) {
++      return frameDetail;
++    }
++  }
++
++  return null;
++}
++
++addMessageListener("Extension:GetFrame:Req", ({name, data, target}) => {
++  let { frameId } = data.details;
++  let details;
++
++  if (frameId == 0) {
++    details = convertDocShellToFrameDetail(docShell);
++  } else {
++    details = findDocShell(data.details, docShell);
++  }
++  sendAsyncMessage("Extension:GetFrame:Res", { reqId: data.reqId, details });
++});
++
++addMessageListener("Extension:GetAllFrames:Req", ({name, data, target}) => {
++  let details = getChildDocShells(docShell).map(convertDocShellToFrameDetail);
++  sendAsyncMessage("Extension:GetAllFrames:Res", { reqId: data.reqId, details });
++});
+

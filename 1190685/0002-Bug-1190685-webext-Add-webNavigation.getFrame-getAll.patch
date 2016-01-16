@@ -1,0 +1,99 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
+
+---
+ .../components/extensions/test/browser/browser.ini |  1 +
+ .../browser/browser_ext_webNavigation_getFrames.js | 66 ++++++++++++++++++++++
+ 2 files changed, 67 insertions(+)
+ create mode 100644 browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
+
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+index e6e16af..d92e71f 100644
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -27,8 +27,9 @@ support-files =
+ [browser_ext_tabs_update.js]
+ [browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
+ [browser_ext_tabs_move.js]
+ [browser_ext_tabs_move_window.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+ [browser_ext_tab_runtimeConnect.js]
++[browser_ext_webNavigation_getFrames.js]
+\ No newline at end of file
+diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
+new file mode 100644
+index 0000000..dd835e8
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
+@@ -0,0 +1,66 @@
++/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set sts=2 sw=2 et tw=80: */
++"use strict";
++
++const NO_CERT_URL = "https://fail-handshake.example.com/";
++
++add_task(function* testWebNavigationGetFrames() {
++  let extension = ExtensionTestUtils.loadExtension({
++    background: "(" + function() {
++      browser.webNavigation.onErrorOccurred.addListener((details) => {
++        let errorOccurredDetails = details;
++        browser.test.sendMessage("onErrorOccurred", details);
++        browser.webNavigation.getAllFrames({ tabId: 1 }, function(getAllFramesDetails) {
++          let { frameId } = getAllFramesDetails[0];
++          browser.webNavigation.getFrame({ tabId: 1, frameId }, function(getFrameDetail) {
++            browser.test.sendMessage("getAllFrames.details", {
++              errorOccurredDetails,
++              getAllFramesDetails,
++              getFrameDetail,
++            });
++          });
++        });
++      });
++    } + ")();",
++    manifest: {
++      permissions: ["webNavigation"],
++    },
++  });
++  info("load complete");
++
++  yield extension.startup();
++  info("startup complete");
++
++
++  let tab = gBrowser.addTab(NO_CERT_URL, {skipAnimation: true});
++  info("test page opened");
++
++  yield extension.awaitMessage("onErrorOccurred");
++  info("error occurred");
++
++  let {
++    errorOccurredDetails, getAllFramesDetails, getFrameDetail
++  } = yield extension.awaitMessage("getAllFrames.details");
++
++  is(errorOccurredDetails.url, NO_CERT_URL, "an onErrorOccurred event should has been raised with the expected URL");
++
++  let errorOccurredFrameFound = getAllFramesDetails.filter((frameDetail) => {
++    return frameDetail.errorOccurred &&
++      (frameDetail.tabId == errorOccurredDetails.tabId) &&
++      (frameDetail.frameId == errorOccurredDetails.frameId) &&
++      (frameDetail.parentFrameId == errorOccurredDetails.parentFrameId) &&
++      (frameDetail.url == errorOccurredDetails.url);
++  }).length > 0;
++
++  ok(errorOccurredFrameFound, "getAllFrames marked the expected frame with the errorOccurred FrameDetail field");
++
++  is(getFrameDetail.url, errorOccurredDetails.url, "getFrame returned a frame with the expected URL");
++  is(getFrameDetail.frameId, 0, "getFrame returned a frame with the expected frameId");
++  is(getFrameDetail.parentFrameId, -1, "getFrame returned a frame with the expected parentFrameId");
++  is(getFrameDetail.tabId, 1, "getFrame returned a frame with the expected tabId");
++
++  yield extension.unload();
++  info("extension unloaded");
++
++  gBrowser.removeTab(tab);
++});
+
