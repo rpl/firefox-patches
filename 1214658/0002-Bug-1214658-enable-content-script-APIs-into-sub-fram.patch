@@ -10,10 +10,10 @@ Bug 1214658 - enable content script APIs into sub-frames pointed to a valid add-
  3 files changed, 131 insertions(+), 30 deletions(-)
 
 diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
-index 9a35ac4..6e9de43 100644
+index a38d13c..3985cb0 100644
 --- a/toolkit/components/extensions/Extension.jsm
 +++ b/toolkit/components/extensions/Extension.jsm
-@@ -355,22 +355,26 @@ GlobalManager = {
+@@ -358,22 +358,26 @@ GlobalManager = {
          },
          hasListener(ns, name, listener) {
            return schemaApi[ns][name].hasListener.call(null, listener);
@@ -46,7 +46,7 @@ index 9a35ac4..6e9de43 100644
                                  .getInterface(Ci.nsIWebNavigation)
                                  .QueryInterface(Ci.nsIDocShellTreeItem)
                                  .sameTypeRootTreeItem
-@@ -379,20 +383,16 @@ GlobalManager = {
+@@ -382,20 +386,16 @@ GlobalManager = {
      if (this.docShells.has(docShell)) {
        let {extension, context} = this.docShells.get(docShell);
        if (context && extension.id == id) {
