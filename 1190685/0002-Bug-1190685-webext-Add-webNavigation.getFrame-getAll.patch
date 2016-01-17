@@ -10,10 +10,10 @@ Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kma
  create mode 100644 browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
-index e6e16af..d92e71f 100644
+index b24a926..7af0cbd 100644
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -27,8 +27,9 @@ support-files =
+@@ -28,8 +28,9 @@ support-files =
  [browser_ext_tabs_update.js]
  [browser_ext_tabs_onUpdated.js]
  [browser_ext_tabs_sendMessage.js]
