@@ -4,9 +4,9 @@
 Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
 
 ---
- .../components/extensions/test/browser/browser.ini |  1 +
- .../browser/browser_ext_webNavigation_getFrames.js | 66 ++++++++++++++++++++++
- 2 files changed, 67 insertions(+)
+ .../components/extensions/test/browser/browser.ini |   1 +
+ .../browser/browser_ext_webNavigation_getFrames.js | 173 +++++++++++++++++++++
+ 2 files changed, 174 insertions(+)
  create mode 100644 browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
@@ -26,32 +26,34 @@ index e6e16af..d92e71f 100644
 \ No newline at end of file
 diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
 new file mode 100644
-index 0000000..e81817b
+index 0000000..b8f7ee3
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,173 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
 +
 +const NO_CERT_URL = "https://fail-handshake.example.com/";
 +
-+add_task(function* testWebNavigationGetFrames() {
++add_task(function* testWebNavigationGetNonExistentFrames() {
 +  let extension = ExtensionTestUtils.loadExtension({
 +    background: "(" + function() {
-+      browser.webNavigation.onErrorOccurred.addListener((details) => {
-+        let errorOccurredDetails = details;
-+        browser.test.sendMessage("onErrorOccurred", details);
-+        browser.webNavigation.getAllFrames({ tabId: 1 }, function(getAllFramesDetails) {
-+          let { frameId } = getAllFramesDetails[0];
-+          browser.webNavigation.getFrame({ tabId: 1, frameId }, function(getFrameDetail) {
-+            browser.test.sendMessage("getAllFrames.details", {
-+              errorOccurredDetails,
-+              getAllFramesDetails,
-+              getFrameDetail,
-+            });
-+          });
++      let results = [];
++      results.push(new Promise((resolve) => {
++        browser.webNavigation.getAllFrames({ tabId: 0 }, (res) => {
++          browser.test.assertEq(res.length, 0, "getAllFrames should return an empty array for non existent tab");
++          resolve();
 +        });
++      }));
++      results.push(new Promise((resolve) => {
++        browser.webNavigation.getFrame({ tabId: 0, frameId: 15, processId: 20}, (res) => {
++          browser.test.assertEq(res, undefined, "getFrame should return undefined for non existent frame ");
++          resolve();
++        });
++      }));
++      Promise.all(results).then(() => {
++        browser.test.sendMessage("getNonExistentFrames.done");
 +      });
 +    } + ")();",
 +    manifest: {
@@ -63,12 +65,40 @@ index 0000000..e81817b
 +  yield extension.startup();
 +  info("startup complete");
 +
++  yield extension.awaitMessage("getNonExistentFrames.done");
 +
-+  let tab = gBrowser.addTab(NO_CERT_URL, {skipAnimation: true});
++  yield extension.unload();
++  info("extension unloaded");
++});
++
++add_task(function* testWebNavigationGetFrames() {
++  let extension = ExtensionTestUtils.loadExtension({
++    background: "(" + function() {
++      browser.webNavigation.onErrorOccurred.addListener((errorOccurredDetails) => {
++        let { tabId } = errorOccurredDetails;
++        browser.webNavigation.getAllFrames({ tabId }, (getAllFramesDetails) => {
++          let { frameId } = getAllFramesDetails[0];
++          browser.webNavigation.getFrame({ tabId, frameId, processId: 0 }, (getFrameDetail) => {
++            browser.test.sendMessage("getAllFrames.details", {
++              errorOccurredDetails,
++              getAllFramesDetails,
++              getFrameDetail,
++            });
++          });
++        });
++      });
++    } + ")();",
++    manifest: {
++      permissions: ["webNavigation", "tabs"],
++    },
++  });
++  info("load complete");
++
++  yield extension.startup();
++  info("startup complete");
++
++  let tab = gBrowser.addTab(NO_CERT_URL);
 +  info("test page opened");
-+
-+  yield extension.awaitMessage("onErrorOccurred");
-+  info("error occurred");
 +
 +  let {
 +    errorOccurredDetails, getAllFramesDetails, getFrameDetail,
@@ -87,13 +117,90 @@ index 0000000..e81817b
 +  ok(errorOccurredFrameFound, "getAllFrames marked the expected frame with the errorOccurred FrameDetail field");
 +
 +  is(getFrameDetail.url, errorOccurredDetails.url, "getFrame returned a frame with the expected URL");
++  is(getFrameDetail.tabId, errorOccurredDetails.tabId, "getFrame returned a frame with the expected tabId");
 +  is(getFrameDetail.frameId, 0, "getFrame returned a frame with the expected frameId");
 +  is(getFrameDetail.parentFrameId, -1, "getFrame returned a frame with the expected parentFrameId");
-+  is(getFrameDetail.tabId, 1, "getFrame returned a frame with the expected tabId");
 +
 +  yield extension.unload();
 +  info("extension unloaded");
 +
 +  gBrowser.removeTab(tab);
++});
++
++add_task(function* testWebNavigationErrorInSubFrame() {
++  let extension = ExtensionTestUtils.loadExtension({
++    background: "(" + function() {
++      let tabId;
++
++      browser.tabs.create({ url: "tab.html" }, (tab) => {
++        tabId = tab.id;
++      });
++
++      browser.webNavigation.onErrorOccurred.addListener((details) => {
++        browser.webNavigation.getAllFrames({ tabId }, (getAllFramesDetails) => {
++          let getFramePromises = getAllFramesDetails.map((frameDetail) => {
++            let { frameId } = frameDetail;
++            return new Promise((resolve) => {
++              browser.webNavigation.getFrame({ tabId, frameId, processId: 0 }, resolve);
++            });
++          });
++
++          Promise.all(getFramePromises).then((getFrameResults) => {
++            browser.tabs.remove(tabId);
++
++            browser.test.sendMessage("errorIsSubFrame.done", {
++              getAllFramesDetails, getFrameResults,
++            });
++          });
++        });
++      });
++    } + ")();",
++    manifest: {
++      permissions: ["webNavigation", "tabs"],
++    },
++    files: {
++      "tab.html": `
++        <!DOCTYPE html>
++        <html>
++          <head>
++            <meta charset="utf-8">
++          </head>
++          <body>
++            <iframe src="subframe.html"></iframe>
++            <iframe src="${NO_CERT_URL}"></iframe>
++          </body>
++        </html>
++      `,
++      "subframe.html": `
++        <!DOCTYPE html>
++        <html>
++          <head>
++            <meta charset="utf-8">
++          </head>
++        </html>
++      `,
++    },
++  });
++  info("load complete");
++
++  yield extension.startup();
++  info("startup complete");
++
++  let {
++    getAllFramesDetails,
++    getFrameResults,
++  } = yield extension.awaitMessage("errorIsSubFrame.done");
++
++  is(getAllFramesDetails.length, 3, "expected number of frames found");
++
++  let errorFrames = getAllFramesDetails.filter((el) => el.errorOccurred);
++  is(errorFrames.length, 1, "expected number of frames with errors found");
++  is(errorFrames[0].url, NO_CERT_URL, "expected url found with errors");
++
++  is(JSON.stringify(getFrameResults), JSON.stringify(getAllFramesDetails),
++     "getFrame is able to retrieve all the frames returned by GetAllFrames");
++
++  yield extension.unload();
++  info("extension unloaded");
 +});
 

@@ -4,17 +4,17 @@
 Bug 1190685 - [webext] Implements webNavigation.getFrame/getAllFrames API methods. r=kmag
 
 ---
- toolkit/components/extensions/ext-webNavigation.js | 23 ++++++
- .../extensions/schemas/web_navigation.json         |  6 +-
- toolkit/modules/addons/WebNavigation.jsm           | 92 +++++++++++++++++++++-
- toolkit/modules/addons/WebNavigationContent.js     | 85 ++++++++++++++++++++
- 4 files changed, 201 insertions(+), 5 deletions(-)
+ toolkit/components/extensions/ext-webNavigation.js |  31 +++++
+ .../extensions/schemas/web_navigation.json         |   8 +-
+ toolkit/modules/addons/WebNavigation.jsm           |  92 +++++++++++++-
+ toolkit/modules/addons/WebNavigationContent.js     | 139 ++++++++++++++++++++-
+ 4 files changed, 262 insertions(+), 8 deletions(-)
 
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
-index e3fac12..7fac822 100644
+index e3fac12..df24713 100644
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js
-@@ -55,21 +55,44 @@ function WebNavigationEventManager(context, eventName) {
+@@ -55,21 +55,52 @@ function WebNavigationEventManager(context, eventName) {
      };
    };
  
@@ -46,24 +46,32 @@ index e3fac12..7fac822 100644
        onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
 +      getAllFrames(details, callback) {
 +        let tab = TabManager.getTab(details.tabId);
-+        WebNavigation.getAllFrames(tab, context, details, (results) => {
-+          runSafe(context, callback, results.map(convertGetFrameResult.bind(null, details.tabId)));
-+        });
++        if (tab) {
++          WebNavigation.getAllFrames(tab, context, details, (results) => {
++            runSafe(context, callback, results.map(convertGetFrameResult.bind(null, details.tabId)));
++          });
++        } else {
++          runSafe(context, callback, []);
++        }
 +      },
 +      getFrame(details, callback) {
 +        let tab = TabManager.getTab(details.tabId);
-+        WebNavigation.getFrame(tab, context, details, (result) => {
-+          runSafe(context, callback, convertGetFrameResult(details.tabId, result));
-+        });
++        if (tab) {
++          WebNavigation.getFrame(tab, context, details, (result) => {
++            runSafe(context, callback, convertGetFrameResult(details.tabId, result));
++          });
++        } else {
++          runSafe(context, callback, undefined);
++        }
 +      },
      },
    };
  });
 diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit/components/extensions/schemas/web_navigation.json
-index 9236bc6..9df5a96 100644
+index 9236bc6..8c8cca0 100644
 --- a/toolkit/components/extensions/schemas/web_navigation.json
 +++ b/toolkit/components/extensions/schemas/web_navigation.json
-@@ -17,17 +17,17 @@
+@@ -17,27 +17,27 @@
          "id": "TransitionQualifier",
          "type": "string",
          "enum": ["client_redirect", "server_redirect", "forward_back", "from_address_bar"]
@@ -82,6 +90,17 @@ index 9236bc6..9df5a96 100644
              "name": "details",
              "description": "Information about the frame to retrieve information about.",
              "properties": {
+               "tabId": { "type": "integer", "minimum": 0, "description": "The ID of the tab in which the frame is." },
+-              "processId": {"unsupported": true, "type": "integer", "description": "The ID of the process runs the renderer for this tab."},
++              "processId": {"unsupported": false, "type": "integer", "description": "The ID of the process runs the renderer for this tab."},
+               "frameId": { "type": "integer", "minimum": 0, "description": "The ID of the frame in the given tab." }
+             }
+           },
+           {
+             "type": "function", "name": "callback", "parameters": [
+               {
+                 "type": "object",
+                 "name": "details",
 @@ -59,17 +59,17 @@
                  }
                }
@@ -283,19 +302,130 @@ index b62e321..26e29df 100644
    };
  }
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
-index ae27b73..7f079a2 100644
+index ae27b73..06537b5 100644
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -93,8 +93,93 @@ addEventListener("unload", () => {
+@@ -86,15 +86,150 @@ var WebProgressListener = {
+ 
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
+ };
+ 
+ var disabled = false;
+ WebProgressListener.init();
+ addEventListener("unload", () => {
    if (!disabled) {
++    disabled = true;
      WebProgressListener.uninit();
    }
  });
  addMessageListener("Extension:DisableWebNavigation", () => {
-   disabled = true;
-   WebProgressListener.uninit();
- });
+-  disabled = true;
+-  WebProgressListener.uninit();
++  if (!disabled) {
++    disabled = true;
++    WebProgressListener.uninit();
++  }
++});
 +
++
++/**
++ * Retrieve the DOMWindow associated to the docShell passed as parameter.
++ *
++ * @param    {nsIDocShell}  docShell - the docShell that we want to get the DOMWindow from.
++ * @return   {nsIDOMWindow}          - the DOMWindow associated to the docShell.
++ */
++function docShellToWindow(docShell) {
++  return docShell.QueryInterface(Ci.nsIInterfaceRequestor)
++    .getInterface(Ci.nsIDOMWindow);
++}
++
++/**
++ * The FrameDetail object which represents a frame in WebExtensions APIs.
++ *
++ * @typedef  {Object}  FrameDetail
++ * @inner
++ * @property {boolean} errorOccurred  - Indicates whether an error is occurred during the last load
++ *                                      happened on this frame.
++ * @property {number}  windowId       - Represents the numeric id which identify the frame in its tab.
++ * @property {number}  parentWindowId - Represents the numeric id which identify the parent frame.
++ * @property {string}  url            - Represents the current location URL loaded in the frame.
++ */
++
++/**
++ * Convert a DOMWindow object into its internal FrameDetail representation.
++ *
++ * @param    {nsIDOMWindow} window - the DOMWindow object to be converted into a FrameDetail JSON object.
++ * @return   {FrameDetail} the FrameDetail JSON object which represents the window.
++ */
++function convertWindowToFrameDetail(window) {
++  return {
++    windowId: getWindowId(window),
++    parentWindowId: getParentWindowId(window),
++    url: window.location.toString(),
++  };
++}
++
++// NOTE: Compute the Error Page loadType value. (See Bug 1190685 for rationale)
++// - LOAD_CMD_NORMAL (as defined in "docshell/base/nsIDocShell.idl"):
++// - LOAD_FLAGS_ERROR_PAGE (as defined in "docshell/base/nsDocShellLoadTypes.h")
++// - MAKE_LOAD_TYPE (as defined in "docshell/base/nsDocShellLoadTypes.h")
++// - LOAD_ERROR_PAGE (as defined in "docshell/base/nsDocShellLoadTypes.h")
++const LOAD_CMD_NORMAL = 0x1;
++const LOAD_FLAGS_ERROR_PAGE = 0x1;
++const MAKE_LOAD_TYPE = (type, flags) => (type | (flags << 16));
++const LOAD_ERROR_PAGE = MAKE_LOAD_TYPE(LOAD_CMD_NORMAL, LOAD_FLAGS_ERROR_PAGE);
++
++/**
++ * Convert a docShell object into its internal FrameDetail representation.
++ *
++ * @param    {nsIDocShell} docShell - the docShell object to be converted into a FrameDetail JSON object.
++ * @return   {FrameDetail} the FrameDetail JSON object which represents the docShell.
++ */
++function convertDocShellToFrameDetail(docShell) {
++  if (!docShell instanceof Ci.nsIDocShell) {
++    return null;
++  }
++  let window = docShellToWindow(docShell);
++
++  return Object.assign(convertWindowToFrameDetail(window), {
++    errorOccurred: (docShell.loadType == LOAD_ERROR_PAGE),
++  });
++}
++
++/**
++ * Search for a frame starting from the passed root docShell and
++ * convert it to its related frame detail representation.
++ *
++ * @param  {number}      windowId - the windowId of the frame to retrieve
++ * @param  {nsIDocShell} docShell - the root docShell object
++ * @return {FrameDetail} the FrameDetail JSON object which represents the docShell.
++ */
++function findFrame(windowId, docShell) {
++  let docShellsEnum = docShell.getDocShellEnumerator(
++    Ci.nsIDocShellTreeItem.typeAll,
++    Ci.nsIDocShell.ENUMERATE_FORWARDS
++  );
++
++  while (docShellsEnum.hasMoreElements()) {
++    let docShell = docShellsEnum.getNext();
++    let frameDetail = convertDocShellToFrameDetail(docShell);
++    if (frameDetail.windowId == windowId) {
++      return frameDetail;
++    }
++  }
++
++  return null;
++}
++
++/**
++ * Compute the array of all the frames' docShells which are descendants of root docShell
++ * passed as parameter.
++ * This helper function is used internally into this module to compute the result of the
++ * webNavigation's getAllFrames/getFrame API methods.
++ *
++ * @param    {nsIDocShell} docShell - the root docShell object
++ * @return   {nsIDocShell[]}        - the array of the frames' docShells collected
++ */
 +function getChildDocShells(docShell) {
 +  let docShellsEnum = docShell.getDocShellEnumerator(
 +    Ci.nsIDocShellTreeItem.typeAll,
@@ -312,58 +442,6 @@ index ae27b73..7f079a2 100644
 +  return docShells;
 +}
 +
-+// Compute the Error Page loadType value. (See Bug 1190685 for rationale)
-+// - LOAD_CMD_NORMAL (as defined in "docshell/base/nsIDocShell.idl"):
-+// - LOAD_FLAGS_ERROR_PAGE (as defined in "docshell/base/nsDocShellLoadTypes.h")
-+// - MAKE_LOAD_TYPE (as defined in "docshell/base/nsDocShellLoadTypes.h")
-+// - LOAD_ERROR_PAGE (as defined in "docshell/base/nsDocShellLoadTypes.h")
-+const LOAD_CMD_NORMAL = 0x1;
-+const LOAD_FLAGS_ERROR_PAGE = 0x1;
-+const MAKE_LOAD_TYPE = (type, flags) => (type | (flags << 16));
-+const LOAD_ERROR_PAGE = MAKE_LOAD_TYPE(LOAD_CMD_NORMAL, LOAD_FLAGS_ERROR_PAGE);
-+
-+function docShellToWindow(docShell) {
-+  return docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-+    .getInterface(Ci.nsIDOMWindow);
-+}
-+
-+function convertWindowToFrameDetail(window) {
-+  return {
-+    windowId: getWindowId(window),
-+    parentWindowId: getParentWindowId(window),
-+    url: window.location.toString(),
-+  };
-+}
-+
-+function convertDocShellToFrameDetail(docShell) {
-+  if (!docShell instanceof Ci.nsIDocShell) {
-+    return null;
-+  }
-+  let window = docShellToWindow(docShell);
-+
-+  return Object.assign(convertWindowToFrameDetail(window), {
-+    errorOccurred: (docShell.loadType == LOAD_ERROR_PAGE),
-+  });
-+}
-+
-+function findDocShell(detail, docShell) {
-+  let docShellsEnum = docShell.getDocShellEnumerator(
-+    Ci.nsIDocShellTreeItem.typeAll,
-+    Ci.nsIDocShell.ENUMERATE_FORWARDS
-+  );
-+
-+  while (docShellsEnum.hasMoreElements()) {
-+    let docShell = docShellsEnum.getNext();
-+    let frameDetail = convertDocShellToFrameDetail(docShell);
-+    if (frameDetail.windowId == detail.windowId &&
-+        frameDetail.parentWindowId == detail.parentWindowId) {
-+      return frameDetail;
-+    }
-+  }
-+
-+  return null;
-+}
-+
 +addMessageListener("Extension:GetFrame:Req", ({name, data, target}) => {
 +  let { frameId } = data.details;
 +  let details;
@@ -371,7 +449,7 @@ index ae27b73..7f079a2 100644
 +  if (frameId == 0) {
 +    details = convertDocShellToFrameDetail(docShell);
 +  } else {
-+    details = findDocShell(data.details, docShell);
++    details = findFrame(frameId, docShell);
 +  }
 +  sendAsyncMessage("Extension:GetFrame:Res", { reqId: data.reqId, details });
 +});
@@ -379,5 +457,5 @@ index ae27b73..7f079a2 100644
 +addMessageListener("Extension:GetAllFrames:Req", ({name, data, target}) => {
 +  let details = getChildDocShells(docShell).map(convertDocShellToFrameDetail);
 +  sendAsyncMessage("Extension:GetAllFrames:Res", { reqId: data.reqId, details });
-+});
+ });
 
