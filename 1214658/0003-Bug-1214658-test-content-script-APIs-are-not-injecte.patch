@@ -17,10 +17,10 @@ similarity index 100%
 rename from toolkit/components/extensions/test/mochitest/file_ext_background_api_injection.js
 rename to toolkit/components/extensions/test/mochitest/file_ext_test_api_injection.js
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index 678e286..56c5284 100644
+index 1f3b168..aed909d 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -15,25 +15,26 @@ support-files =
+@@ -15,24 +15,25 @@ support-files =
    file_style_redirect.css
    file_script_good.js
    file_script_bad.js
@@ -32,7 +32,6 @@ index 678e286..56c5284 100644
 -  file_ext_background_api_injection.js
 +  file_ext_test_api_injection.js
    file_permission_xhr.html
-   file_ext_collect_security_errors.js
  
  [test_ext_simple.html]
  [test_ext_geturl.html]

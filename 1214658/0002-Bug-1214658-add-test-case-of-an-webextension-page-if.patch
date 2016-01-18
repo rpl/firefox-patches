@@ -4,43 +4,19 @@
 Bug 1214658 - add test case of an webextension page iframe created from a content script r=kmag
 
 ---
- .../mochitest/file_ext_collect_security_errors.js  |  10 ++
- .../extensions/test/mochitest/mochitest.ini        |   2 +
- .../test_ext_contentscript_create_iframe.html      | 192 +++++++++++++++++++++
- 3 files changed, 204 insertions(+)
- create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_collect_security_errors.js
+ .../extensions/test/mochitest/mochitest.ini        |   1 +
+ .../test_ext_contentscript_create_iframe.html      | 157 +++++++++++++++++++++
+ 2 files changed, 158 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 
-diff --git a/toolkit/components/extensions/test/mochitest/file_ext_collect_security_errors.js b/toolkit/components/extensions/test/mochitest/file_ext_collect_security_errors.js
-new file mode 100644
-index 0000000..8974d4b
---- /dev/null
-+++ b/toolkit/components/extensions/test/mochitest/file_ext_collect_security_errors.js
-@@ -0,0 +1,10 @@
-+"use strict";
-+
-+Components.utils.import("resource://gre/modules/Services.jsm");
-+
-+Services.console.registerListener(function listener(message) {
-+  if (/Security Error: Content at (.*) may not load or link to (.*)/.test(message.message)) {
-+    Services.console.unregisterListener(listener);
-+    sendAsyncMessage("security-error-message", { message: message.message });
-+  }
-+});
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
-index f1364ed..678e286 100644
+index f1364ed..1f3b168 100644
 --- a/toolkit/components/extensions/test/mochitest/mochitest.ini
 +++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
-@@ -17,21 +17,23 @@ support-files =
-   file_script_bad.js
-   file_script_redirect.js
-   file_script_xhr.js
-   file_sample.html
-   redirection.sjs
+@@ -22,16 +22,17 @@ support-files =
    file_privilege_escalation.html
    file_ext_background_api_injection.js
    file_permission_xhr.html
-+  file_ext_collect_security_errors.js
  
  [test_ext_simple.html]
  [test_ext_geturl.html]
@@ -57,10 +33,10 @@ index f1364ed..678e286 100644
  [test_ext_runtime_connect.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..0c64af2
+index 0000000..7617f70
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,157 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -111,10 +87,6 @@ index 0000000..0c64af2
 +  }
 +
 +  function contentScript() {
-+    let failToLoadIframe = document.createElement("iframe");
-+    failToLoadIframe.setAttribute("src", browser.runtime.getURL("non_web_accessible.html"));
-+    document.body.appendChild(failToLoadIframe);
-+
 +    let iframe = document.createElement("iframe");
 +    iframe.setAttribute("src", browser.runtime.getURL("content_script_iframe.html"));
 +    document.body.appendChild(iframe);
@@ -144,7 +116,7 @@ index 0000000..0c64af2
 +          "run_at": "document_end",
 +        },
 +      ],
-+      "web_accessible_resources": [
++      web_accessible_resources: [
 +        "content_script_iframe.html",
 +      ],
 +    },
@@ -155,7 +127,6 @@ index 0000000..0c64af2
 +      "content_script.js": "new " + contentScript,
 +      "content_script_iframe.html": document.querySelector("#test-asset").textContent,
 +      "content_script_iframe.js": "new " + contentScriptIframe,
-+      "non_web_accessible.html": "<h1>This should not be loaded in an iframe inside a content URL</h1>",
 +    },
 +  };
 +
@@ -170,45 +141,15 @@ index 0000000..0c64af2
 +
 +  let win = window.open("file_sample.html");
 +
-+  let awaitSecurityError = new Promise(resolve => {
-+    let chromeScript = SpecialPowers.loadChromeScript(
-+      SimpleTest.getTestFileURL("file_ext_collect_security_errors.js"));
-+
-+    chromeScript.addMessageListener("security-error-message", resolve);
-+  });
-+
 +  yield Promise.all([waitForLoad(win), contentScriptIframeCreatedPromise]);
 +  info("content script privileged iframe loaded and executed");
 +
 +  info("testing APIs availability once the extension is unloaded...");
 +
-+  let iframeWindow;
-+
-+  for (let currentIframeIdx of [0, 1]) {
-+    let currentIframeWindow = SpecialPowers.wrap(win)[currentIframeIdx];
-+    let iframeLocation = currentIframeWindow.location.toString();
-+
-+    if (iframeLocation.match(/content_script_iframe\.html$/)) {
-+      iframeWindow = currentIframeWindow;
-+    }
-+
-+    if (iframeLocation.match(/non_web_accessible\.html$/)) {
-+      ok(false, "non_web_accessible.html should not be loaded in an web page iframe");
-+    }
-+  }
-+
-+  const SECURITY_ERROR_REGEXP = /Security Error: Content at (.*) may not load or link to (.*)/;
-+  let securityErrorMessage = yield awaitSecurityError;
-+  let matchSecurityError = securityErrorMessage.message.match(SECURITY_ERROR_REGEXP);
-+
-+  if (matchSecurityError) {
-+    ok(/non_web_accessible\.html/.test(matchSecurityError[2]), "non web accesible URLs are blocked " +
-+                                                               "and emit the expected security errors");
-+  } else {
-+    ok(false, "expected security error not found");
-+  }
++  let iframeWindow = SpecialPowers.wrap(win)[0];
 +
 +  ok(iframeWindow, "content script enabled iframe found");
++  ok(/content_script_iframe\.html$/.test(iframeWindow.location), "the found iframe has the expected URL");
 +
 +  yield extension.unload();
 +  info("extension unloaded");
@@ -221,14 +162,14 @@ index 0000000..0c64af2
 +  let manifestException;
 +
 +  try {
-+    manifest = iframeWindow.eval("browser.runtime.getManifest()");
++    manifest = ww.browser.runtime.getManifest();
 +  } catch (e) {
 +    manifestException = e;
 +  }
 +
 +  ok(!manifest, "manifest should be undefined");
 +
-+  const BROWSER_RUNTIME_UNDEFINED_EXCEPTION = "TypeError: browser.runtime is undefined";
++  const BROWSER_RUNTIME_UNDEFINED_EXCEPTION = "TypeError: ww.browser.runtime is undefined";
 +  is(manifestException && manifestException.toString(), BROWSER_RUNTIME_UNDEFINED_EXCEPTION,
 +     `expected BROWSER_RUNTIME_UNDEFINED_EXCEPTION exception received`);
 +
@@ -236,7 +177,7 @@ index 0000000..0c64af2
 +  let getManifestException;
 +
 +  try {
-+    getManifest = iframeWindow.eval("GET_MANIFEST()");
++    getManifest = ww.eval("GET_MANIFEST()");
 +  } catch (e) {
 +    getManifestException = e;
 +  }
