@@ -4,17 +4,17 @@
 Bug 1190685 - [webext] Implements webNavigation.getFrame/getAllFrames API methods. r=kmag
 
 ---
- toolkit/components/extensions/ext-webNavigation.js |  31 +++++
- .../extensions/schemas/web_navigation.json         |   8 +-
+ toolkit/components/extensions/ext-webNavigation.js |  30 +++++
+ .../extensions/schemas/web_navigation.json         |   6 +-
  toolkit/modules/addons/WebNavigation.jsm           |  92 +++++++++++++-
  toolkit/modules/addons/WebNavigationContent.js     | 139 ++++++++++++++++++++-
- 4 files changed, 262 insertions(+), 8 deletions(-)
+ 4 files changed, 260 insertions(+), 7 deletions(-)
 
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
-index e3fac12..df24713 100644
+index e3fac12..81f9887 100644
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js
-@@ -55,21 +55,52 @@ function WebNavigationEventManager(context, eventName) {
+@@ -55,21 +55,51 @@ function WebNavigationEventManager(context, eventName) {
      };
    };
  
@@ -42,7 +42,6 @@ index e3fac12..df24713 100644
        onCompleted: new WebNavigationEventManager(context, "onCompleted").api(),
        onErrorOccurred: new WebNavigationEventManager(context, "onErrorOccurred").api(),
        onReferenceFragmentUpdated: new WebNavigationEventManager(context, "onReferenceFragmentUpdated").api(),
-+      onHistoryStateUpdated: ignoreEvent(context, "webNavigation.onHistoryStateUpdated"),
        onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
 +      getAllFrames(details, callback) {
 +        let tab = TabManager.getTab(details.tabId);
@@ -68,7 +67,7 @@ index e3fac12..df24713 100644
    };
  });
 diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit/components/extensions/schemas/web_navigation.json
-index 9236bc6..8c8cca0 100644
+index 9236bc6..6af0373 100644
 --- a/toolkit/components/extensions/schemas/web_navigation.json
 +++ b/toolkit/components/extensions/schemas/web_navigation.json
 @@ -17,27 +17,27 @@
@@ -120,25 +119,6 @@ index 9236bc6..8c8cca0 100644
              "name": "details",
              "description": "Information about the tab to retrieve all frames from.",
              "properties": {
-@@ -320,17 +320,17 @@
-               "tabId": {"type": "integer", "description": "The ID of the tab that replaced the old tab."},
-               "timeStamp": {"type": "number", "description": "The time when the replacement happened, in milliseconds since the epoch."}
-             }
-           }
-         ]
-       },
-       {
-         "name": "onHistoryStateUpdated",
--        "unsupported": true,
-+        "unsupported": false,
-         "type": "function",
-         "description": "Fired when the frame's history was updated to a new URL. All future events for that frame will use the updated URL.",
-         "filters": [
-           {
-             "name": "url",
-             "type": "array",
-             "items": { "$ref": "events.UrlFilter" },
-             "description": "Conditions that the URL being navigated to must satisfy. The 'schemes' and 'ports' fields of UrlFilter are ignored for this event."
 diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
 index b62e321..26e29df 100644
 --- a/toolkit/modules/addons/WebNavigation.jsm
