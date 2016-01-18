@@ -1,0 +1,155 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+
+Bug 1227462 - Test tabs.create URLs. r=kmag
+
+---
+ .../components/extensions/test/browser/browser.ini |   1 +
+ .../test/browser/browser_ext_tabs_create_url.js    | 115 +++++++++++++++++++++
+ 2 files changed, 116 insertions(+)
+ create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
+
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+index a40494a..5b36739 100644
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -20,16 +20,17 @@ support-files =
+ [browser_ext_popup_api_injection.js]
+ [browser_ext_contextMenus.js]
+ [browser_ext_getViews.js]
+ [browser_ext_tabs_executeScript_good.js]
+ [browser_ext_tabs_executeScript_bad.js]
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_getCurrent.js]
+ [browser_ext_tabs_create.js]
++[browser_ext_tabs_create_url.js]
+ [browser_ext_tabs_update.js]
+ [browser_ext_tabs_update_url.js]
+ [browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
+ [browser_ext_tabs_move.js]
+ [browser_ext_tabs_move_window.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
+new file mode 100644
+index 0000000..2b0ebdd
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
+@@ -0,0 +1,115 @@
++/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set sts=2 sw=2 et tw=80: */
++"use strict";
++
++Components.utils.import("resource://gre/modules/Services.jsm");
++
++function* testTabsCreateURL(tabsCreateURL) {
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "backgound": { scripts: ["background.js"] },
++      "permissions": ["tabs"],
++      "webAccessibleResources": ["tab.html"],
++    },
++
++    files: {
++      "tab.html": `
++        <!DOCTYPE>
++        <html>
++          <head>
++            <meta charset="utf-8">
++          </head>
++          <body>
++            <h1>tab page</h1>
++          </body>
++        </html>
++      `,
++    },
++    background: function() {
++      browser.test.sendMessage("ready", browser.runtime.getURL("tab.html"));
++      browser.test.onMessage.addListener((msg, tabsCreateURL) => {
++        browser.tabs.create({ url: tabsCreateURL }, (tab) => {
++          if (tab) {
++            browser.tabs.remove(tab.id);
++          }
++          browser.test.sendMessage("done");
++        });
++      });
++    },
++  });
++
++  yield extension.startup();
++
++  let mozExtTabURL = yield extension.awaitMessage("ready");
++
++  if (tabsCreateURL == "self") {
++    tabsCreateURL = mozExtTabURL;
++  }
++
++  info(`tab.create URL "${tabsCreateURL}"`);
++
++  extension.sendMessage("start", tabsCreateURL);
++  yield extension.awaitMessage("done");
++
++  yield extension.unload();
++
++  let errors = Services.console.getMessageArray() || [];
++
++  Services.console.reset();
++
++  return errors;
++}
++
++add_task(function* () {
++  info("Start testing tabs.create on javascript URLs");
++
++  let errorRegExp = /Permission denied on tabs.create/;
++
++  let dataURLPage = `
++    data:text/html,<!DOCTYPE html>
++    <html>
++      <head>
++        <meta charset="utf-8">
++      </head>
++      <body>
++        <h1>data url page</h1>
++      </body>
++    </html>`;
++
++  let testCases = [
++    {
++      tabsCreateURL: "http://example.net",
++      expectedError: false,
++    },
++    {
++      tabsCreateURL: "self",
++      expectedError: false,
++    },
++    {
++      tabsCreateURL: "about:addons",
++      expectedError: true,
++    },
++    {
++      tabsCreateURL: "javascript:console.log('tabs.update execute javascript')",
++      expectedError: true,
++    },
++    {
++      tabsCreateURL: dataURLPage,
++      expectedError: true,
++    },
++  ];
++
++  for (let { tabsCreateURL, expectedError } of testCases) {
++    let errors = yield* testTabsCreateURL(tabsCreateURL);
++
++    let errorCount = errors.filter((error) => errorRegExp.test(error)).length;
++
++    if (expectedError) {
++      is(errorCount, 1, "The number of errors found should be 1");
++    } else {
++      is(errorCount, 0, "The number of errors found should be 0");
++    }
++  }
++
++  info("done");
++});
+

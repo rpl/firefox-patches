@@ -1,0 +1,40 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+
+Bug 1227462 - tabs.create should call checkLoadURL. r=kmag
+
+---
+ browser/components/extensions/ext-tabs.js | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+index b66b24a..b32645d 100644
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -259,16 +259,25 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+           AllWindowEvents.removeListener("TabClose", tabListener);
+         };
+       }).api(),
+ 
+       create: function(createProperties, callback) {
+         let url = createProperties.url || aboutNewTabService.newTabURL;
+         url = context.uri.resolve(url);
+ 
++        if (!context.checkLoadURL(url)) {
++          Cu.reportError(`Permission denied on tabs.create with url "${url}"`);
++          if (callback) {
++            // TODO: runtime.lastError should be set
++            runSafe(context, callback, undefined);
++          }
++          return;
++        }
++
+         function createInWindow(window) {
+           let tab = window.gBrowser.addTab(url);
+ 
+           let active = true;
+           if (createProperties.active !== null) {
+             active = createProperties.active;
+           }
+           if (active) {
+

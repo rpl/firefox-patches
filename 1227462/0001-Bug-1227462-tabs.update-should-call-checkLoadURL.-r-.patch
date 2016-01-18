@@ -4,14 +4,17 @@
 Bug 1227462 - tabs.update should call checkLoadURL. r=kmag
 
 ---
- browser/components/extensions/ext-tabs.js | 8 +++++++-
- 1 file changed, 7 insertions(+), 1 deletion(-)
+ browser/components/extensions/ext-tabs.js          |   8 +-
+ .../components/extensions/test/browser/browser.ini |   1 +
+ .../test/browser/browser_ext_tabs_update_url.js    | 122 +++++++++++++++++++++
+ 3 files changed, 130 insertions(+), 1 deletion(-)
+ create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index 8ae7d93..c5bd26f 100644
+index f724d8f..b66b24a 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -324,18 +324,24 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+@@ -318,18 +318,24 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
          if (callback) {
            runSafe(context, callback);
          }
@@ -37,4 +40,153 @@ index 8ae7d93..c5bd26f 100644
              // Not sure what to do here? Which tab should we select?
            }
          }
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+index b24a926..a40494a 100644
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -21,15 +21,16 @@ support-files =
+ [browser_ext_contextMenus.js]
+ [browser_ext_getViews.js]
+ [browser_ext_tabs_executeScript_good.js]
+ [browser_ext_tabs_executeScript_bad.js]
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_getCurrent.js]
+ [browser_ext_tabs_create.js]
+ [browser_ext_tabs_update.js]
++[browser_ext_tabs_update_url.js]
+ [browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
+ [browser_ext_tabs_move.js]
+ [browser_ext_tabs_move_window.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+ [browser_ext_tab_runtimeConnect.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
+new file mode 100644
+index 0000000..5af37d2
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
+@@ -0,0 +1,122 @@
++/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set sts=2 sw=2 et tw=80: */
++"use strict";
++
++Components.utils.import("resource://gre/modules/Services.jsm");
++
++function* testTabsUpdateURL(existentTabURL, tabsUpdateURL) {
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "backgound": { scripts: ["background.js"] },
++      "permissions": ["tabs"],
++      "webAccessibleResources": ["tab.html"],
++    },
++
++    files: {
++      "tab.html": `
++        <!DOCTYPE>
++        <html>
++          <head>
++            <meta charset="utf-8">
++          </head>
++          <body>
++            <h1>tab page</h1>
++          </body>
++        </html>
++      `,
++    },
++    background: function() {
++      browser.test.sendMessage("ready", browser.runtime.getURL("tab.html"));
++      browser.test.onMessage.addListener((msg, tabsUpdateURL) => {
++        browser.tabs.query({ lastFocusedWindow: true }, (tabs) => {
++          browser.tabs.update(tabs[1].id, { url: tabsUpdateURL }, () => {
++            browser.test.sendMessage("done");
++          });
++        });
++      });
++    },
++  });
++
++  yield extension.startup();
++
++  let mozExtTabURL = yield extension.awaitMessage("ready");
++
++  if (tabsUpdateURL == "self") {
++    tabsUpdateURL = mozExtTabURL;
++  }
++
++  info(`tab.update URL "${tabsUpdateURL}" on tab with URL "${existentTabURL}"`);
++
++  let tab1 = yield BrowserTestUtils.openNewForegroundTab(gBrowser, existentTabURL);
++  gBrowser.selectedTab = tab1;
++
++  extension.sendMessage("start", tabsUpdateURL);
++  yield extension.awaitMessage("done");
++
++  yield BrowserTestUtils.removeTab(tab1);
++  yield extension.unload();
++
++  let errors = Services.console.getMessageArray() || [];
++
++  Services.console.reset();
++
++  return errors;
++}
++
++add_task(function* () {
++  info("Start testing tabs.update on javascript URLs");
++
++  let errorRegExp = /Permission denied on tabs.update/;
++
++  let dataURLPage = `
++    data:text/html,<!DOCTYPE html>
++    <html>
++      <head>
++        <meta charset="utf-8">
++      </head>
++      <body>
++        <h1>data url page</h1>
++      </body>
++    </html>`;
++
++  let checkList = [
++    {
++      tabsUpdateURL: "http://example.net",
++      expectedError: false,
++    },
++    {
++      tabsUpdateURL: "self",
++      expectedError: false,
++    },
++    {
++      tabsUpdateURL: "about:addons",
++      expectedError: true,
++    },
++    {
++      tabsUpdateURL: "javascript:console.log('tabs.update execute javascript')",
++      expectedError: true,
++    },
++    {
++      tabsUpdateURL: dataURLPage,
++      expectedError: true,
++    },
++  ];
++
++  let testCases = checkList
++        .map((check) => Object.assign({}, check, { existentTabURL: "about:blank" }))
++        .filter(el => el.tabsUpdateURL != el.existentTabURL);
++
++  for (let { existentTabURL, tabsUpdateURL, expectedError } of testCases) {
++    let errors = yield* testTabsUpdateURL(existentTabURL, tabsUpdateURL);
++
++    let errorCount = errors.filter((error) => errorRegExp.test(error)).length;
++
++    if (expectedError) {
++      is(errorCount, 1, "The number of errors found should be 1");
++    } else {
++      is(errorCount, 0, "The number of errors found should be 0");
++    }
++  }
++
++  info("done");
++});
 
