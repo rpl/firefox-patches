@@ -1,13 +1,13 @@
 # HG changeset patch
-# User Luca Greco <luca.greco@alcacoop.it>
+# User Luca Greco <lgreco@mozilla.com>
 
 Bug 1214658 - enable content script APIs into sub-frames pointed to a valid add-on url r=kmag
 
 ---
- toolkit/components/extensions/Extension.jsm        | 20 ++---
- toolkit/components/extensions/ExtensionContent.jsm | 89 ++++++++++++++++++----
- .../components/extensions/ExtensionManagement.jsm  | 52 +++++++++++--
- 3 files changed, 131 insertions(+), 30 deletions(-)
+ toolkit/components/extensions/Extension.jsm        |  20 ++--
+ toolkit/components/extensions/ExtensionContent.jsm | 130 ++++++++++++++++-----
+ .../components/extensions/ExtensionManagement.jsm  |  57 ++++++++-
+ 3 files changed, 165 insertions(+), 42 deletions(-)
 
 diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
 index a38d13c..3985cb0 100644
@@ -68,7 +68,7 @@ index a38d13c..3985cb0 100644
      let eventHandler = docShell.chromeEventHandler;
      let listener = event => {
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
-index bcc2c95..86355c9 100644
+index bcc2c95..a574c16 100644
 --- a/toolkit/components/extensions/ExtensionContent.jsm
 +++ b/toolkit/components/extensions/ExtensionContent.jsm
 @@ -211,17 +211,19 @@ function getWindowMessageManager(contentWindow) {
@@ -92,7 +92,7 @@ index bcc2c95..86355c9 100644
  
    let utils = contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
                             .getInterface(Ci.nsIDOMWindowUtils);
-@@ -238,44 +240,65 @@ function ExtensionContext(extensionId, contentWindow) {
+@@ -238,44 +240,67 @@ function ExtensionContext(extensionId, contentWindow) {
    if (ssm.isSystemPrincipal(contentPrincipal)) {
      // Make sure we don't hand out the system principal by accident.
      prin = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
@@ -112,7 +112,9 @@ index bcc2c95..86355c9 100644
 +      throw new Error("Invalid target window for this extension context");
 +    }
 +    // This is an iframe with content script API enabled and its principal should be the
-+    // contentWindow itself. (See Bug 1214658 for rationale)
++    // contentWindow itself. (we create a sandbox with the contentWindow as principal and with X-rays disabled
++    // because it enables us to create the APIs object in this sandbox object and then copying it
++    // into the iframe's window, see Bug 1214658 for rationale)
 +    this.sandbox = Cu.Sandbox(contentWindow, {
 +      sandboxPrototype: contentWindow,
 +      wantXrays: false,
@@ -167,7 +169,7 @@ index bcc2c95..86355c9 100644
    },
  
    execute(script, shouldRun) {
-@@ -289,17 +312,26 @@ ExtensionContext.prototype = {
+@@ -289,33 +314,46 @@ ExtensionContext.prototype = {
    forgetOnClose(obj) {
      this.onClose.delete(obj);
    },
@@ -179,7 +181,8 @@ index bcc2c95..86355c9 100644
 +
 +    // Overwrite the content script APIs with an empty object if the APIs objects are still
 +    // defined in the content window (See Bug 1214658 for rationale).
-+    if (this.isExtensionPage && Cu.waiveXrays(this.contentWindow).browser === this.chromeObj) {
++    if (this.isExtensionPage && !Cu.isDeadWrapper(this.contentWindow) &&
++        Cu.waiveXrays(this.contentWindow).browser === this.chromeObj) {
 +      Cu.createObjectIn(this.contentWindow, { defineAs: "browser" });
 +      Cu.createObjectIn(this.contentWindow, { defineAs: "chrome" });
 +    }
@@ -194,7 +197,27 @@ index bcc2c95..86355c9 100644
                 .getInterface(Ci.nsIDOMWindowUtils)
                 .currentInnerWindowID;
  }
-@@ -343,16 +375,28 @@ var DocumentManager = {
+ 
+ // Responsible for creating ExtensionContexts and injecting content
+ // scripts into them when new documents are created.
+ var DocumentManager = {
+   extensionCount: 0,
+ 
+   // Map[windowId -> Map[extensionId -> ExtensionContext]]
+-  windows: new Map(),
++  contentScriptWindows: new Map(),
++
++  // Map[windowId -> ExtensionContext]
++  extensionPageWindows: new Map(),
+ 
+   init() {
+     Services.obs.addObserver(this, "document-element-inserted", false);
+     Services.obs.addObserver(this, "inner-window-destroyed", false);
+   },
+ 
+   uninit() {
+     Services.obs.removeObserver(this, "document-element-inserted");
+@@ -343,33 +381,50 @@ var DocumentManager = {
  
        // Make sure we only load into frames that ExtensionContent.init
        // was called on (i.e., not frames for social or sidebars).
@@ -210,9 +233,7 @@ index bcc2c95..86355c9 100644
 +
 +      if (ExtensionManagement.getAPILevelForWindow(window, extensionId) == CONTENTSCRIPT_PRIVILEGES &&
 +          ExtensionManager.get(extensionId)) {
-+        DocumentManager.createExtensionContext(extensionId, window, { isExtensionPage: true });
-+
-+        return;
++        DocumentManager.getExtensionPageContext(extensionId, window);
 +      }
 +
        this.trigger("document_start", window);
@@ -221,9 +242,59 @@ index bcc2c95..86355c9 100644
        window.addEventListener("load", this, true);
        /* eslint-enable mozilla/balanced-listeners */
      } else if (topic == "inner-window-destroyed") {
-       let id = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
-       if (!this.windows.has(id)) {
-@@ -408,29 +452,46 @@ var DocumentManager = {
+-      let id = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
+-      if (!this.windows.has(id)) {
+-        return;
++      let windowId = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
++
++      // close any existent content-script context for the destroyed window
++      if (this.contentScriptWindows.has(windowId)) {
++        let extensions = this.contentScriptWindows.get(windowId);
++        for (let [, context] of extensions) {
++          context.close();
++        }
++
++        this.contentScriptWindows.delete(windowId);
+       }
+ 
+-      let extensions = this.windows.get(id);
+-      for (let [, context] of extensions) {
++      // close any existent iframe extension page context for the destroyed window
++      if (this.extensionPageWindows.has(windowId)) {
++        let context = this.extensionWindows.get(windowId);
+         context.close();
++        this.extensionPageWindows.delete(windowId);
+       }
+-
+-      this.windows.delete(id);
+     }
+   },
+ 
+   handleEvent: function(event) {
+     let window = event.currentTarget;
+     if (event.target != window.document) {
+       // We use capturing listeners so we have precedence over content script
+       // listeners, but only care about events targeted to the element we're
+@@ -384,17 +439,17 @@ var DocumentManager = {
+       this.trigger("document_end", window);
+     } else if (event.type == "load") {
+       this.trigger("document_idle", window);
+     }
+   },
+ 
+   executeScript(global, extensionId, script) {
+     let window = global.content;
+-    let context = this.getContext(extensionId, window);
++    let context = this.getContentScriptContext(extensionId, window);
+     if (!context) {
+       return;
+     }
+ 
+     // TODO: Somehow make sure we have the right permissions for this origin!
+ 
+     // FIXME: Script should be executed only if current state has
+     // already reached its run_at state, or we have to keep it around
+@@ -408,72 +463,95 @@ var DocumentManager = {
      yield [window, this.getWindowState(window)];
  
      for (let i = 0; i < docShell.childCount; i++) {
@@ -233,35 +304,32 @@ index bcc2c95..86355c9 100644
    },
  
 -  getContext(extensionId, window) {
-+  getExtensionsForWindow(window) {
++  getContentScriptContext(extensionId, window) {
      let winId = windowId(window);
-     if (!this.windows.has(winId)) {
-       this.windows.set(winId, new Map());
+-    if (!this.windows.has(winId)) {
+-      this.windows.set(winId, new Map());
++    if (!this.contentScriptWindows.has(winId)) {
++      this.contentScriptWindows.set(winId, new Map());
      }
 -    let extensions = this.windows.get(winId);
 +
-+    return this.windows.get(winId);
-+  },
-+
-+  getContext(extensionId, window) {
-+    let extensions = this.getExtensionsForWindow(window);
++    let extensions = this.contentScriptWindows.get(winId);
      if (!extensions.has(extensionId)) {
--      let context = new ExtensionContext(extensionId, window);
--      extensions.set(extensionId, context);
-+      return this.createExtensionContext(extensionId, window);
+       let context = new ExtensionContext(extensionId, window);
+       extensions.set(extensionId, context);
      }
 +
      return extensions.get(extensionId);
    },
  
-+  createExtensionContext(extensionId, window, contextOptions = {}) {
-+    let extensions = this.getExtensionsForWindow(window);
-+    if (extensions.has(extensionId)) {
-+      throw Error("This window already had an extension context");
-+    }
++  getExtensionPageContext(extensionId, window) {
++    let winId = windowId(window);
 +
-+    let context = new ExtensionContext(extensionId, window, contextOptions);
-+    extensions.set(extensionId, context);
++    let context = this.extensionPageWindows.get(winId);
++    if (!context) {
++      let context = new ExtensionContext(extensionId, window, { isExtensionPage: true });
++      this.extensionPageWindows.set(winId, context);
++    }
 +
 +    return context;
 +  },
@@ -274,11 +342,66 @@ index bcc2c95..86355c9 100644
  
      let extension = ExtensionManager.get(extensionId);
      for (let global of ExtensionContent.globals.keys()) {
+       // Note that we miss windows in the bfcache here. In theory we
+       // could execute content scripts on a pageshow event for that
+       // window, but that seems extreme.
+       for (let [window, state] of this.enumerateWindows(global.docShell)) {
+         for (let script of extension.scripts) {
+           if (script.matches(window)) {
+-            let context = this.getContext(extensionId, window);
++            let context = this.getContentScriptContext(extensionId, window);
+             context.execute(script, scheduled => isWhenBeforeOrSame(scheduled, state));
+           }
+         }
+       }
+     }
+   },
+ 
+   shutdownExtension(extensionId) {
+-    for (let [, extensions] of this.windows) {
++    // cleaup content-script contexts on extension shutdown
++    for (let [, extensions] of this.contentScriptWindows) {
+       let context = extensions.get(extensionId);
+       if (context) {
+         context.close();
+         extensions.delete(extensionId);
+       }
+     }
+ 
++    // cleaup iframe extension page contexts on extension shutdown
++    for (let [winId, context] of this.extensionPageWindows) {
++      if (context && context.extensionId == extensionId) {
++        context.close();
++        this.extensionPageWindows.delete(winId);
++      }
++    }
++
+     this.extensionCount--;
+     if (this.extensionCount == 0) {
+       this.uninit();
+     }
+   },
+ 
+   trigger(when, window) {
+     let state = this.getWindowState(window);
+     for (let [extensionId, extension] of ExtensionManager.extensions) {
+       for (let script of extension.scripts) {
+         if (script.matches(window)) {
+-          let context = this.getContext(extensionId, window);
++          let context = this.getContentScriptContext(extensionId, window);
+           context.execute(script, scheduled => scheduled == state);
+         }
+       }
+     }
+   },
+ };
+ 
+ // Represents a browser extension in the content process.
 diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
-index 36c29a7..99aa42d 100644
+index 36c29a7..58f1b97 100644
 --- a/toolkit/components/extensions/ExtensionManagement.jsm
 +++ b/toolkit/components/extensions/ExtensionManagement.jsm
-@@ -197,33 +197,73 @@ var Service = {
+@@ -197,33 +197,78 @@ var Service = {
    checkAddonMayLoad(extension, uri) {
      return extension.whiteListedHosts.matchesIgnoringPath(uri);
    },
@@ -333,6 +456,11 @@ index 36c29a7..99aa42d 100644
 +  // WebExtension URLs loaded into sub-frame UI have "content script API level privileges".
 +  // (see Bug 1214658 for rationale)
 +  if (docShell.sameTypeParent) {
++    return CONTENTSCRIPT_PRIVILEGES;
++  }
++
++  // Extension pages running in the content process defaults to "content script API level privileges".
++  if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
 +    return CONTENTSCRIPT_PRIVILEGES;
 +  }
 +

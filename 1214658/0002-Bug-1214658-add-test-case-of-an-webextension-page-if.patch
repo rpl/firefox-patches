@@ -1,13 +1,13 @@
 # HG changeset patch
-# User Luca Greco <luca.greco@alcacoop.it>
+# User Luca Greco <lgreco@mozilla.com>
 
 Bug 1214658 - add test case of an webextension page iframe created from a content script r=kmag
 
 ---
  .../mochitest/file_ext_collect_security_errors.js  |  10 ++
  .../extensions/test/mochitest/mochitest.ini        |   2 +
- .../test_ext_contentscript_create_iframe.html      | 188 +++++++++++++++++++++
- 3 files changed, 200 insertions(+)
+ .../test_ext_contentscript_create_iframe.html      | 192 +++++++++++++++++++++
+ 3 files changed, 204 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/file_ext_collect_security_errors.js
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 
@@ -57,10 +57,10 @@ index f1364ed..678e286 100644
  [test_ext_runtime_connect.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..26367ed
+index 0000000..0c64af2
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,192 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -90,16 +90,20 @@ index 0000000..26367ed
 +add_task(function* test_contentscript_create_iframe() {
 +  function backgroundScript() {
 +    browser.runtime.onMessage.addListener((msg, sender) => {
-+      let { name, availableAPIs, manifest } = msg;
++      let { name, availableAPIs, manifest, testGetManifest } = msg;
 +      let hasExtTabsAPI = availableAPIs.indexOf("tabs") > 0;
 +      let hasExtWindowsAPI = availableAPIs.indexOf("windows") > 0;
 +
 +      browser.test.assertFalse(hasExtTabsAPI, "the created iframe should not be able to use privileged APIs (tabs)");
 +      browser.test.assertFalse(hasExtWindowsAPI, "the created iframe should not be able to use privileged APIs (windows)");
-+
 +      browser.test.assertTrue(
 +        JSON.stringify(manifest) == JSON.stringify(chrome.runtime.getManifest()),
 +        "the add-on manifest should be accessible from the created iframe"
++      );
++
++      browser.test.assertTrue(
++        testGetManifest && testGetManifest.content_scripts,
++        "GET_MANIFEST() returns manifest data before extension unload"
 +      );
 +
 +      browser.test.sendMessage(name);
@@ -117,6 +121,9 @@ index 0000000..26367ed
 +  }
 +
 +  function contentScriptIframe() {
++    window.GET_MANIFEST = browser.runtime.getManifest.bind(null);
++    let testGetManifest = window.GET_MANIFEST();
++
 +    let manifest = browser.runtime.getManifest();
 +    let availableAPIs = Object.keys(browser);
 +
@@ -124,6 +131,7 @@ index 0000000..26367ed
 +      name: "content-script-iframe-loaded",
 +      availableAPIs,
 +      manifest,
++      testGetManifest,
 +    });
 +  }
 +
@@ -201,10 +209,6 @@ index 0000000..26367ed
 +  }
 +
 +  ok(iframeWindow, "content script enabled iframe found");
-+  iframeWindow.eval("window.GET_MANIFEST = browser.runtime.getManifest.bind(null);");
-+
-+  let expectedManifest = iframeWindow.eval("GET_MANIFEST()");
-+  ok(!!expectedManifest.content_scripts, "GET_MANIFEST() returns manifest data before extension unload");
 +
 +  yield extension.unload();
 +  info("extension unloaded");
