@@ -1,5 +1,5 @@
 # HG changeset patch
-# User Luca Greco <luca.greco@alcacoop.it>
+# User Luca Greco <lgreco@mozilla.com>
 
 Bug 1227462 - tabs.update should call checkLoadURL. r=kmag
 
