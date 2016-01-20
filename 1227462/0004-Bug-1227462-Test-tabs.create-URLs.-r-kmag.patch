@@ -5,8 +5,8 @@ Bug 1227462 - Test tabs.create URLs. r=kmag
 
 ---
  .../components/extensions/test/browser/browser.ini |   1 +
- .../test/browser/browser_ext_tabs_create_url.js    | 115 +++++++++++++++++++++
- 2 files changed, 116 insertions(+)
+ .../test/browser/browser_ext_tabs_create_url.js    | 106 +++++++++++++++++++++
+ 2 files changed, 107 insertions(+)
  create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
@@ -33,17 +33,15 @@ index a40494a..5b36739 100644
  [browser_ext_contentscript_connect.js]
 diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
 new file mode 100644
-index 0000000..2b0ebdd
+index 0000000..a0b90a6
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,106 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
 +
-+Components.utils.import("resource://gre/modules/Services.jsm");
-+
-+function* testTabsCreateURL(tabsCreateURL) {
++function* testTabsCreateURL(tabsCreateURL, isErrorExpected) {
 +  let extension = ExtensionTestUtils.loadExtension({
 +    manifest: {
 +      "backgound": { scripts: ["background.js"] },
@@ -66,8 +64,17 @@ index 0000000..2b0ebdd
 +    },
 +    background: function() {
 +      browser.test.sendMessage("ready", browser.runtime.getURL("tab.html"));
-+      browser.test.onMessage.addListener((msg, tabsCreateURL) => {
++      browser.test.onMessage.addListener((msg, tabsCreateURL, isErrorExpected) => {
 +        browser.tabs.create({ url: tabsCreateURL }, (tab) => {
++          if (isErrorExpected) {
++            // TODO: check runtime.lastError once supported
++            browser.test.assertEq(undefined, tab, "on error tab should be undefined");
++          } else {
++            browser.test.assertEq(tab && tab.url, tabsCreateURL,
++                                  "on success the tab url should be equal to the url requested");
++          }
++
++          // Remove the opened tab is any.
 +          if (tab) {
 +            browser.tabs.remove(tab.id);
 +          }
@@ -87,22 +94,14 @@ index 0000000..2b0ebdd
 +
 +  info(`tab.create URL "${tabsCreateURL}"`);
 +
-+  extension.sendMessage("start", tabsCreateURL);
++  extension.sendMessage("start", tabsCreateURL, isErrorExpected);
 +  yield extension.awaitMessage("done");
 +
 +  yield extension.unload();
-+
-+  let errors = Services.console.getMessageArray() || [];
-+
-+  Services.console.reset();
-+
-+  return errors;
 +}
 +
 +add_task(function* () {
 +  info("Start testing tabs.create on javascript URLs");
-+
-+  let errorRegExp = /Permission denied on tabs.create/;
 +
 +  let dataURLPage = `
 +    data:text/html,<!DOCTYPE html>
@@ -118,36 +117,28 @@ index 0000000..2b0ebdd
 +  let testCases = [
 +    {
 +      tabsCreateURL: "http://example.net",
-+      expectedError: false,
++      isErrorExpected: false,
 +    },
 +    {
 +      tabsCreateURL: "self",
-+      expectedError: false,
++      isErrorExpected: false,
 +    },
 +    {
 +      tabsCreateURL: "about:addons",
-+      expectedError: true,
++      isErrorExpected: true,
 +    },
 +    {
 +      tabsCreateURL: "javascript:console.log('tabs.update execute javascript')",
-+      expectedError: true,
++      isErrorExpected: true,
 +    },
 +    {
 +      tabsCreateURL: dataURLPage,
-+      expectedError: true,
++      isErrorExpected: true,
 +    },
 +  ];
 +
-+  for (let { tabsCreateURL, expectedError } of testCases) {
-+    let errors = yield* testTabsCreateURL(tabsCreateURL);
-+
-+    let errorCount = errors.filter((error) => errorRegExp.test(error)).length;
-+
-+    if (expectedError) {
-+      is(errorCount, 1, "The number of errors found should be 1");
-+    } else {
-+      is(errorCount, 0, "The number of errors found should be 0");
-+    }
++  for (let { tabsCreateURL, isErrorExpected } of testCases) {
++    yield* testTabsCreateURL(tabsCreateURL, isErrorExpected);
 +  }
 +
 +  info("done");

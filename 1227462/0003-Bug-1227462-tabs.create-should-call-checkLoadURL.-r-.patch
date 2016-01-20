@@ -4,14 +4,14 @@
 Bug 1227462 - tabs.create should call checkLoadURL. r=kmag
 
 ---
- browser/components/extensions/ext-tabs.js | 9 +++++++++
- 1 file changed, 9 insertions(+)
+ browser/components/extensions/ext-tabs.js | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index b66b24a..b32645d 100644
+index 0f57a5c..cf34d67 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -259,16 +259,25 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+@@ -259,16 +259,26 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
            AllWindowEvents.removeListener("TabClose", tabListener);
          };
        }).api(),
@@ -20,10 +20,11 @@ index b66b24a..b32645d 100644
          let url = createProperties.url || aboutNewTabService.newTabURL;
          url = context.uri.resolve(url);
  
-+        if (!context.checkLoadURL(url)) {
-+          Cu.reportError(`Permission denied on tabs.create with url "${url}"`);
++        // Skip checkLoadURL if the URL has been populated from the aboutNewTabService,
++        // (it is usually an "about:" or "chrome:" URL).
++        if (url != aboutNewTabService.newTabURL && !context.checkLoadURL(url)) {
++          // TODO: runtime.lastError should be set to `Invalid url: ${updateProperties.url}`
 +          if (callback) {
-+            // TODO: runtime.lastError should be set
 +            runSafe(context, callback, undefined);
 +          }
 +          return;
@@ -37,4 +38,30 @@ index b66b24a..b32645d 100644
              active = createProperties.active;
            }
            if (active) {
+@@ -279,17 +289,24 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+             window.gBrowser.moveTabTo(tab, createProperties.index);
+           }
+ 
+           if (createProperties.pinned) {
+             window.gBrowser.pinTab(tab);
+           }
+ 
+           if (callback) {
+-            runSafe(context, callback, TabManager.convert(extension, tab));
++            let tabDetails = TabManager.convert(extension, tab);
++
++            // The tab details URL has to be set to the current loading URL
++            // (on the contrary, the title is supposed to remain the current one
++            // until the new page has been fully loaded in the tab).
++            tabDetails.url = url;
++
++            runSafe(context, callback, tabDetails);
+           }
+         }
+ 
+         let window = createProperties.windowId !== null ?
+           WindowManager.getWindow(createProperties.windowId) :
+           WindowManager.topWindow;
+         if (!window.gBrowser) {
+           let obs = (finishedWindow, topic, data) => {
 
