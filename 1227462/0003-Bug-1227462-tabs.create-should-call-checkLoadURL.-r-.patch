@@ -4,14 +4,31 @@
 Bug 1227462 - tabs.create should call checkLoadURL. r=kmag
 
 ---
- browser/components/extensions/ext-tabs.js | 12 ++++++++++--
- 1 file changed, 10 insertions(+), 2 deletions(-)
+ browser/components/extensions/ext-tabs.js | 22 +++++++++++++++-------
+ 1 file changed, 15 insertions(+), 7 deletions(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index 1d2b4e5..d8c3d7f 100644
+index 1d2b4e5..ad4f356 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -256,19 +256,27 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+@@ -1,16 +1,12 @@
+ /* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+ /* vim: set sts=2 sw=2 et tw=80: */
+ "use strict";
+ 
+-XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
+-                                   "@mozilla.org/browser/aboutnewtab-service;1",
+-                                   "nsIAboutNewTabService");
+-
+ XPCOMUtils.defineLazyModuleGetter(this, "MatchPattern",
+                                   "resource://gre/modules/MatchPattern.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
+ 
+ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ 
+@@ -256,18 +252,30 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
          AllWindowEvents.addListener("TabClose", tabListener);
          return () => {
            WindowListManager.removeCloseListener(windowListener);
@@ -21,17 +38,22 @@ index 1d2b4e5..d8c3d7f 100644
  
        create: function(createProperties, callback) {
 -        let url = createProperties.url || aboutNewTabService.newTabURL;
-+        let url = createProperties.url || "";
-         url = context.uri.resolve(url);
- 
-+        if (!context.checkLoadURL(url)) {
-+          // TODO: runtime.lastError should be set to `Invalid url: ${updateProperties.url}`
-+          if (callback) {
-+            runSafe(context, callback, undefined);
-+          }
-+          return;
-+        }
+-        url = context.uri.resolve(url);
++        let url;
 +
++        if (createProperties.url) {
++          url = context.uri.resolve(createProperties.url);
++
++          if (!context.checkLoadURL(url)) {
++            // TODO: runtime.lastError should be set to `Invalid url: ${updateProperties.url}`
++            if (callback) {
++              runSafe(context, callback, undefined);
++            }
++
++            return;
++          }
++        }
+ 
          function createInWindow(window) {
            let tab = window.gBrowser.addTab(url);
  
@@ -39,7 +61,6 @@ index 1d2b4e5..d8c3d7f 100644
            if (createProperties.active !== null) {
              active = createProperties.active;
            }
-           if (active) {
 @@ -279,17 +287,17 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
              window.gBrowser.moveTabTo(tab, createProperties.index);
            }
