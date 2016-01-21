@@ -4,9 +4,9 @@
 Bug 1227462 - Test tabs.create URLs. r=kmag
 
 ---
- .../components/extensions/test/browser/browser.ini |   1 +
- .../test/browser/browser_ext_tabs_create_url.js    | 113 +++++++++++++++++++++
- 2 files changed, 114 insertions(+)
+ .../components/extensions/test/browser/browser.ini |  1 +
+ .../test/browser/browser_ext_tabs_create_url.js    | 66 ++++++++++++++++++++++
+ 2 files changed, 67 insertions(+)
  create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
@@ -33,45 +33,27 @@ index a40494a..5b36739 100644
  [browser_ext_contentscript_connect.js]
 diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
 new file mode 100644
-index 0000000..12f2db2
+index 0000000..2aa0c23
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,66 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
 +
-+function* testTabsCreateURL(tabsCreateURL, isErrorExpected) {
++function* testTabsCreateInvalidURL(tabsCreateURL) {
 +  let extension = ExtensionTestUtils.loadExtension({
 +    manifest: {
 +      "backgound": { scripts: ["background.js"] },
 +      "permissions": ["tabs"],
-+      "webAccessibleResources": ["tab.html"],
 +    },
 +
-+    files: {
-+      "tab.html": `
-+        <!DOCTYPE>
-+        <html>
-+          <head>
-+            <meta charset="utf-8">
-+          </head>
-+          <body>
-+            <h1>tab page</h1>
-+          </body>
-+        </html>
-+      `,
-+    },
 +    background: function() {
-+      browser.test.sendMessage("ready", browser.runtime.getURL("tab.html"));
-+      browser.test.onMessage.addListener((msg, tabsCreateURL, isErrorExpected) => {
++      browser.test.sendMessage("ready");
++      browser.test.onMessage.addListener((msg, tabsCreateURL) => {
 +        browser.tabs.create({ url: tabsCreateURL }, (tab) => {
-+          if (isErrorExpected) {
-+            // TODO: check runtime.lastError once supported
-+            browser.test.assertEq(undefined, tab, "on error tab should be undefined");
-+          } else {
-+            browser.test.assertTrue(!!tab, "on success the tab should be defined");
-+          }
++          // TODO: check runtime.lastError once supported
++          browser.test.assertEq(undefined, tab, "on error tab should be undefined");
 +
 +          // Remove the opened tab is any.
 +          if (tab) {
@@ -83,28 +65,20 @@ index 0000000..12f2db2
 +    },
 +  });
 +
-+  let win = yield BrowserTestUtils.openNewBrowserWindow({});
-+
 +  yield extension.startup();
 +
-+  let mozExtTabURL = yield extension.awaitMessage("ready");
++  yield extension.awaitMessage("ready");
 +
-+  if (tabsCreateURL == "self") {
-+    tabsCreateURL = mozExtTabURL;
-+  }
++  info(`test tab.create on invalid URL "${tabsCreateURL}"`);
 +
-+  info(`tab.create URL "${tabsCreateURL}"`);
-+
-+  extension.sendMessage("start", tabsCreateURL, isErrorExpected);
++  extension.sendMessage("start", tabsCreateURL);
 +  yield extension.awaitMessage("done");
 +
 +  yield extension.unload();
-+
-+  yield BrowserTestUtils.closeWindow(win);
 +}
 +
 +add_task(function* () {
-+  info("Start testing tabs.create on javascript URLs");
++  info("Start testing tabs.create on invalid URLs");
 +
 +  let dataURLPage = `
 +    data:text/html,<!DOCTYPE html>
@@ -118,34 +92,13 @@ index 0000000..12f2db2
 +    </html>`;
 +
 +  let testCases = [
-+    {
-+      tabsCreateURL: null,
-+      isErrorExpected: false,
-+    },
-+    {
-+      tabsCreateURL: "http://example.net",
-+      isErrorExpected: false,
-+    },
-+    {
-+      tabsCreateURL: "self",
-+      isErrorExpected: false,
-+    },
-+    {
-+      tabsCreateURL: "about:addons",
-+      isErrorExpected: true,
-+    },
-+    {
-+      tabsCreateURL: "javascript:console.log('tabs.update execute javascript')",
-+      isErrorExpected: true,
-+    },
-+    {
-+      tabsCreateURL: dataURLPage,
-+      isErrorExpected: true,
-+    },
++    { tabsCreateURL: "about:addons" },
++    { tabsCreateURL: "javascript:console.log('tabs.update execute javascript')" },
++    { tabsCreateURL: dataURLPage },
 +  ];
 +
-+  for (let { tabsCreateURL, isErrorExpected } of testCases) {
-+    yield* testTabsCreateURL(tabsCreateURL, isErrorExpected);
++  for (let { tabsCreateURL } of testCases) {
++    yield* testTabsCreateInvalidURL(tabsCreateURL);
 +  }
 +
 +  info("done");
