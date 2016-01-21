@@ -5,8 +5,8 @@ Bug 1227462 - Test tabs.create URLs. r=kmag
 
 ---
  .../components/extensions/test/browser/browser.ini |   1 +
- .../test/browser/browser_ext_tabs_create_url.js    | 106 +++++++++++++++++++++
- 2 files changed, 107 insertions(+)
+ .../test/browser/browser_ext_tabs_create_url.js    | 105 +++++++++++++++++++++
+ 2 files changed, 106 insertions(+)
  create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
@@ -33,10 +33,10 @@ index a40494a..5b36739 100644
  [browser_ext_contentscript_connect.js]
 diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
 new file mode 100644
-index 0000000..a0b90a6
+index 0000000..c958cbf
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_tabs_create_url.js
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,105 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
@@ -70,8 +70,7 @@ index 0000000..a0b90a6
 +            // TODO: check runtime.lastError once supported
 +            browser.test.assertEq(undefined, tab, "on error tab should be undefined");
 +          } else {
-+            browser.test.assertEq(tab && tab.url, tabsCreateURL,
-+                                  "on success the tab url should be equal to the url requested");
++            browser.test.assertTrue(!!tab, "on success the tab should be defined");
 +          }
 +
 +          // Remove the opened tab is any.

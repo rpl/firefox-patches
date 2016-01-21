@@ -4,15 +4,14 @@
 Bug 1227462 - tabs.update should call checkLoadURL. r=kmag
 
 ---
- browser/components/extensions/ext-tabs.js  | 68 +++++++++++++++++++++++-------
- browser/components/extensions/ext-utils.js |  4 ++
- 2 files changed, 56 insertions(+), 16 deletions(-)
+ browser/components/extensions/ext-tabs.js | 54 ++++++++++++++++++++++---------
+ 1 file changed, 38 insertions(+), 16 deletions(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index f724d8f..0f57a5c 100644
+index f724d8f..1d2b4e5 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -318,37 +318,73 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+@@ -318,37 +318,59 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
          if (callback) {
            runSafe(context, callback);
          }
@@ -30,19 +29,10 @@ index f724d8f..0f57a5c 100644
 -          } else {
 -            // Not sure what to do here? Which tab should we select?
 +
-+        // An update is valid if at least one of the supported updateProperties is valid
-+        // and the request is going to be handled.
-+        let isValidTabUpdate = false;
-+
-+        // tabLoadingURL will be defined if the request URL is valid.
-+        let tabLoadingURL;
-+
 +        if (tab) {
 +          // FIXME: highlighted/selected, muted, openerTabId
 +
 +          if (updateProperties.active !== null) {
-+            isValidTabUpdate = true;
-+
 +            if (updateProperties.active) {
 +              tabbrowser.selectedTab = tab;
 +            } else {
@@ -56,25 +46,31 @@ index f724d8f..0f57a5c 100644
 -          } else {
 -            tabbrowser.unpinTab(tab);
 +          if (updateProperties.pinned !== null) {
-+            isValidTabUpdate = true;
-+
 +            if (updateProperties.pinned) {
 +              tabbrowser.pinTab(tab);
 +            } else {
 +              tabbrowser.unpinTab(tab);
 +            }
-           }
++          }
 +
 +          if (updateProperties.url !== null) {
 +            if (context.checkLoadURL(updateProperties.url)) {
-+              isValidTabUpdate = true;
-+
-+              tabLoadingURL = updateProperties.url;
-+              tab.linkedBrowser.loadURI(tabLoadingURL);
++              tab.linkedBrowser.loadURI(updateProperties.url);
 +            } else {
 +              // TODO: runtime.lastError should be set to `Invalid url: ${updateProperties.url}`
++
++              // If the URL was the only update properties and it is invalid
++              // then the calback |tab| parameter should be undefined.
++              let keyIsNotURL = (k) => k !== "url";
++              let valueIsNotNull = (k) => updateProperties[k] !== null;
++              let otherUpdatedProperties = Object.keys(updateProperties)
++                                                 .filter(keyIsNotURL)
++                                                 .some(valueIsNotNull);
++              if (!otherUpdatedProperties) {
++                tab = undefined;
++              }
 +            }
-+          }
+           }
 +        } else {
 +          // TODO: runtime.lastError should be set to `No tab with id: ${tabId}`
          }
@@ -82,18 +78,7 @@ index f724d8f..0f57a5c 100644
  
          if (callback) {
 -          runSafe(context, callback, TabManager.convert(extension, tab));
-+          // If the update is invalid (no tab properties have been updated successfully)
-+          // the callback tab parameter should be undefined.
-+          let tabDetails = TabManager.convert(extension, isValidTabUpdate ? tab : undefined);
-+
-+          // The tab details URL has to be set to the current loading URL
-+          // (on the contrary, the title is supposed to remain the current one
-+          // until the new page has been fully loaded in the tab).
-+          if (tabLoadingURL) {
-+            tabDetails.url = tabLoadingURL;
-+          }
-+
-+          runSafe(context, callback, tabDetails);
++          runSafe(context, callback, tab && TabManager.convert(extension, tab));
          }
        },
  
@@ -102,29 +87,4 @@ index f724d8f..0f57a5c 100644
          let flags = Ci.nsIWebNavigation.LOAD_FLAGS_NONE;
          if (reloadProperties && reloadProperties.bypassCache) {
            flags |= Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
-diff --git a/browser/components/extensions/ext-utils.js b/browser/components/extensions/ext-utils.js
-index ea35ea4..632722b 100644
---- a/browser/components/extensions/ext-utils.js
-+++ b/browser/components/extensions/ext-utils.js
-@@ -416,16 +416,20 @@ ExtensionTabManager.prototype = {
-     return false;
-   },
- 
-   hasTabPermission(tab) {
-     return this.extension.hasPermission("tabs") || this.hasActiveTabPermission(tab);
-   },
- 
-   convert(tab) {
-+    if (!tab) {
-+      return undefined;
-+    }
-+
-     let window = tab.ownerDocument.defaultView;
- 
-     let result = {
-       id: TabManager.getId(tab),
-       index: tab._tPos,
-       windowId: WindowManager.getId(window),
-       selected: tab.selected,
-       highlighted: tab.selected,
 

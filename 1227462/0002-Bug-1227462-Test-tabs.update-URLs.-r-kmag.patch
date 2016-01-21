@@ -5,8 +5,8 @@ Bug 1227462 - Test tabs.update URLs. r=kmag
 
 ---
  .../components/extensions/test/browser/browser.ini |   1 +
- .../test/browser/browser_ext_tabs_update_url.js    | 108 +++++++++++++++++++++
- 2 files changed, 109 insertions(+)
+ .../test/browser/browser_ext_tabs_update_url.js    | 109 +++++++++++++++++++++
+ 2 files changed, 110 insertions(+)
  create mode 100644 browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
@@ -32,10 +32,10 @@ index b24a926..a40494a 100644
  [browser_ext_tab_runtimeConnect.js]
 diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
 new file mode 100644
-index 0000000..78586f0
+index 0000000..23aa3d0
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,109 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
@@ -70,8 +70,9 @@ index 0000000..78586f0
 +              // TODO: check runtime.lastError once supported
 +              browser.test.assertEq(undefined, tab, "on error tab should be undefined");
 +            } else {
-+              browser.test.assertEq(tab && tab.url, tabsUpdateURL, "on success the tab url should be correctly updated");
++              browser.test.assertTrue(!!tab, "on success the tab should be defined");
 +            }
++
 +            browser.test.sendMessage("done");
 +          });
 +        });
