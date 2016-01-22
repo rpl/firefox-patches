@@ -4,14 +4,14 @@
 Bug 1227462 - tabs.create should call checkLoadURL. r=kmag
 
 ---
- browser/components/extensions/ext-tabs.js | 22 +++++++++++++++++++---
- 1 file changed, 19 insertions(+), 3 deletions(-)
+ browser/components/extensions/ext-tabs.js | 18 ++++++++++++++++--
+ 1 file changed, 16 insertions(+), 2 deletions(-)
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
-index 1d2b4e5..3eb3fc3 100644
+index 8301259..b30879d 100644
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -256,20 +256,36 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
+@@ -256,18 +256,32 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
          AllWindowEvents.addListener("TabClose", tabListener);
          return () => {
            WindowListManager.removeCloseListener(windowListener);
@@ -35,38 +35,15 @@ index 1d2b4e5..3eb3fc3 100644
 +
 +            return;
 +          }
++        } else {
++          url = aboutNewTabService.newTabURL;
 +        }
  
          function createInWindow(window) {
-+          if (!url) {
-+            url = aboutNewTabService.newTabURL;
-+          }
-+
            let tab = window.gBrowser.addTab(url);
  
            let active = true;
            if (createProperties.active !== null) {
              active = createProperties.active;
            }
-           if (active) {
-             window.gBrowser.selectedTab = tab;
-@@ -279,17 +295,17 @@ extensions.registerSchemaAPI("tabs", null, (extension, context) => {
-             window.gBrowser.moveTabTo(tab, createProperties.index);
-           }
- 
-           if (createProperties.pinned) {
-             window.gBrowser.pinTab(tab);
-           }
- 
-           if (callback) {
--            runSafe(context, callback, TabManager.convert(extension, tab));
-+            runSafe(context, callback, tab && TabManager.convert(extension, tab));
-           }
-         }
- 
-         let window = createProperties.windowId !== null ?
-           WindowManager.getWindow(createProperties.windowId) :
-           WindowManager.topWindow;
-         if (!window.gBrowser) {
-           let obs = (finishedWindow, topic, data) => {
 
