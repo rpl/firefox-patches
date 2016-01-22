@@ -68,10 +68,10 @@ index a38d13c..3985cb0 100644
      let eventHandler = docShell.chromeEventHandler;
      let listener = event => {
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
-index bcc2c95..a574c16 100644
+index bcc2c95..78a28d5 100644
 --- a/toolkit/components/extensions/ExtensionContent.jsm
 +++ b/toolkit/components/extensions/ExtensionContent.jsm
-@@ -211,17 +211,19 @@ function getWindowMessageManager(contentWindow) {
+@@ -211,17 +211,20 @@ function getWindowMessageManager(contentWindow) {
    }
  }
  
@@ -84,6 +84,7 @@ index bcc2c95..a574c16 100644
 +function ExtensionContext(extensionId, contentWindow, contextOptions = {}) {
 +  let { isExtensionPage } = contextOptions;
 +
++  this.isExtensionPage = isExtensionPage;
    this.extension = ExtensionManager.get(extensionId);
    this.extensionId = extensionId;
    this.contentWindow = contentWindow;
@@ -92,7 +93,7 @@ index bcc2c95..a574c16 100644
  
    let utils = contentWindow.QueryInterface(Ci.nsIInterfaceRequestor)
                             .getInterface(Ci.nsIDOMWindowUtils);
-@@ -238,44 +240,67 @@ function ExtensionContext(extensionId, contentWindow) {
+@@ -238,44 +241,66 @@ function ExtensionContext(extensionId, contentWindow) {
    if (ssm.isSystemPrincipal(contentPrincipal)) {
      // Make sure we don't hand out the system principal by accident.
      prin = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
@@ -157,7 +158,6 @@ index bcc2c95..a574c16 100644
 +
 +  // This is an iframe with content script API enabled. (See Bug 1214658 for rationale)
 +  if (isExtensionPage) {
-+    this.isExtensionPage = isExtensionPage;
 +    Cu.waiveXrays(this.contentWindow).chrome = this.chromeObj;
 +    Cu.waiveXrays(this.contentWindow).browser = this.chromeObj;
 +  }
@@ -247,7 +247,7 @@ index bcc2c95..a574c16 100644
 -        return;
 +      let windowId = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
 +
-+      // close any existent content-script context for the destroyed window
++      // Close any existent content-script context for the destroyed window.
 +      if (this.contentScriptWindows.has(windowId)) {
 +        let extensions = this.contentScriptWindows.get(windowId);
 +        for (let [, context] of extensions) {
@@ -259,7 +259,7 @@ index bcc2c95..a574c16 100644
  
 -      let extensions = this.windows.get(id);
 -      for (let [, context] of extensions) {
-+      // close any existent iframe extension page context for the destroyed window
++      // Close any existent iframe extension page context for the destroyed window.
 +      if (this.extensionPageWindows.has(windowId)) {
 +        let context = this.extensionWindows.get(windowId);
          context.close();
@@ -359,7 +359,7 @@ index bcc2c95..a574c16 100644
  
    shutdownExtension(extensionId) {
 -    for (let [, extensions] of this.windows) {
-+    // cleaup content-script contexts on extension shutdown
++    // Clean up content-script contexts on extension shutdown.
 +    for (let [, extensions] of this.contentScriptWindows) {
        let context = extensions.get(extensionId);
        if (context) {
@@ -368,9 +368,9 @@ index bcc2c95..a574c16 100644
        }
      }
  
-+    // cleaup iframe extension page contexts on extension shutdown
++    // Clean up iframe extension page contexts on extension shutdown.
 +    for (let [winId, context] of this.extensionPageWindows) {
-+      if (context && context.extensionId == extensionId) {
++      if (context.extensionId == extensionId) {
 +        context.close();
 +        this.extensionPageWindows.delete(winId);
 +      }

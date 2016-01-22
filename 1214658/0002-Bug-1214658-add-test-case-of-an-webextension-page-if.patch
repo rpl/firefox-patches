@@ -5,8 +5,8 @@ Bug 1214658 - add test case of an webextension page iframe created from a conten
 
 ---
  .../extensions/test/mochitest/mochitest.ini        |   1 +
- .../test_ext_contentscript_create_iframe.html      | 157 +++++++++++++++++++++
- 2 files changed, 158 insertions(+)
+ .../test_ext_contentscript_create_iframe.html      | 163 +++++++++++++++++++++
+ 2 files changed, 164 insertions(+)
  create mode 100644 toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 
 diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
@@ -33,10 +33,10 @@ index f1364ed..1f3b168 100644
  [test_ext_runtime_connect.html]
 diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
 new file mode 100644
-index 0000000..7617f70
+index 0000000..3c80280
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,163 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -72,14 +72,18 @@ index 0000000..7617f70
 +
 +      browser.test.assertFalse(hasExtTabsAPI, "the created iframe should not be able to use privileged APIs (tabs)");
 +      browser.test.assertFalse(hasExtWindowsAPI, "the created iframe should not be able to use privileged APIs (windows)");
-+      browser.test.assertTrue(
-+        JSON.stringify(manifest) == JSON.stringify(chrome.runtime.getManifest()),
-+        "the add-on manifest should be accessible from the created iframe"
++
++      let { applications: { gecko: { id: expectedManifestGeckoId } } } = chrome.runtime.getManifest();
++      let { applications: { gecko: { id: actualManifestGeckoId } } } = manifest;
++
++      browser.test.assertEq(actualManifestGeckoId, expectedManifestGeckoId,
++                            "the add-on manifest should be accessible from the created iframe"
 +      );
 +
-+      browser.test.assertTrue(
-+        testGetManifest && testGetManifest.content_scripts,
-+        "GET_MANIFEST() returns manifest data before extension unload"
++      let { applications: { gecko: { id: testGetManifestGeckoId } } } = testGetManifest;
++
++      browser.test.assertEq(testGetManifestGeckoId, expectedManifestGeckoId,
++                              "GET_MANIFEST() returns manifest data before extension unload"
 +      );
 +
 +      browser.test.sendMessage(name);
@@ -94,6 +98,15 @@ index 0000000..7617f70
 +
 +  function contentScriptIframe() {
 +    window.GET_MANIFEST = browser.runtime.getManifest.bind(null);
++
++    window.testGetManifestException = () => {
++      try {
++        window.GET_MANIFEST();
++      } catch (exception) {
++        return String(exception);
++      }
++    };
++
 +    let testGetManifest = window.GET_MANIFEST();
 +
 +    let manifest = browser.runtime.getManifest();
@@ -154,6 +167,8 @@ index 0000000..7617f70
 +  yield extension.unload();
 +  info("extension unloaded");
 +
++  info("test content script APIs not accessible from the frame once the extension is unloaded");
++
 +  let ww = SpecialPowers.Cu.waiveXrays(iframeWindow);
 +  let isDeadWrapper = SpecialPowers.Cu.isDeadWrapper(ww.browser);
 +  ok(!isDeadWrapper, "the API object should not be a dead object");
@@ -169,26 +184,17 @@ index 0000000..7617f70
 +
 +  ok(!manifest, "manifest should be undefined");
 +
-+  const BROWSER_RUNTIME_UNDEFINED_EXCEPTION = "TypeError: ww.browser.runtime is undefined";
-+  is(manifestException && manifestException.toString(), BROWSER_RUNTIME_UNDEFINED_EXCEPTION,
-+     `expected BROWSER_RUNTIME_UNDEFINED_EXCEPTION exception received`);
++  is(String(manifestException), "TypeError: ww.browser.runtime is undefined",
++     "expected \"TypeError: ... is undefined\" exception received");
 +
-+  let getManifest;
-+  let getManifestException;
++  let getManifestException = ww.testGetManifestException();
 +
-+  try {
-+    getManifest = ww.eval("GET_MANIFEST()");
-+  } catch (e) {
-+    getManifestException = e;
-+  }
-+
-+  ok(!getManifest, "getManifest should be undefined");
-+
-+  const DESTROYED_EXT_METHOD_EXCEPTION = "TypeError: GET_MANIFEST is not a function";
-+  is(getManifestException && getManifestException.toString(), DESTROYED_EXT_METHOD_EXCEPTION,
-+     `expected DESTROYED_EXT_METHOD_EXCEPTION exception received`);
++  is(getManifestException, "TypeError: window.GET_MANIFEST is not a function",
++     "expected \"TypeError: ... is not a function\" exception received");
 +
 +  win.close();
++
++  info("done");
 +});
 +</script>
 +
