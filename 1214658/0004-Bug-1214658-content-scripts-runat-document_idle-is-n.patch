@@ -1,0 +1,57 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+
+Bug 1214658 - content scripts "runat != document_idle" is not supported on b2g. r?kmag
+
+---
+ .../extensions/test/mochitest/test_ext_contentscript_api_injection.html | 2 +-
+ .../extensions/test/mochitest/test_ext_contentscript_create_iframe.html | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html
+index 42ea425..0f41f9a 100644
+--- a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_api_injection.html
+@@ -38,17 +38,17 @@ add_task(function* test_contentscript_api_injection() {
+   }
+ 
+   let extensionData = {
+     manifest: {
+       content_scripts: [
+         {
+           "matches": ["http://mochi.test/*/file_sample.html"],
+           "js": ["content_script.js"],
+-          "run_at": "document_end",
++          "run_at": "document_idle",
+         },
+       ],
+       "web_accessible_resources": [
+         "content_script_iframe.html",
+       ],
+     },
+ 
+     files: {
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
+index 3c80280..564fea6f 100644
+--- a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
+@@ -82,17 +82,17 @@ add_task(function* test_contentscript_create_iframe() {
+   }
+ 
+   let extensionData = {
+     manifest: {
+       content_scripts: [
+         {
+           "matches": ["http://mochi.test/*/file_sample.html"],
+           "js": ["content_script.js"],
+-          "run_at": "document_end",
++          "run_at": "document_idle",
+         },
+       ],
+       web_accessible_resources: [
+         "content_script_iframe.html",
+       ],
+     },
+ 
+     background: "(" + backgroundScript + ")()",
+
