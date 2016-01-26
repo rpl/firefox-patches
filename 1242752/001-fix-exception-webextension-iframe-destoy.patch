@@ -1,0 +1,141 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1453760247 -3600
+#      Mon Jan 25 23:17:27 2016 +0100
+# Node ID 383db4705e13334388a392eb380c7478ec6132de
+# Parent  0fa26d9b2b8f947356bd746cf5dc4c42785a06a2
+Bug 1242752 - Fix exception raised when a WebExtension iframe is destroyed. r?kmag
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -411,17 +411,17 @@ var DocumentManager = {
+           context.close();
+         }
+ 
+         this.contentScriptWindows.delete(windowId);
+       }
+ 
+       // Close any existent iframe extension page context for the destroyed window.
+       if (this.extensionPageWindows.has(windowId)) {
+-        let context = this.extensionWindows.get(windowId);
++        let context = this.extensionPageWindows.get(windowId);
+         context.close();
+         this.extensionPageWindows.delete(windowId);
+       }
+     }
+   },
+ 
+   handleEvent: function(event) {
+     let window = event.currentTarget;
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_create_iframe.html
+@@ -41,17 +41,16 @@ add_task(function* test_contentscript_cr
+                             "the add-on manifest should be accessible from the created iframe"
+       );
+ 
+       let { applications: { gecko: { id: testGetManifestGeckoId } } } = testGetManifest;
+ 
+       browser.test.assertEq(testGetManifestGeckoId, expectedManifestGeckoId,
+                               "GET_MANIFEST() returns manifest data before extension unload"
+       );
+-
+       browser.test.sendMessage(name);
+     });
+   }
+ 
+   function contentScript() {
+     let iframe = document.createElement("iframe");
+     iframe.setAttribute("src", browser.runtime.getURL("content_script_iframe.html"));
+     document.body.appendChild(iframe);
+@@ -152,12 +151,89 @@ add_task(function* test_contentscript_cr
+ 
+   is(getManifestException, "TypeError: window.GET_MANIFEST is not a function",
+      "expected \"TypeError: ... is not a function\" exception received");
+ 
+   win.close();
+ 
+   info("done");
+ });
++
++add_task(function* test_contentscript_destroy_iframe() {
++   function backgroundScript() {
++     browser.runtime.onMessage.addListener((msg, sender) => {
++       switch(msg) {
++       case "content-script-iframe-removed":
++         browser.test.sendMessage(msg);
++       }
++     });
++   }
++
++   function contentScript() {
++     let iframe = document.createElement("iframe");
++     iframe.setAttribute("src", browser.runtime.getURL("content_script_iframe.html"));
++
++     iframe.addEventListener("load", () => {
++       document.body.removeChild(iframe);
++       iframe = null;
++       browser.runtime.sendMessage("content-script-iframe-removed");
++     });
++
++     document.body.appendChild(iframe);
++   }
++
++   let extensionData = {
++     manifest: {
++       content_scripts: [
++         {
++           "matches": ["http://mochi.test/*/file_sample.html"],
++           "js": ["content_script.js"],
++           "run_at": "document_idle",
++         },
++       ],
++       web_accessible_resources: [
++         "content_script_iframe.html",
++       ],
++     },
++
++     background: "(" + backgroundScript + ")()",
++
++     files: {
++       "content_script.js": "new " + contentScript,
++       "content_script_iframe.html": document.querySelector("#test-asset").textContent,
++       "content_script_iframe.js": "new function() {}",
++     },
++   };
++
++   let extension = ExtensionTestUtils.loadExtension(extensionData);
++
++   // Assert the exception on content script iframe destroy is not raised.
++   let waitForConsole = new Promise(resolve => {
++     // Not necessary in browser-chrome tests, but monitorConsole gripes
++     // if we don't call it.
++     SimpleTest.waitForExplicitFinish();
++
++     SimpleTest.monitorConsole(resolve, [{ message: /extensionWindows is undefined/, forbid: true }]);
++   });
++
++   yield extension.startup();
++   info("extension loaded");
++
++   let win = window.open("file_sample.html");
++   yield waitForLoad(win);
++
++   yield extension.awaitMessage("content-script-iframe-removed");
++   info("iframe removed");
++
++   SimpleTest.endMonitorConsole();
++   yield waitForConsole;
++
++   yield extension.unload();
++   info("extension unloaded");
++
++   win.close();
++
++   info("done");
++});
+ </script>
+ 
+ </body>
+ </html>
