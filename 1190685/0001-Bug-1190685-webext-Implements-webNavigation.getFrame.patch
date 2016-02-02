@@ -1,20 +1,110 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-
+# Date 1454415552 -3600
+#      Tue Feb 02 13:19:12 2016 +0100
+# Node ID d3332fe4fccdd7f5fc6a221210e505e16e2598b4
+# Parent  a67a25a5af7446d8ae9beb453bcfa12be368fcef
 Bug 1190685 - [webext] Implements webNavigation.getFrame/getAllFrames API methods. r=kmag
 
----
- toolkit/components/extensions/ext-webNavigation.js |  30 +++++
- .../extensions/schemas/web_navigation.json         |   6 +-
- toolkit/modules/addons/WebNavigation.jsm           |  92 +++++++++++++-
- toolkit/modules/addons/WebNavigationContent.js     | 139 ++++++++++++++++++++-
- 4 files changed, 260 insertions(+), 7 deletions(-)
-
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -29,16 +29,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/MatchPattern.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+                                   "resource://gre/modules/PromiseUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "MessageChannel",
+                                   "resource://gre/modules/MessageChannel.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
++                                  "resource://gre/modules/WebNavigationFrames.jsm");
++
+ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ var {
+   runSafeSyncWithoutClone,
+   BaseContext,
+   LocaleData,
+   MessageBroker,
+   Messenger,
+   injectAPI,
+@@ -662,16 +665,18 @@ ExtensionManager = {
+   },
+ };
+ 
+ class ExtensionGlobal {
+   constructor(global) {
+     this.global = global;
+ 
+     MessageChannel.addListener(global, "Extension:Execute", this);
++    MessageChannel.addListener(global, "WebNavigation:GetFrame", this);
++    MessageChannel.addListener(global, "WebNavigation:GetAllFrames", this);
+ 
+     this.broker = new MessageBroker([global]);
+ 
+     this.windowId = global.content
+                           .QueryInterface(Ci.nsIInterfaceRequestor)
+                           .getInterface(Ci.nsIDOMWindowUtils)
+                           .outerWindowID;
+ 
+@@ -689,24 +694,46 @@ class ExtensionGlobal {
+                          .getInterface(Ci.nsIDOMWindowUtils)
+                          .currentInnerWindowID,
+     };
+   }
+ 
+   receiveMessage({ target, messageName, recipient, data }) {
+     switch (messageName) {
+       case "Extension:Execute":
+-        let deferred = PromiseUtils.defer();
++        return this.handleExtensionExecute(target, recipient, data);
++      case "WebNavigation:GetFrame":
++        return this.handleWebNavigationGetFrame(data);
++      case "WebNavigation:GetAllFrames":
++        return this.handleWebNavigationGetAllFrames(data);
++    }
+ 
+-        let script = new Script(data.options, deferred);
+-        let { extensionId } = recipient;
+-        DocumentManager.executeScript(target, extensionId, script);
++    let deferred = PromiseUtils.defer();
++    deferred.reject("Unknown message name");
++    return deferred.promise;
++  }
+ 
+-        return deferred.promise;
+-    }
++  handleExtensionExecute(target, recipient, data) {
++    let deferred = PromiseUtils.defer();
++    let script = new Script(data.options, deferred);
++    let { extensionId } = recipient;
++    DocumentManager.executeScript(target, extensionId, script);
++    return deferred.promise;
++  }
++
++  handleWebNavigationGetFrame(data) {
++    let deferred = PromiseUtils.defer();
++    deferred.resolve(WebNavigationFrames.getFrame(this.global.docShell, data));
++    return deferred.promise;
++  }
++
++  handleWebNavigationGetAllFrames(data) {
++    let deferred = PromiseUtils.defer();
++    deferred.resolve(WebNavigationFrames.getAllFrames(this.global.docShell, data));
++    return deferred.promise;
+   }
+ }
+ 
+ this.ExtensionContent = {
+   globals: new Map(),
+ 
+   init(global) {
+     this.globals.set(global, new ExtensionGlobal(global));
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
-index e3fac12..81f9887 100644
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js
-@@ -55,21 +55,51 @@ function WebNavigationEventManager(context, eventName) {
+@@ -55,21 +55,61 @@ function WebNavigationEventManager(conte
      };
    };
  
@@ -45,32 +135,41 @@ index e3fac12..81f9887 100644
        onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
 +      getAllFrames(details, callback) {
 +        let tab = TabManager.getTab(details.tabId);
-+        if (tab) {
-+          WebNavigation.getAllFrames(tab, context, details, (results) => {
-+            runSafe(context, callback, results.map(convertGetFrameResult.bind(null, details.tabId)));
-+          });
-+        } else {
-+          runSafe(context, callback, []);
++        if (!tab) {
++          // TODO: check if runtime.lastError should be set
++          return context.wrapPromise(Promise.resolve([[]]), callback);
 +        }
++
++        let { innerWindowID, messageManager } = tab.linkedBrowser;
++        let recipient = { innerWindowID };
++
++        let promise = context.sendMessage(messageManager, "WebNavigation:GetAllFrames", details, recipient)
++                             .then((results) => [results.map(convertGetFrameResult.bind(null, details.tabId))]);
++        return context.wrapPromise(promise, callback);
 +      },
 +      getFrame(details, callback) {
 +        let tab = TabManager.getTab(details.tabId);
-+        if (tab) {
-+          WebNavigation.getFrame(tab, context, details, (result) => {
-+            runSafe(context, callback, convertGetFrameResult(details.tabId, result));
-+          });
-+        } else {
-+          runSafe(context, callback, undefined);
++        if (!tab) {
++          // TODO: check if runtime.lastError should be set
++          return context.wrapPromise(Promise.resolve([undefined]), callback);
 +        }
++
++        let recipient = {
++          innerWindowID: tab.linkedBrowser.innerWindowID,
++        };
++
++        let mm = tab.linkedBrowser.messageManager;
++        let promise = context.sendMessage(mm, "WebNavigation:GetFrame", details, recipient)
++              .then((result) => [convertGetFrameResult(details.tabId, result)]);
++        return context.wrapPromise(promise, callback);
 +      },
      },
    };
  });
 diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit/components/extensions/schemas/web_navigation.json
-index 9236bc6..6af0373 100644
 --- a/toolkit/components/extensions/schemas/web_navigation.json
 +++ b/toolkit/components/extensions/schemas/web_navigation.json
-@@ -17,27 +17,27 @@
+@@ -31,27 +31,27 @@
          "id": "TransitionQualifier",
          "type": "string",
          "enum": ["client_redirect", "server_redirect", "forward_back", "from_address_bar"]
@@ -100,7 +199,7 @@ index 9236bc6..6af0373 100644
                {
                  "type": "object",
                  "name": "details",
-@@ -59,17 +59,17 @@
+@@ -73,17 +73,17 @@
                  }
                }
              ]
@@ -119,173 +218,90 @@ index 9236bc6..6af0373 100644
              "name": "details",
              "description": "Information about the tab to retrieve all frames from.",
              "properties": {
-diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
-index b62e321..26e29df 100644
---- a/toolkit/modules/addons/WebNavigation.jsm
-+++ b/toolkit/modules/addons/WebNavigation.jsm
-@@ -17,33 +17,46 @@ Cu.import("resource://gre/modules/Services.jsm");
- // Transition types and qualifiers
- // onReferenceFragmentUpdated also triggers for pushState
- // getFrames, getAllFrames
- // onCreatedNavigationTarget, onHistoryStateUpdated
- 
- var Manager = {
-   listeners: new Map(),
- 
-+  lastReqId: 0,
-+  requests: new Map(),
-+
-+  initialized: false,
-+
-   init() {
-+    this.lastReqId = 0;
-     Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
-     Services.mm.addMessageListener("Extension:StateChange", this);
-     Services.mm.addMessageListener("Extension:LocationChange", this);
-+    Services.mm.addMessageListener("Extension:GetFrame:Res", this);
-+    Services.mm.addMessageListener("Extension:GetAllFrames:Res", this);
-     Services.mm.loadFrameScript("resource://gre/modules/WebNavigationContent.js", true);
-+    this.initialized = true;
-   },
- 
-   uninit() {
-+    this.lastReqId = 0;
-     Services.mm.removeMessageListener("Extension:StateChange", this);
-     Services.mm.removeMessageListener("Extension:LocationChange", this);
-     Services.mm.removeMessageListener("Extension:DOMContentLoaded", this);
-+    Services.mm.removeMessageListener("Extension:GetFrame:Res", this);
-+    Services.mm.removeMessageListener("Extension:GetAllFrames:Res", this);
-     Services.mm.removeDelayedFrameScript("resource://gre/modules/WebNavigationContent.js");
-     Services.mm.broadcastAsyncMessage("Extension:DisableWebNavigation");
-+    this.initialized = false;
-   },
- 
-   addListener(type, listener) {
--    if (this.listeners.size == 0) {
-+    if (!this.initialized) {
-       this.init();
-     }
- 
-     if (!this.listeners.has(type)) {
-       this.listeners.set(type, new Set());
-     }
-     let listeners = this.listeners.get(type);
-     listeners.add(listener);
-@@ -72,16 +85,88 @@ var Manager = {
- 
-       case "Extension:LocationChange":
-         this.onLocationChange(target, data);
-         break;
- 
-       case "Extension:DOMContentLoaded":
-         this.onLoad(target, data);
-         break;
-+      case "Extension:GetFrame:Res":
-+        this.onGetFrameResponse(target, data);
-+        break;
-+      case "Extension:GetAllFrames:Res":
-+        this.onGetAllFramesResponse(target, data);
-+        break;
-+
-+    }
-+  },
-+
-+  addExtensionRequest(context, callback) {
-+    let requestId = `${context.extension.uuid}-${++this.lastReqId}`;
-+
-+    let cleanupOnClose = {
-+      close: () => this.requests.delete(requestId),
-+    };
-+    context.callOnClose(cleanupOnClose);
-+
-+    this.requests.set(requestId, (...args) => {
-+      context.forgetOnClose(cleanupOnClose);
-+      callback.apply(null, args);
-+    });
-+
-+    return requestId;
-+  },
-+
-+  popExtensionRequest(requestId) {
-+    if (!this.requests.has(requestId)) {
-+      return null;
-+    }
-+
-+    let callback = this.requests.get(requestId);
-+    this.requests.delete(requestId);
-+
-+    return callback;
-+  },
-+
-+  getFrame(tab, context, details, callback) {
-+    if (!this.initialized) {
-+      this.init();
-+    }
-+
-+    let reqId = this.addExtensionRequest(context, callback);
-+    let data = { details, reqId };
-+    let mm = tab.linkedBrowser.messageManager;
-+    mm.sendAsyncMessage("Extension:GetFrame:Req", data);
-+  },
-+
-+  getAllFrames(tab, context, details, callback) {
-+    if (!this.initialized) {
-+      this.init();
-+    }
-+
-+    let reqId = this.addExtensionRequest(context, callback);
-+    let data = { details, reqId };
-+    let mm = tab.linkedBrowser.messageManager;
-+    mm.sendAsyncMessage("Extension:GetAllFrames:Req", data);
-+  },
-+
-+  onGetFrameResponse(browser, data) {
-+    let { reqId, details } = data;
-+    let cb = this.popExtensionRequest(reqId);
-+    if (cb) {
-+      cb(details);
-+    }
-+  },
-+
-+  onGetAllFramesResponse(browser, data) {
-+    let { reqId, details } = data;
-+    let cb = this.popExtensionRequest(reqId);
-+    if (cb) {
-+      cb(details);
-     }
-   },
- 
-   onStateChange(browser, data) {
-     let stateFlags = data.stateFlags;
-     if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW) {
-       let url = data.requestURL;
-       if (stateFlags & Ci.nsIWebProgressListener.STATE_START) {
-@@ -142,16 +227,19 @@ const EVENTS = [
-   "onCompleted",
-   "onErrorOccurred",
-   "onReferenceFragmentUpdated",
- 
-   // "onCreatedNavigationTarget",
-   // "onHistoryStateUpdated",
- ];
- 
--var WebNavigation = {};
-+var WebNavigation = {
-+  getFrame: Manager.getFrame.bind(Manager),
-+  getAllFrames: Manager.getAllFrames.bind(Manager),
-+};
- 
- for (let event of EVENTS) {
-   WebNavigation[event] = {
-     addListener: Manager.addListener.bind(Manager, event),
-     removeListener: Manager.removeListener.bind(Manager, event),
-   };
- }
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
-index ae27b73..06537b5 100644
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -86,15 +86,150 @@ var WebProgressListener = {
+@@ -1,32 +1,25 @@
+ "use strict";
+ 
+ /* globals docShell */
+ 
+ var Ci = Components.interfaces;
+ 
+ Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+-function getWindowId(window) {
+-  return window.QueryInterface(Ci.nsIInterfaceRequestor)
+-               .getInterface(Ci.nsIDOMWindowUtils)
+-               .outerWindowID;
+-}
+-
+-function getParentWindowId(window) {
+-  return getWindowId(window.parent);
+-}
++XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
++                                  "resource://gre/modules/WebNavigationFrames.jsm");
+ 
+ function loadListener(event) {
+   let document = event.target;
+   let window = document.defaultView;
+   let url = document.documentURI;
+-  let windowId = getWindowId(window);
+-  let parentWindowId = getParentWindowId(window);
++  let windowId = WebNavigationFrames.getWindowId(window);
++  let parentWindowId = WebNavigationFrames.getParentWindowId(window);
+   sendAsyncMessage("Extension:DOMContentLoaded", {windowId, parentWindowId, url});
+ }
+ 
+ addEventListener("DOMContentLoaded", loadListener);
+ addMessageListener("Extension:DisableWebNavigation", () => {
+   removeEventListener("DOMContentLoaded", loadListener);
+ });
+ 
+@@ -46,55 +39,58 @@ var WebProgressListener = {
+                               .getInterface(Ci.nsIWebProgress);
+     webProgress.removeProgressListener(this);
+   },
+ 
+   onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
+     let data = {
+       requestURL: request.QueryInterface(Ci.nsIChannel).URI.spec,
+       windowId: webProgress.DOMWindowID,
+-      parentWindowId: getParentWindowId(webProgress.DOMWindow),
++      parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+       status,
+       stateFlags,
+     };
+     sendAsyncMessage("Extension:StateChange", data);
+ 
+     if (webProgress.DOMWindow.top != webProgress.DOMWindow) {
+       let webNav = webProgress.QueryInterface(Ci.nsIWebNavigation);
+       if (!webNav.canGoBack) {
+         // For some reason we don't fire onLocationChange for the
+         // initial navigation of a sub-frame. So we need to simulate
+         // it here.
+         let data = {
+           location: request.QueryInterface(Ci.nsIChannel).URI.spec,
+           windowId: webProgress.DOMWindowID,
+-          parentWindowId: getParentWindowId(webProgress.DOMWindow),
++          parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+           flags: 0,
+         };
+         sendAsyncMessage("Extension:LocationChange", data);
+       }
+     }
+   },
+ 
+   onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
+     let data = {
+       location: locationURI ? locationURI.spec : "",
+       windowId: webProgress.DOMWindowID,
+-      parentWindowId: getParentWindowId(webProgress.DOMWindow),
++      parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+       flags,
+     };
+     sendAsyncMessage("Extension:LocationChange", data);
+   },
  
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
  };
@@ -305,8 +321,33 @@ index ae27b73..06537b5 100644
 +    disabled = true;
 +    WebProgressListener.uninit();
 +  }
-+});
+ });
+diff --git a/toolkit/modules/addons/WebNavigationFrames.jsm b/toolkit/modules/addons/WebNavigationFrames.jsm
+new file mode 100644
+--- /dev/null
++++ b/toolkit/modules/addons/WebNavigationFrames.jsm
+@@ -0,0 +1,152 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 +
++"use strict";
++
++const EXPORTED_SYMBOLS = ["WebNavigationFrames"];
++
++var Ci = Components.interfaces;
++
++/* exported WebNavigationFrames */
++
++function getWindowId(window) {
++  return window.QueryInterface(Ci.nsIInterfaceRequestor)
++               .getInterface(Ci.nsIDOMWindowUtils)
++               .outerWindowID;
++}
++
++function getParentWindowId(window) {
++  return getWindowId(window.parent);
++}
 +
 +/**
 + * Retrieve the DOMWindow associated to the docShell passed as parameter.
@@ -422,20 +463,50 @@ index ae27b73..06537b5 100644
 +  return docShells;
 +}
 +
-+addMessageListener("Extension:GetFrame:Req", ({name, data, target}) => {
-+  let { frameId } = data.details;
-+  let details;
++var WebNavigationFrames = {
++  getFrame(docShell, { frameId }) {
++    if (frameId == 0) {
++      return convertDocShellToFrameDetail(docShell);
++    }
 +
-+  if (frameId == 0) {
-+    details = convertDocShellToFrameDetail(docShell);
-+  } else {
-+    details = findFrame(frameId, docShell);
-+  }
-+  sendAsyncMessage("Extension:GetFrame:Res", { reqId: data.reqId, details });
-+});
++    return findFrame(frameId, docShell);
++  },
 +
-+addMessageListener("Extension:GetAllFrames:Req", ({name, data, target}) => {
-+  let details = getChildDocShells(docShell).map(convertDocShellToFrameDetail);
-+  sendAsyncMessage("Extension:GetAllFrames:Res", { reqId: data.reqId, details });
- });
-
++  getAllFrames(docShell) {
++    return getChildDocShells(docShell).map(convertDocShellToFrameDetail);
++  },
++
++  getWindowId,
++  getParentWindowId,
++};
+diff --git a/toolkit/modules/moz.build b/toolkit/modules/moz.build
+--- a/toolkit/modules/moz.build
++++ b/toolkit/modules/moz.build
+@@ -1,8 +1,9 @@
++
+ # -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+ # vim: set filetype=python:
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ XPCSHELL_TESTS_MANIFESTS += ['tests/xpcshell/xpcshell.ini']
+ BROWSER_CHROME_MANIFESTS += ['tests/browser/browser.ini']
+@@ -10,16 +11,17 @@ MOCHITEST_MANIFESTS += ['tests/mochitest
+ MOCHITEST_CHROME_MANIFESTS += ['tests/chrome/chrome.ini']
+ 
+ SPHINX_TREES['toolkit_modules'] = 'docs'
+ 
+ EXTRA_JS_MODULES += [
+     'addons/MatchPattern.jsm',
+     'addons/WebNavigation.jsm',
+     'addons/WebNavigationContent.js',
++    'addons/WebNavigationFrames.jsm',
+     'addons/WebRequest.jsm',
+     'addons/WebRequestCommon.jsm',
+     'addons/WebRequestContent.js',
+     'Battery.jsm',
+     'BinarySearch.jsm',
+     'BrowserUtils.jsm',
+     'CertUtils.jsm',
+     'CharsetMenu.jsm',

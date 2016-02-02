@@ -1,19 +1,15 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-
+# Date 1453748895 -3600
+#      Mon Jan 25 20:08:15 2016 +0100
+# Node ID 2f9f193ed8515a5393398a55e8d308e0fadaaa01
+# Parent  d3332fe4fccdd7f5fc6a221210e505e16e2598b4
 Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
 
----
- .../components/extensions/test/browser/browser.ini |   1 +
- .../browser/browser_ext_webNavigation_getFrames.js | 173 +++++++++++++++++++++
- 2 files changed, 174 insertions(+)
- create mode 100644 browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
-
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
-index b24a926..7af0cbd 100644
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -28,8 +28,9 @@ support-files =
+@@ -32,8 +32,9 @@ support-files =
  [browser_ext_tabs_update.js]
  [browser_ext_tabs_onUpdated.js]
  [browser_ext_tabs_sendMessage.js]
@@ -26,7 +22,6 @@ index b24a926..7af0cbd 100644
 \ No newline at end of file
 diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
 new file mode 100644
-index 0000000..b8f7ee3
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
 @@ -0,0 +1,173 @@
@@ -203,4 +198,3 @@ index 0000000..b8f7ee3
 +  yield extension.unload();
 +  info("extension unloaded");
 +});
-
