@@ -2,7 +2,7 @@
 # User Luca Greco <luca.greco@alcacoop.it>
 # Date 1454624520 -3600
 #      Thu Feb 04 23:22:00 2016 +0100
-# Node ID d1d285b44277f249848e55fc97f50ef4acaae6ac
+# Node ID 70ca100de122103e4893f2fec69ce1fe49025475
 # Parent  22dcd8ed53e2d762c4baec9a993eb71b7c4f42d7
 Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
 
@@ -24,7 +24,7 @@ diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigatio
 new file mode 100644
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,150 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
@@ -43,7 +43,7 @@ new file mode 100644
 +      }));
 +      results.push(new Promise((resolve) => {
 +        // There is no "tabId = 0" because the id assigned by TabManager (defined in ext-utils.js)
-+        // starts from 1.
++        // starts from 1, processId is currently marked as optional and it is ignored.
 +        browser.webNavigation.getFrame({ tabId: 0, frameId: 15, processId: 20 }, (res) => {
 +          browser.test.assertEq(null, res, "getFrame should pass a null value for non existent frame ");
 +          resolve();
@@ -86,6 +86,7 @@ new file mode 100644
 +          let getFramePromises = getAllFramesDetails.map((frameDetail) => {
 +            let { frameId } = frameDetail;
 +            return new Promise((resolve) => {
++              // processId is currently marked as optional and it is ignored.
 +              browser.webNavigation.getFrame({ tabId, frameId, processId: 0 }, resolve);
 +            });
 +          });
