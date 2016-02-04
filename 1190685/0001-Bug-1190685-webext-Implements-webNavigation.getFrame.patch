@@ -2,8 +2,8 @@
 # User Luca Greco <luca.greco@alcacoop.it>
 # Date 1454415552 -3600
 #      Tue Feb 02 13:19:12 2016 +0100
-# Node ID d3332fe4fccdd7f5fc6a221210e505e16e2598b4
-# Parent  a67a25a5af7446d8ae9beb453bcfa12be368fcef
+# Node ID fbccc900409085c1205fc0e88e48924cabb93dfa
+# Parent  ced4e3f6c8bcf408df4a4f35b69f1c4d40ee7cb2
 Bug 1190685 - [webext] Implements webNavigation.getFrame/getAllFrames API methods. r=kmag
 
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
@@ -29,14 +29,14 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
    MessageBroker,
    Messenger,
    injectAPI,
-@@ -662,16 +665,18 @@ ExtensionManager = {
-   },
+@@ -663,16 +666,18 @@ ExtensionManager = {
  };
  
  class ExtensionGlobal {
    constructor(global) {
      this.global = global;
  
+     MessageChannel.addListener(global, "Extension:Capture", this);
      MessageChannel.addListener(global, "Extension:Execute", this);
 +    MessageChannel.addListener(global, "WebNavigation:GetFrame", this);
 +    MessageChannel.addListener(global, "WebNavigation:GetAllFrames", this);
@@ -48,14 +48,14 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
                            .getInterface(Ci.nsIDOMWindowUtils)
                            .outerWindowID;
  
-@@ -689,24 +694,46 @@ class ExtensionGlobal {
-                          .getInterface(Ci.nsIDOMWindowUtils)
-                          .currentInnerWindowID,
-     };
-   }
+@@ -712,24 +717,46 @@ class ExtensionGlobal {
+                   canvas.height / win.innerHeight);
  
-   receiveMessage({ target, messageName, recipient, data }) {
-     switch (messageName) {
+         ctx.drawWindow(win, win.scrollX, win.scrollY, win.innerWidth, win.innerHeight, "#fff");
+ 
+         return canvas.toDataURL(`image/${data.options.format}`,
+                                 data.options.quality / 100);
+ 
        case "Extension:Execute":
 -        let deferred = PromiseUtils.defer();
 +        return this.handleExtensionExecute(target, recipient, data);
@@ -169,7 +169,7 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
 diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit/components/extensions/schemas/web_navigation.json
 --- a/toolkit/components/extensions/schemas/web_navigation.json
 +++ b/toolkit/components/extensions/schemas/web_navigation.json
-@@ -31,27 +31,27 @@
+@@ -31,28 +31,28 @@
          "id": "TransitionQualifier",
          "type": "string",
          "enum": ["client_redirect", "server_redirect", "forward_back", "from_address_bar"]
@@ -182,6 +182,7 @@ diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit
 +        "unsupported": false,
          "type": "function",
          "description": "Retrieves information about the given frame. A frame refers to an &lt;iframe&gt; or a &lt;frame&gt; of a web page and is identified by a tab ID and a frame ID.",
+         "async": "callback",
          "parameters": [
            {
              "type": "object",
@@ -195,11 +196,11 @@ diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit
              }
            },
            {
-             "type": "function", "name": "callback", "parameters": [
+             "type": "function",
+             "name": "callback",
+             "parameters": [
                {
-                 "type": "object",
-                 "name": "details",
-@@ -73,17 +73,17 @@
+@@ -76,17 +76,17 @@
                  }
                }
              ]
@@ -212,12 +213,12 @@ diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit
 +        "unsupported": false,
          "type": "function",
          "description": "Retrieves information about all frames of a given tab.",
+         "async": "callback",
          "parameters": [
            {
              "type": "object",
              "name": "details",
              "description": "Information about the tab to retrieve all frames from.",
-             "properties": {
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
@@ -492,8 +493,8 @@ diff --git a/toolkit/modules/moz.build b/toolkit/modules/moz.build
  
  XPCSHELL_TESTS_MANIFESTS += ['tests/xpcshell/xpcshell.ini']
  BROWSER_CHROME_MANIFESTS += ['tests/browser/browser.ini']
-@@ -10,16 +11,17 @@ MOCHITEST_MANIFESTS += ['tests/mochitest
- MOCHITEST_CHROME_MANIFESTS += ['tests/chrome/chrome.ini']
+@@ -14,16 +15,17 @@ TESTING_JS_MODULES += [
+ ]
  
  SPHINX_TREES['toolkit_modules'] = 'docs'
  

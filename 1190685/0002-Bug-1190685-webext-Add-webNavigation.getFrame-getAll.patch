@@ -2,14 +2,14 @@
 # User Luca Greco <luca.greco@alcacoop.it>
 # Date 1453748895 -3600
 #      Mon Jan 25 20:08:15 2016 +0100
-# Node ID 2f9f193ed8515a5393398a55e8d308e0fadaaa01
-# Parent  d3332fe4fccdd7f5fc6a221210e505e16e2598b4
+# Node ID 0a797e50c66d5b548e4bd263b41f4f0a03b29ce7
+# Parent  fbccc900409085c1205fc0e88e48924cabb93dfa
 Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -32,8 +32,9 @@ support-files =
+@@ -33,8 +33,9 @@ support-files =
  [browser_ext_tabs_update.js]
  [browser_ext_tabs_onUpdated.js]
  [browser_ext_tabs_sendMessage.js]
