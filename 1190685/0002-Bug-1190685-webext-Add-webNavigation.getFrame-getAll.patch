@@ -2,7 +2,7 @@
 # User Luca Greco <luca.greco@alcacoop.it>
 # Date 1454952584 -3600
 #      Mon Feb 08 18:29:44 2016 +0100
-# Node ID 800be6ba717d31aa55139be6055b803d9e3206b9
+# Node ID 521905212ea5e8d3ae9756093237fcc302a63ab7
 # Parent  e0795c1cab0182cdeed878977b28614281e65f5d
 Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
 
@@ -36,7 +36,7 @@ new file mode 100644
 +        // There is no "tabId = 0" because the id assigned by TabManager (defined in ext-utils.js)
 +        // starts from 1.
 +        browser.webNavigation.getAllFrames({ tabId: 0 }).then(() => {
-+          browser.test.assertTrue(false, "getAllFrames Promise should be rejected on error");
++          browser.test.fail("getAllFrames Promise should be rejected on error");
 +        }, (error) => {
 +          browser.test.assertEq("No tab found with tabId: 0", error.message,
 +                                "getAllFrames rejected Promise should pass the expected error");
@@ -44,7 +44,7 @@ new file mode 100644
 +        // There is no "tabId = 0" because the id assigned by TabManager (defined in ext-utils.js)
 +        // starts from 1, processId is currently marked as optional and it is ignored.
 +        browser.webNavigation.getFrame({ tabId: 0, frameId: 15, processId: 20 }).then(() => {
-+          browser.test.assertTrue(false, "getFrame Promise should be rejected on error");
++          browser.test.fail("getFrame Promise should be rejected on error");
 +        }, (error) => {
 +          browser.test.assertEq("No tab found with tabId: 0", error.message,
 +                                "getFrame rejected Promise should pass the expected error");
@@ -109,7 +109,7 @@ new file mode 100644
 +
 +          // Check that getFrame Promise is rejected with the expected error message on nonexistent frameId.
 +          browser.webNavigation.getFrame({ tabId, frameId: nonExistentFrameId, processId: 20 }).then(() => {
-+            browser.test.assertTrue(false, "getFrame promise should be rejected for an unexistent frameId");
++            browser.test.fail("getFrame promise should be rejected for an unexistent frameId");
 +          }, (error) => {
 +            browser.test.assertEq(`No frame found with frameId: ${nonExistentFrameId}`, error.message,
 +                                  "getFrame promise should be rejected with the expected error message on unexistent frameId");
