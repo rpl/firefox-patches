@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-# Date 1454627105 -3600
-#      Fri Feb 05 00:05:05 2016 +0100
-# Node ID 22dcd8ed53e2d762c4baec9a993eb71b7c4f42d7
-# Parent  ced4e3f6c8bcf408df4a4f35b69f1c4d40ee7cb2
+# Date 1454952648 -3600
+#      Mon Feb 08 18:30:48 2016 +0100
+# Node ID e0795c1cab0182cdeed878977b28614281e65f5d
+# Parent  4e0eba2be9b154876b5f439dc7907cf91f417a86
 Bug 1190685 - [webext] Implements webNavigation.getFrame/getAllFrames API methods. r=kmag
 
 diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
@@ -48,7 +48,7 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
                            .getInterface(Ci.nsIDOMWindowUtils)
                            .outerWindowID;
  
-@@ -690,46 +695,67 @@ class ExtensionGlobal {
+@@ -690,46 +695,61 @@ class ExtensionGlobal {
                           .getInterface(Ci.nsIDOMWindowUtils)
                           .currentInnerWindowID,
      };
@@ -58,13 +58,13 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
      switch (messageName) {
        case "Extension:Capture":
 -        let win = this.global.content;
-+        return this.handleExtensionCapture(data);
++        return this.handleExtensionCapture(data.width, data.height, data.options);
 +      case "Extension:Execute":
-+        return this.handleExtensionExecute(target, recipient, data);
++        return this.handleExtensionExecute(target, recipient, data.options);
 +      case "WebNavigation:GetFrame":
-+        return this.handleWebNavigationGetFrame(data);
++        return this.handleWebNavigationGetFrame(data.options);
 +      case "WebNavigation:GetAllFrames":
-+        return this.handleWebNavigationGetAllFrames(data);
++        return this.handleWebNavigationGetAllFrames();
 +    }
 +  }
  
@@ -73,14 +73,14 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
 -        canvas.width = data.width;
 -        canvas.height = data.height;
 -        canvas.mozOpaque = true;
-+  handleExtensionCapture(data) {
++  handleExtensionCapture(width, height, options) {
 +    let win = this.global.content;
  
 -        let ctx = canvas.getContext("2d");
 +    const XHTML_NS = "http://www.w3.org/1999/xhtml";
 +    let canvas = win.document.createElementNS(XHTML_NS, "canvas");
-+    canvas.width = data.width;
-+    canvas.height = data.height;
++    canvas.width = width;
++    canvas.height = height;
 +    canvas.mozOpaque = true;
  
 -        // We need to scale the image to the visible size of the browser,
@@ -94,8 +94,7 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
 +    // We need to scale the image to the visible size of the browser,
 +    // in order for the result to appear as the user sees it when
 +    // settings like full zoom come into play.
-+    ctx.scale(canvas.width / win.innerWidth,
-+              canvas.height / win.innerHeight);
++    ctx.scale(canvas.width / win.innerWidth, canvas.height / win.innerHeight);
  
 -        return canvas.toDataURL(`image/${data.options.format}`,
 -                                data.options.quality / 100);
@@ -103,16 +102,15 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
  
 -      case "Extension:Execute":
 -        let deferred = PromiseUtils.defer();
-+    return canvas.toDataURL(`image/${data.options.format}`,
-+                            data.options.quality / 100);
++    return canvas.toDataURL(`image/${options.format}`, options.quality / 100);
 +  }
  
 -        let script = new Script(data.options, deferred);
 -        let { extensionId } = recipient;
 -        DocumentManager.executeScript(target, extensionId, script);
-+  handleExtensionExecute(target, recipient, data) {
++  handleExtensionExecute(target, recipient, options) {
 +    let deferred = PromiseUtils.defer();
-+    let script = new Script(data.options, deferred);
++    let script = new Script(options, deferred);
 +    let { extensionId } = recipient;
 +    DocumentManager.executeScript(target, extensionId, script);
 +    return deferred.promise;
@@ -120,16 +118,12 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
  
 -        return deferred.promise;
 -    }
-+  handleWebNavigationGetFrame(data) {
-+    let deferred = PromiseUtils.defer();
-+    deferred.resolve(WebNavigationFrames.getFrame(this.global.docShell, data));
-+    return deferred.promise;
++  handleWebNavigationGetFrame({ frameId }) {
++    return WebNavigationFrames.getFrame(this.global.docShell, frameId);
 +  }
 +
-+  handleWebNavigationGetAllFrames(data) {
-+    let deferred = PromiseUtils.defer();
-+    deferred.resolve(WebNavigationFrames.getAllFrames(this.global.docShell, data));
-+    return deferred.promise;
++  handleWebNavigationGetAllFrames() {
++    return WebNavigationFrames.getAllFrames(this.global.docShell);
    }
  }
  
@@ -141,7 +135,7 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js
-@@ -55,21 +55,59 @@ function WebNavigationEventManager(conte
+@@ -55,21 +55,61 @@ function WebNavigationEventManager(conte
      };
    };
  
@@ -173,21 +167,19 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
 +      getAllFrames(details) {
 +        let tab = TabManager.getTab(details.tabId);
 +        if (!tab) {
-+          // On non existent tabs, getAllFrames resolve to null and no runtime.lastError is set.
-+          return Promise.resolve(null);
++          return Promise.reject({ message: `No tab found with tabId: ${details.tabId}`});
 +        }
 +
 +        let { innerWindowID, messageManager } = tab.linkedBrowser;
 +        let recipient = { innerWindowID };
 +
-+        return context.sendMessage(messageManager, "WebNavigation:GetAllFrames", details, recipient)
++        return context.sendMessage(messageManager, "WebNavigation:GetAllFrames", {}, recipient)
 +                      .then((results) => results.map(convertGetFrameResult.bind(null, details.tabId)));
 +      },
 +      getFrame(details) {
 +        let tab = TabManager.getTab(details.tabId);
 +        if (!tab) {
-+          // On non existent tabs, getFrame resolve to null and no runtime.lastError is set.
-+          return Promise.resolve(null);
++          return Promise.reject({ message: `No tab found with tabId: ${details.tabId}`});
 +        }
 +
 +        let recipient = {
@@ -195,8 +187,12 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
 +        };
 +
 +        let mm = tab.linkedBrowser.messageManager;
-+        return context.sendMessage(mm, "WebNavigation:GetFrame", details, recipient)
-+                      .then((result) => convertGetFrameResult(details.tabId, result));
++        return context.sendMessage(mm, "WebNavigation:GetFrame", { options: details }, recipient)
++                      .then((result) => {
++                        return result ?
++                          convertGetFrameResult(details.tabId, result) :
++                          Promise.reject({ message: `No frame found with frameId: ${details.frameId}`});
++                      });
 +      },
      },
    };
@@ -393,7 +389,7 @@ diff --git a/toolkit/modules/addons/WebNavigationFrames.jsm b/toolkit/modules/ad
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/modules/addons/WebNavigationFrames.jsm
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,114 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -468,8 +464,7 @@ new file mode 100644
 +  );
 +
 +  while (docShellsEnum.hasMoreElements()) {
-+    let docShell = docShellsEnum.getNext();
-+    yield docShell;
++    yield docShellsEnum.getNext();
 +  }
 +
 +  return null;
@@ -494,7 +489,7 @@ new file mode 100644
 +}
 +
 +var WebNavigationFrames = {
-+  getFrame(docShell, { frameId }) {
++  getFrame(docShell, frameId) {
 +    if (frameId == 0) {
 +      return convertDocShellToFrameDetail(docShell);
 +    }
@@ -512,17 +507,7 @@ new file mode 100644
 diff --git a/toolkit/modules/moz.build b/toolkit/modules/moz.build
 --- a/toolkit/modules/moz.build
 +++ b/toolkit/modules/moz.build
-@@ -1,8 +1,9 @@
-+
- # -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
- # vim: set filetype=python:
- # This Source Code Form is subject to the terms of the Mozilla Public
- # License, v. 2.0. If a copy of the MPL was not distributed with this
- # file, You can obtain one at http://mozilla.org/MPL/2.0/.
- 
- XPCSHELL_TESTS_MANIFESTS += ['tests/xpcshell/xpcshell.ini']
- BROWSER_CHROME_MANIFESTS += ['tests/browser/browser.ini']
-@@ -14,16 +15,17 @@ TESTING_JS_MODULES += [
+@@ -14,16 +14,17 @@ TESTING_JS_MODULES += [
  ]
  
  SPHINX_TREES['toolkit_modules'] = 'docs'

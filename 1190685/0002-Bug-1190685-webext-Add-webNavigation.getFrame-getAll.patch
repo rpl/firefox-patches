@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-# Date 1454624520 -3600
-#      Thu Feb 04 23:22:00 2016 +0100
-# Node ID 70ca100de122103e4893f2fec69ce1fe49025475
-# Parent  22dcd8ed53e2d762c4baec9a993eb71b7c4f42d7
+# Date 1454952584 -3600
+#      Mon Feb 08 18:29:44 2016 +0100
+# Node ID 24e42ce59bba8214f95751e56833053c957e9968
+# Parent  e0795c1cab0182cdeed878977b28614281e65f5d
 Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
@@ -24,33 +24,35 @@ diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigatio
 new file mode 100644
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,175 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
 +
-+add_task(function* testWebNavigationGetNonExistentFrames() {
++add_task(function* testWebNavigationGetNonExistentTab() {
 +  let extension = ExtensionTestUtils.loadExtension({
 +    background: "(" + function() {
-+      let results = [];
-+      results.push(new Promise((resolve) => {
++      let results = [
 +        // There is no "tabId = 0" because the id assigned by TabManager (defined in ext-utils.js)
 +        // starts from 1.
-+        browser.webNavigation.getAllFrames({ tabId: 0 }, (res) => {
-+          browser.test.assertEq(null, res, "getAllFrames should pass a null value for non existent tab");
-+          resolve();
-+        });
-+      }));
-+      results.push(new Promise((resolve) => {
++        browser.webNavigation.getAllFrames({ tabId: 0 }).then(() => {
++          browser.test.assertTrue(false, "getAllFrames Promise should be rejected on error");
++        }, (error) => {
++          browser.test.assertEq("No tab found with tabId: 0", error.message,
++                                "getAllFrames rejected Promise should pass the expected error");
++        }),
 +        // There is no "tabId = 0" because the id assigned by TabManager (defined in ext-utils.js)
 +        // starts from 1, processId is currently marked as optional and it is ignored.
-+        browser.webNavigation.getFrame({ tabId: 0, frameId: 15, processId: 20 }, (res) => {
-+          browser.test.assertEq(null, res, "getFrame should pass a null value for non existent frame ");
-+          resolve();
-+        });
-+      }));
++        browser.webNavigation.getFrame({ tabId: 0, frameId: 15, processId: 20 }).then(() => {
++          browser.test.assertTrue(false, "getFrame Promise should be rejected on error");
++        }, (error) => {
++          browser.test.assertEq("No tab found with tabId: 0", error.message,
++                                "getFrame rejected Promise should pass the expected error");
++        }),
++      ];
++
 +      Promise.all(results).then(() => {
-+        browser.test.sendMessage("getNonExistentFrames.done");
++        browser.test.sendMessage("getNonExistentTab.done");
 +      });
 +    } + ")();",
 +    manifest: {
@@ -62,7 +64,7 @@ new file mode 100644
 +  yield extension.startup();
 +  info("startup complete");
 +
-+  yield extension.awaitMessage("getNonExistentFrames.done");
++  yield extension.awaitMessage("getNonExistentTab.done");
 +
 +  yield extension.unload();
 +  info("extension unloaded");
@@ -82,21 +84,38 @@ new file mode 100644
 +          return;
 +        }
 +
-+        browser.webNavigation.getAllFrames({ tabId }, (getAllFramesDetails) => {
++        browser.webNavigation.getAllFrames({ tabId }).then((getAllFramesDetails) => {
 +          let getFramePromises = getAllFramesDetails.map((frameDetail) => {
 +            let { frameId } = frameDetail;
-+            return new Promise((resolve) => {
-+              // processId is currently marked as optional and it is ignored.
-+              browser.webNavigation.getFrame({ tabId, frameId, processId: 0 }, resolve);
-+            });
++            // processId is currently marked as optional and it is ignored.
++            return browser.webNavigation.getFrame({ tabId, frameId, processId: 0 });
 +          });
 +
 +          Promise.all(getFramePromises).then((getFrameResults) => {
-+            browser.tabs.remove(tabId);
-+
 +            browser.test.sendMessage("webNavigationFrames.done", {
 +              collectedDetails, getAllFramesDetails, getFrameResults,
 +            });
++          }, () => {
++            browser.test.assertTrue(false, "None of the getFrame promises should have been rejected");
++          });
++
++          // Pick a random frameId.
++          let nonExistentFrameId = Math.floor(Math.random() * 10000);
++
++          // Increment the picked random nonExistentFrameId until it doesn't exists.
++          while (getAllFramesDetails.filter((details) => details.frameId == nonExistentFrameId).length > 0) {
++            nonExistentFrameId += 1;
++          }
++
++          // Check that getFrame Promise is rejected with the expected error message on non existent frameId.
++          browser.webNavigation.getFrame({ tabId, frameId: nonExistentFrameId, processId: 20 }).then(() => {
++            browser.test.assertTrue(false, "getFrame promise should be rejected for an unexistent frameId");
++          }, (error) => {
++            browser.test.assertEq(`No frame found with frameId: ${nonExistentFrameId}`, error.message,
++                                  "getFrame promise should be rejected with the expected error message on unexistent frameId");
++          }).then(() => {
++            browser.tabs.remove(tabId);
++            browser.test.sendMessage("webNavigationFrames.done");
 +          });
 +        });
 +      });
@@ -143,10 +162,11 @@ new file mode 100644
 +  } = yield extension.awaitMessage("webNavigationFrames.done");
 +
 +  is(getAllFramesDetails.length, 3, "expected number of frames found");
-+  is(getAllFramesDetails.length, collectedDetails.length, "number of frames found should equal the number onCompleted events collected");
++  is(getAllFramesDetails.length, collectedDetails.length,
++     "number of frames found should equal the number onCompleted events collected");
 +
 +  // ordered by frameId
-+  let sortByFrameId = (el) => el.frameId;
++  let sortByFrameId = (el) => el ? el.frameId : -1;
 +
 +  collectedDetails = collectedDetails.sort(sortByFrameId);
 +  getAllFramesDetails = getAllFramesDetails.sort(sortByFrameId);
@@ -154,12 +174,15 @@ new file mode 100644
 +
 +  info("check frame details content");
 +
-+  Assert.deepEqual(getFrameResults, getAllFramesDetails, "getFrame and getAllFrames should return the same results");
++  is(getFrameResults.length, getAllFramesDetails.length,
++     "getFrame and getAllFrames should return the same number of results");
++
++  Assert.deepEqual(getFrameResults, getAllFramesDetails,
++                   "getFrame and getAllFrames should return the same results");
 +
 +  info(`check frame details collected and retrieved with getAllFrames`);
 +
-+  for (let i = 0; i < collectedDetails.length; i++) {
-+    let collected = collectedDetails[i];
++  for (let [i, collected] of collectedDetails.entries()) {
 +    let getAllFramesDetail = getAllFramesDetails[i];
 +
 +    is(getAllFramesDetail.frameId, collected.frameId, "frameId");
@@ -171,6 +194,8 @@ new file mode 100644
 +  }
 +
 +  info("frame details content checked");
++
++  yield extension.awaitMessage("webNavigationFrames.done");
 +
 +  yield extension.unload();
 +  info("extension unloaded");
