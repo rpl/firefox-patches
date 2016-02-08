@@ -2,7 +2,7 @@
 # User Luca Greco <luca.greco@alcacoop.it>
 # Date 1454952584 -3600
 #      Mon Feb 08 18:29:44 2016 +0100
-# Node ID 24e42ce59bba8214f95751e56833053c957e9968
+# Node ID 800be6ba717d31aa55139be6055b803d9e3206b9
 # Parent  e0795c1cab0182cdeed878977b28614281e65f5d
 Bug 1190685 - [webext] Add webNavigation.getFrame/getAllFrames test cases. r=kmag
 
@@ -107,7 +107,7 @@ new file mode 100644
 +            nonExistentFrameId += 1;
 +          }
 +
-+          // Check that getFrame Promise is rejected with the expected error message on non existent frameId.
++          // Check that getFrame Promise is rejected with the expected error message on nonexistent frameId.
 +          browser.webNavigation.getFrame({ tabId, frameId: nonExistentFrameId, processId: 20 }).then(() => {
 +            browser.test.assertTrue(false, "getFrame promise should be rejected for an unexistent frameId");
 +          }, (error) => {
@@ -189,7 +189,7 @@ new file mode 100644
 +    is(getAllFramesDetail.parentFrameId, collected.parentFrameId, "parentFrameId");
 +    is(getAllFramesDetail.tabId, collected.tabId, "tabId");
 +
-+    // Bug-XXX: moz-extension url are resolved as jar urls in webNavigation events
++    // This can be uncommented once Bug 1246125 has been fixed
 +    // is(getAllFramesDetail.url, collected.url, "url");
 +  }
 +
