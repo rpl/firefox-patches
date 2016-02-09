@@ -1,0 +1,150 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1455034626 -3600
+#      Tue Feb 09 17:17:06 2016 +0100
+# Node ID 6749f3cd4d90f744dec64991eac6a2df482f001b
+# Parent  9e8419aa24ae29a79bd35a712bbc10c17ce321dd
+Bug 1239349 - Implement webNavigation.onHistoryStateUpdated. r=kmag
+
+diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
+--- a/toolkit/components/extensions/ext-webNavigation.js
++++ b/toolkit/components/extensions/ext-webNavigation.js
+@@ -64,12 +64,13 @@ extensions.registerSchemaAPI("webNavigat
+   return {
+     webNavigation: {
+       onBeforeNavigate: new WebNavigationEventManager(context, "onBeforeNavigate").api(),
+       onCommitted: new WebNavigationEventManager(context, "onCommitted").api(),
+       onDOMContentLoaded: new WebNavigationEventManager(context, "onDOMContentLoaded").api(),
+       onCompleted: new WebNavigationEventManager(context, "onCompleted").api(),
+       onErrorOccurred: new WebNavigationEventManager(context, "onErrorOccurred").api(),
+       onReferenceFragmentUpdated: new WebNavigationEventManager(context, "onReferenceFragmentUpdated").api(),
++      onHistoryStateUpdated: new WebNavigationEventManager(context, "onHistoryStateUpdated").api(),
+       onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
+     },
+   };
+ });
+diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit/components/extensions/schemas/web_navigation.json
+--- a/toolkit/components/extensions/schemas/web_navigation.json
++++ b/toolkit/components/extensions/schemas/web_navigation.json
+@@ -340,17 +340,16 @@
+               "tabId": {"type": "integer", "description": "The ID of the tab that replaced the old tab."},
+               "timeStamp": {"type": "number", "description": "The time when the replacement happened, in milliseconds since the epoch."}
+             }
+           }
+         ]
+       },
+       {
+         "name": "onHistoryStateUpdated",
+-        "unsupported": true,
+         "type": "function",
+         "description": "Fired when the frame's history was updated to a new URL. All future events for that frame will use the updated URL.",
+         "filters": [
+           {
+             "name": "url",
+             "type": "array",
+             "items": { "$ref": "events.UrlFilter" },
+             "description": "Conditions that the URL being navigated to must satisfy. The 'schemes' and 'ports' fields of UrlFilter are ignored for this event."
+diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
+--- a/toolkit/modules/addons/WebNavigation.jsm
++++ b/toolkit/modules/addons/WebNavigation.jsm
+@@ -94,17 +94,25 @@ var Manager = {
+           this.fire("onErrorOccurred", browser, data, {error, url});
+         }
+       }
+     }
+   },
+ 
+   onLocationChange(browser, data) {
+     let url = data.location;
+-    if (data.flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) {
++
++    let isSameDocument = (data) => data.flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT;
++    let isHistoryPushState = (data) => data.loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE;
++    let isHistoryPopState = (data) => data.loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY &&
++          isSameDocument(data) && data.URIWasModified;
++
++    if (isHistoryPushState(data) || isHistoryPopState(data)) {
++      this.fire("onHistoryStateUpdated", browser, data, {url});
++    } else if (isSameDocument(data)) {
+       this.fire("onReferenceFragmentUpdated", browser, data, {url});
+     } else {
+       this.fire("onCommitted", browser, data, {url});
+     }
+   },
+ 
+   onLoad(browser, data) {
+     this.fire("onDOMContentLoaded", browser, data, {url: data.url});
+@@ -137,19 +145,18 @@ var Manager = {
+ 
+ const EVENTS = [
+   "onBeforeNavigate",
+   "onCommitted",
+   "onDOMContentLoaded",
+   "onCompleted",
+   "onErrorOccurred",
+   "onReferenceFragmentUpdated",
+-
++  "onHistoryStateUpdated",
+   // "onCreatedNavigationTarget",
+-  // "onHistoryStateUpdated",
+ ];
+ 
+ var WebNavigation = {};
+ 
+ for (let event of EVENTS) {
+   WebNavigation[event] = {
+     addListener: Manager.addListener.bind(Manager, event),
+     removeListener: Manager.removeListener.bind(Manager, event),
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -50,16 +50,17 @@ var WebProgressListener = {
+   onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
+     let data = {
+       requestURL: request.QueryInterface(Ci.nsIChannel).URI.spec,
+       windowId: webProgress.DOMWindowID,
+       parentWindowId: getParentWindowId(webProgress.DOMWindow),
+       status,
+       stateFlags,
+     };
++
+     sendAsyncMessage("Extension:StateChange", data);
+ 
+     if (webProgress.DOMWindow.top != webProgress.DOMWindow) {
+       let webNav = webProgress.QueryInterface(Ci.nsIWebNavigation);
+       if (!webNav.canGoBack) {
+         // For some reason we don't fire onLocationChange for the
+         // initial navigation of a sub-frame. So we need to simulate
+         // it here.
+@@ -70,22 +71,31 @@ var WebProgressListener = {
+           flags: 0,
+         };
+         sendAsyncMessage("Extension:LocationChange", data);
+       }
+     }
+   },
+ 
+   onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
++    // Get the session history entry  to get the URIWasModified field from it,
++    // needed to be able to detect when a location change is a related to a PopStateEvent.
++    let docShell = webProgress.QueryInterface(Ci.nsIDocShell);
++    let shentry = {};
++    docShell.getCurrentSHEntry(shentry);
++
+     let data = {
+       location: locationURI ? locationURI.spec : "",
+       windowId: webProgress.DOMWindowID,
+       parentWindowId: getParentWindowId(webProgress.DOMWindow),
+       flags,
++      loadType: webProgress.loadType,
++      URIWasModified: shentry.value ? shentry.value.URIWasModified : null,
+     };
++
+     sendAsyncMessage("Extension:LocationChange", data);
+   },
+ 
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
+ };
+ 
+ var disabled = false;
+ WebProgressListener.init();
