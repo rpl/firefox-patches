@@ -1,0 +1,248 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1454983561 -3600
+#      Tue Feb 09 03:06:01 2016 +0100
+# Node ID a2d863e86a61cf33941e0b11e65f513f21ef4c6f
+# Parent  0ccf46fadf60f0915e55a119e212ff400616df07
+Bug 1227462 - Test tabs.create/update on allowed and disallowed URLs. r=kmag
+
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -25,16 +25,18 @@ support-files =
+ [browser_ext_tabs_captureVisibleTab.js]
+ [browser_ext_tabs_executeScript.js]
+ [browser_ext_tabs_executeScript_good.js]
+ [browser_ext_tabs_executeScript_bad.js]
+ [browser_ext_tabs_insertCSS.js]
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_getCurrent.js]
+ [browser_ext_tabs_create.js]
++[browser_ext_tabs_create_invalid_url.js]
+ [browser_ext_tabs_update.js]
++[browser_ext_tabs_update_url.js]
+ [browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
+ [browser_ext_tabs_move.js]
+ [browser_ext_tabs_move_window.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+ [browser_ext_tab_runtimeConnect.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_create_invalid_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_create_invalid_url.js
+new file mode 100644
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_create_invalid_url.js
+@@ -0,0 +1,66 @@
++/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set sts=2 sw=2 et tw=80: */
++"use strict";
++
++function* testTabsCreateInvalidURL(tabsCreateURL) {
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "permissions": ["tabs"],
++    },
++
++    background: function() {
++      browser.test.sendMessage("ready");
++      browser.test.onMessage.addListener((msg, tabsCreateURL) => {
++        browser.tabs.create({ url: tabsCreateURL }, (tab) => {
++          browser.test.assertEq(undefined, tab, "on error tab should be undefined");
++          browser.test.assertTrue(/URL not allowed/.test(browser.runtime.lastError.message),
++                                  "runtime.lastError should report the expected error message");
++
++          // Remove the opened tab is any.
++          if (tab) {
++            browser.tabs.remove(tab.id);
++          }
++          browser.test.sendMessage("done");
++        });
++      });
++    },
++  });
++
++  yield extension.startup();
++
++  yield extension.awaitMessage("ready");
++
++  info(`test tab.create on invalid URL "${tabsCreateURL}"`);
++
++  extension.sendMessage("start", tabsCreateURL);
++  yield extension.awaitMessage("done");
++
++  yield extension.unload();
++}
++
++add_task(function* () {
++  info("Start testing tabs.create on invalid URLs");
++
++  let dataURLPage = `
++    data:text/html,<!DOCTYPE html>
++    <html>
++      <head>
++        <meta charset="utf-8">
++      </head>
++      <body>
++        <h1>data url page</h1>
++      </body>
++    </html>`;
++
++  let testCases = [
++    { tabsCreateURL: "about:addons" },
++    { tabsCreateURL: "javascript:console.log('tabs.update execute javascript')" },
++    { tabsCreateURL: dataURLPage },
++  ];
++
++  for (let { tabsCreateURL } of testCases) {
++    yield* testTabsCreateInvalidURL(tabsCreateURL);
++  }
++
++  info("done");
++});
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
+--- a/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
+@@ -154,23 +154,23 @@ add_task(function* test_url() {
+   yield do_test_update(function background() {
+     // Create a new tab for testing update.
+     browser.tabs.create({}, function(tab) {
+       browser.tabs.onUpdated.addListener(function onUpdated(tabId, changeInfo) {
+         // Check callback
+         browser.test.assertEq(tabId, tab.id, "Check tab id");
+         browser.test.log("onUpdate: " + JSON.stringify(changeInfo));
+         if ("url" in changeInfo) {
+-          browser.test.assertEq("about:preferences", changeInfo.url,
++          browser.test.assertEq("about:blank", changeInfo.url,
+                                 "Check changeInfo.url");
+           browser.tabs.onUpdated.removeListener(onUpdated);
+           // Remove created tab.
+           browser.tabs.remove(tabId);
+           browser.test.notifyPass("finish");
+           return;
+         }
+       });
+-      browser.tabs.update(tab.id, {url: "about:preferences"});
++      browser.tabs.update(tab.id, {url: "about:blank"});
+     });
+   });
+ });
+ 
+ add_task(forceGC);
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js b/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
+new file mode 100644
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_update_url.js
+@@ -0,0 +1,113 @@
++/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set sts=2 sw=2 et tw=80: */
++"use strict";
++
++function* testTabsUpdateURL(existentTabURL, tabsUpdateURL, isErrorExpected) {
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "permissions": ["tabs"],
++      "webAccessibleResources": ["tab.html"],
++    },
++
++    files: {
++      "tab.html": `
++        <!DOCTYPE>
++        <html>
++          <head>
++            <meta charset="utf-8">
++          </head>
++          <body>
++            <h1>tab page</h1>
++          </body>
++        </html>
++      `,
++    },
++    background: function() {
++      browser.test.sendMessage("ready", browser.runtime.getURL("tab.html"));
++
++      browser.test.onMessage.addListener((msg, tabsUpdateURL, isErrorExpected) => {
++        let onTabsUpdated = (tab) => isErrorExpected ?
++          browser.test.fail(`tabs.update with URL ${tabsUpdateURL} should be rejected`) :
++          browser.test.assertTrue(tab, "on success the tab should be defined");
++
++        let onTabsUpdateError = (error) => !isErrorExpected ?
++          browser.test.fails(`tabs.update with URL ${tabsUpdateURL} should not be rejected`) :
++          browser.test.assertTrue(/^URL not allowed/.test(error.message),
++                                  "tabs.update should be rejected with the expected error message");
++
++        let onTabsUpdateDone = () => browser.test.sendMessage("done");
++
++        browser.tabs.query({ lastFocusedWindow: true }, (tabs) => {
++          browser.tabs.update(tabs[1].id, { url: tabsUpdateURL })
++                      .then(onTabsUpdated, onTabsUpdateError)
++                      .then(onTabsUpdateDone);
++        });
++      });
++    },
++  });
++
++  yield extension.startup();
++
++  let mozExtTabURL = yield extension.awaitMessage("ready");
++
++  if (tabsUpdateURL == "self") {
++    tabsUpdateURL = mozExtTabURL;
++  }
++
++  info(`tab.update URL "${tabsUpdateURL}" on tab with URL "${existentTabURL}"`);
++
++  let tab1 = yield BrowserTestUtils.openNewForegroundTab(gBrowser, existentTabURL);
++
++  extension.sendMessage("start", tabsUpdateURL, isErrorExpected);
++  yield extension.awaitMessage("done");
++
++  yield BrowserTestUtils.removeTab(tab1);
++  yield extension.unload();
++}
++
++add_task(function* () {
++  info("Start testing tabs.update on javascript URLs");
++
++  let dataURLPage = `
++    data:text/html,<!DOCTYPE html>
++    <html>
++      <head>
++        <meta charset="utf-8">
++      </head>
++      <body>
++        <h1>data url page</h1>
++      </body>
++    </html>`;
++
++  let checkList = [
++    {
++      tabsUpdateURL: "http://example.net",
++      isErrorExpected: false,
++    },
++    {
++      tabsUpdateURL: "self",
++      isErrorExpected: false,
++    },
++    {
++      tabsUpdateURL: "about:addons",
++      isErrorExpected: true,
++    },
++    {
++      tabsUpdateURL: "javascript:console.log('tabs.update execute javascript')",
++      isErrorExpected: true,
++    },
++    {
++      tabsUpdateURL: dataURLPage,
++      isErrorExpected: true,
++    },
++  ];
++
++  let testCases = checkList
++        .map((check) => Object.assign({}, check, { existentTabURL: "about:blank" }));
++
++  for (let { existentTabURL, tabsUpdateURL, isErrorExpected } of testCases) {
++    yield* testTabsUpdateURL(existentTabURL, tabsUpdateURL, isErrorExpected);
++  }
++
++  info("done");
++});

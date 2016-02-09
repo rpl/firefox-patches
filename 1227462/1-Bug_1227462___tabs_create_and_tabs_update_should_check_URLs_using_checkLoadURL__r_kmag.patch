@@ -1,0 +1,143 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1454983355 -3600
+#      Tue Feb 09 03:02:35 2016 +0100
+# Node ID 0ccf46fadf60f0915e55a119e212ff400616df07
+# Parent  9e8419aa24ae29a79bd35a712bbc10c17ce321dd
+Bug 1227462 - tabs.create and tabs.update should check URLs using checkLoadURL. r=kmag
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -263,26 +263,19 @@ extensions.registerSchemaAPI("tabs", nul
+         AllWindowEvents.addListener("TabClose", tabListener);
+         return () => {
+           WindowListManager.removeCloseListener(windowListener);
+           AllWindowEvents.removeListener("TabClose", tabListener);
+         };
+       }).api(),
+ 
+       create: function(createProperties) {
+-        return new Promise(resolve => {
+-          function createInWindow(window) {
+-            let url;
+-            if (createProperties.url !== null) {
+-              url = context.uri.resolve(createProperties.url);
+-            } else {
+-              url = window.BROWSER_NEW_TAB_URL;
+-            }
+-
+-            let tab = window.gBrowser.addTab(url);
++        return new Promise((resolve, reject) => {
++          function createInWindow(window, url) {
++            let tab = window.gBrowser.addTab(url || window.BROWSER_NEW_TAB_URL);
+ 
+             let active = true;
+             if (createProperties.active !== null) {
+               active = createProperties.active;
+             }
+             if (active) {
+               window.gBrowser.selectedTab = tab;
+             }
+@@ -293,30 +286,41 @@ extensions.registerSchemaAPI("tabs", nul
+ 
+             if (createProperties.pinned) {
+               window.gBrowser.pinTab(tab);
+             }
+ 
+             resolve(TabManager.convert(extension, tab));
+           }
+ 
++          let url;
++
++          if (createProperties.url !== null) {
++            url = context.uri.resolve(createProperties.url);
++
++            if (!context.checkLoadURL(url, { dontReportErrors: true })) {
++              reject({ message: `URL not allowed: ${url}`});
++              return;
++            }
++          }
++
+           let window = createProperties.windowId !== null ?
+             WindowManager.getWindow(createProperties.windowId) :
+             WindowManager.topWindow;
+           if (!window.gBrowser) {
+             let obs = (finishedWindow, topic, data) => {
+               if (finishedWindow != window) {
+                 return;
+               }
+               Services.obs.removeObserver(obs, "browser-delayed-startup-finished");
+-              createInWindow(window);
++              createInWindow(window, url);
+             };
+             Services.obs.addObserver(obs, "browser-delayed-startup-finished", false);
+           } else {
+-            createInWindow(window);
++            createInWindow(window, url);
+           }
+         });
+       },
+ 
+       remove: function(tabs) {
+         if (!Array.isArray(tabs)) {
+           tabs = [tabs];
+         }
+@@ -326,20 +330,33 @@ extensions.registerSchemaAPI("tabs", nul
+           tab.ownerDocument.defaultView.gBrowser.removeTab(tab);
+         }
+ 
+         return Promise.resolve();
+       },
+ 
+       update: function(tabId, updateProperties) {
+         let tab = tabId !== null ? TabManager.getTab(tabId) : TabManager.activeTab;
++
++        if (!tab) {
++          return Promise.reject({ message: `No tab found with tabId: ${tabId}` });
++        }
++
+         let tabbrowser = tab.ownerDocument.defaultView.gBrowser;
++
+         if (updateProperties.url !== null) {
+-          tab.linkedBrowser.loadURI(updateProperties.url);
++          let url = context.uri.resolve(updateProperties.url);
++
++          if (!context.checkLoadURL(url, { dontReportErrors: true })) {
++            return Promise.reject({ message: `URL not allowed: ${url}`});
++          }
++
++          tab.linkedBrowser.loadURI(url);
+         }
++
+         if (updateProperties.active !== null) {
+           if (updateProperties.active) {
+             tabbrowser.selectedTab = tab;
+           } else {
+             // Not sure what to do here? Which tab should we select?
+           }
+         }
+         if (updateProperties.muted !== null) {
+diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
+--- a/toolkit/components/extensions/ExtensionUtils.jsm
++++ b/toolkit/components/extensions/ExtensionUtils.jsm
+@@ -139,16 +139,19 @@ class BaseContext {
+ 
+     let flags = ssm.STANDARD;
+     if (!options.allowScript) {
+       flags |= ssm.DISALLOW_SCRIPT;
+     }
+     if (!options.allowInheritsPrincipal) {
+       flags |= ssm.DISALLOW_INHERIT_PRINCIPAL;
+     }
++    if (options.dontReportErrors) {
++      flags |= ssm.DONT_REPORT_ERRORS;
++    }
+ 
+     try {
+       ssm.checkLoadURIStrWithPrincipal(this.principal, url, flags);
+     } catch (e) {
+       return false;
+     }
+     return true;
+   }
