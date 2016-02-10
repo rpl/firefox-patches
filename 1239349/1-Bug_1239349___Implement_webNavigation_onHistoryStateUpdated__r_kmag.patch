@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1455034626 -3600
-#      Tue Feb 09 17:17:06 2016 +0100
-# Node ID 6749f3cd4d90f744dec64991eac6a2df482f001b
+# Date 1455045983 -3600
+#      Tue Feb 09 20:26:23 2016 +0100
+# Node ID a1d9e8488ebcea2472c795ed286e0267aeae9be9
 # Parent  9e8419aa24ae29a79bd35a712bbc10c17ce321dd
 Bug 1239349 - Implement webNavigation.onHistoryStateUpdated. r=kmag
 
@@ -44,6 +44,77 @@ diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit
              "type": "array",
              "items": { "$ref": "events.UrlFilter" },
              "description": "Conditions that the URL being navigated to must satisfy. The 'schemes' and 'ports' fields of UrlFilter are ignored for this event."
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+@@ -19,16 +19,17 @@ function backgroundScript() {
+ 
+   const EVENTS = [
+     "onBeforeNavigate",
+     "onCommitted",
+     "onDOMContentLoaded",
+     "onCompleted",
+     "onErrorOccurred",
+     "onReferenceFragmentUpdated",
++    "onHistoryStateUpdated",
+   ];
+ 
+   let expectedTabId = -1;
+ 
+   function gotEvent(event, details) {
+     if (!details.url.startsWith(BASE)) {
+       return;
+     }
+@@ -63,16 +64,17 @@ function backgroundScript() {
+ 
+   browser.test.sendMessage("ready", browser.webRequest.ResourceType);
+ }
+ 
+ const BASE = "http://mochi.test:8888/tests/toolkit/components/extensions/test/mochitest";
+ const URL = BASE + "/file_WebNavigation_page1.html";
+ const FRAME = BASE + "/file_WebNavigation_page2.html";
+ const FRAME2 = BASE + "/file_WebNavigation_page3.html";
++const FRAME_PUSHSTATE = BASE + "/file_WebNavigation_page3_pushState.html";
+ 
+ const REQUIRED = [
+   "onBeforeNavigate",
+   "onCommitted",
+   "onDOMContentLoaded",
+   "onCompleted",
+ ];
+ 
+@@ -155,16 +157,31 @@ add_task(function* webnav_ordering() {
+ 
+   checkRequired(FRAME2);
+ 
+   yield loadAndWait(win, "onReferenceFragmentUpdated", FRAME2 + "#ref",
+                     () => { win.frames[0].document.getElementById("elt").click(); });
+ 
+   info("Received onReferenceFragmentUpdated from FRAME2");
+ 
++  yield loadAndWait(win, "onHistoryStateUpdated", FRAME_PUSHSTATE,
++                    () => { win.frames[0].history.pushState({}, "History PushState", FRAME_PUSHSTATE); });
++
++  info("Received onHistoryStateUpdated from FRAME_PUSHSTATE on history.pushState");
++
++  yield loadAndWait(win, "onHistoryStateUpdated", FRAME2 + "#ref",
++                    () => { win.frames[0].history.back(); });
++
++  info("Received onHistoryStateUpdated from FRAME2 on history.back from an history.pushState");
++
++  yield loadAndWait(win, "onHistoryStateUpdated", FRAME_PUSHSTATE,
++                    () => { win.frames[0].history.forward(); });
++
++  info("Received onHistoryStateUpdated from FRAME_PUSHSTATE on history.forward to a previous history.pushState");
++
+   win.close();
+ 
+   yield extension.unload();
+   info("webnavigation extension unloaded");
+ });
+ </script>
+ 
+ </body>
 diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
 --- a/toolkit/modules/addons/WebNavigation.jsm
 +++ b/toolkit/modules/addons/WebNavigation.jsm
@@ -59,9 +130,9 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
 -    if (data.flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) {
 +
 +    let isSameDocument = (data) => data.flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT;
-+    let isHistoryPushState = (data) => data.loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE;
-+    let isHistoryPopState = (data) => data.loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY &&
-+          isSameDocument(data) && data.URIWasModified;
++    let isHistoryPushState = (data) => (data.loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE);
++    let isHistoryPopState = (data) => (data.loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) &&
++          isSameDocument(data);
 +
 +    if (isHistoryPushState(data) || isHistoryPopState(data)) {
 +      this.fire("onHistoryStateUpdated", browser, data, {url});
@@ -116,28 +187,16 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
          // For some reason we don't fire onLocationChange for the
          // initial navigation of a sub-frame. So we need to simulate
          // it here.
-@@ -70,22 +71,31 @@ var WebProgressListener = {
-           flags: 0,
-         };
-         sendAsyncMessage("Extension:LocationChange", data);
-       }
-     }
+@@ -75,17 +76,19 @@ var WebProgressListener = {
    },
  
    onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
-+    // Get the session history entry  to get the URIWasModified field from it,
-+    // needed to be able to detect when a location change is a related to a PopStateEvent.
-+    let docShell = webProgress.QueryInterface(Ci.nsIDocShell);
-+    let shentry = {};
-+    docShell.getCurrentSHEntry(shentry);
-+
      let data = {
        location: locationURI ? locationURI.spec : "",
        windowId: webProgress.DOMWindowID,
        parentWindowId: getParentWindowId(webProgress.DOMWindow),
        flags,
 +      loadType: webProgress.loadType,
-+      URIWasModified: shentry.value ? shentry.value.URIWasModified : null,
      };
 +
      sendAsyncMessage("Extension:LocationChange", data);
