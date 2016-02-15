@@ -2,9 +2,11 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1455239599 -3600
 #      Fri Feb 12 02:13:19 2016 +0100
-# Node ID a8b6b202117d0a6d276abbedc462889178fe30fe
-# Parent  31150215eedfe1406dbd92058635eb619e817939
+# Node ID 33ebf0276746c7d597aa216c2790e939c7ee669e
+# Parent  5d8b06b5b67e5422e6168fcfaa2ed4fac58b2640
 Bug 1239349 - Implement webNavigation.onHistoryStateUpdated. r?kmag
+
+MozReview-Commit-ID: FvtkZpcJYCU
 
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
 --- a/toolkit/components/extensions/ext-webNavigation.js
@@ -206,7 +208,7 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -24,16 +24,18 @@ addMessageListener("Extension:DisableWeb
+@@ -24,61 +24,118 @@ addMessageListener("Extension:DisableWeb
  });
  
  var WebProgressListener = {
@@ -216,7 +218,16 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
      webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_WINDOW |
                                            Ci.nsIWebProgress.NOTIFY_LOCATION);
 +
-+    WebNavigationFrames.initPreviousLocationMap(docShell);
++
++    // This WeakMap keeps track of the pathname and hash of the previous location
++    // of the existent docShells.
++    this.docShellPreviousLocationMap = new WeakMap();
++
++    // Initialize the docShellPreviousLocationMap with the current location info
++    // of the existent docShells.
++    for (let currentDocShell of WebNavigationFrames.iterateDocShellTree(docShell)) {
++      this.updatePreviousLocationInfo(currentDocShell);
++    }
    },
  
    uninit() {
@@ -225,7 +236,32 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
      }
      let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
                                .getInterface(Ci.nsIWebProgress);
-@@ -43,42 +45,68 @@ var WebProgressListener = {
+     webProgress.removeProgressListener(this);
+   },
+ 
++  updatePreviousLocationInfo(docShell) {
++    let win = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
++                      .getInterface(Ci.nsIWebProgress)
++                      .DOMWindow;
++    let currentURI = docShell.QueryInterface(Ci.nsIWebNavigation).currentURI;
++
++    let previousInfo = this.docShellPreviousLocationMap.get(win);
++
++    // Extract from the URI the path (which contains the location.pathname and location.search)
++    // and the hash.
++    let updatedInfo = {
++      path: currentURI.specIgnoringRef.replace(currentURI.prePath, ""),
++      hash: currentURI.ref,
++    };
++
++    this.docShellPreviousLocationMap.set(win, updatedInfo);
++
++    return {
++      hashChanged: !(previousInfo && previousInfo.hash == updatedInfo.hash),
++      pathChanged: !(previousInfo && previousInfo.path == updatedInfo.path),
++    };
++  },
++
    onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
      let data = {
        requestURL: request.QueryInterface(Ci.nsIChannel).URI.spec,
@@ -257,7 +293,7 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
  
    onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
 +    let changedDocShell = webProgress.QueryInterface(Ci.nsIDocShell);
-+    let previousLocation = WebNavigationFrames.updatePreviousLocationInfo(changedDocShell);
++    let changedLocationInfo = this.updatePreviousLocationInfo(changedDocShell);
 +    let loadType = webProgress.loadType;
 +
 +    let isSameDocument = (flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT);
@@ -265,10 +301,7 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
 +    let isReferenceFragmentUpdated = false;
 +
 +    if (isSameDocument) {
-+      let location = webProgress.DOMWindow.location;
-+
-+      let hashChanged = !previousLocation ? false : (previousLocation.hash != location.hash);
-+      let pathChanged = !previousLocation ? false : (previousLocation.pathname != location.pathname);
++      let { pathChanged, hashChanged} = changedLocationInfo;
 +
 +      // When the location changes but the document is the same:
 +      // - path not changed and hash changed -> |onReferenceFragmentUpdated|
@@ -305,8 +338,7 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
 diff --git a/toolkit/modules/addons/WebNavigationFrames.jsm b/toolkit/modules/addons/WebNavigationFrames.jsm
 --- a/toolkit/modules/addons/WebNavigationFrames.jsm
 +++ b/toolkit/modules/addons/WebNavigationFrames.jsm
-@@ -91,17 +91,46 @@ function findFrame(windowId, rootDocShel
-     if (windowId == getWindowId(docShellToWindow(docShell))) {
+@@ -92,16 +92,18 @@ function findFrame(windowId, rootDocShel
        return convertDocShellToFrameDetail(docShell);
      }
    }
@@ -314,35 +346,8 @@ diff --git a/toolkit/modules/addons/WebNavigationFrames.jsm b/toolkit/modules/ad
    return null;
  }
  
-+// This WeakMap keeps track of the pathname and hash of the previous location
-+// of the existent docShells.
-+var docShellPreviousLocationMap = new WeakMap();
-+
-+function updatePreviousLocationInfo(docShell) {
-+  let win = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-+                    .getInterface(Ci.nsIWebProgress)
-+                    .DOMWindow;
-+  let previousLocationInfo = docShellPreviousLocationMap.get(win);
-+
-+  docShellPreviousLocationMap.set(win, {
-+    pathname: win.location.pathname,
-+    hash: win.location.hash,
-+  });
-+
-+  return previousLocationInfo;
-+}
-+
-+function initPreviousLocationMap(docShell) {
-+  // Initialize the docShellPreviousLocationMap with the current location info
-+  // of the existent docShells.
-+  for (let currentDocShell of iterateDocShellTree(docShell)) {
-+    updatePreviousLocationInfo(currentDocShell);
-+  }
-+}
-+
  var WebNavigationFrames = {
-+  initPreviousLocationMap,
-+  updatePreviousLocationInfo,
++  iterateDocShellTree,
 +
    getFrame(docShell, frameId) {
      if (frameId == 0) {
