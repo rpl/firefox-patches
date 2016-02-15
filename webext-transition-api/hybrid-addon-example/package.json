@@ -1,0 +1,13 @@
+{
+  "title": "Hybrid Addon Example",
+  "id": "hybrid-addon-example@mozilla.com",
+  "name": "hybrid-addon-example",
+  "version": "0.1.0",
+  "description": "A skeleton hybrid addon based on Addon SDK and WebExtension APIs",
+  "main": "index.js",
+  "author": "Luca Greco <lgreco@mozilla.com>",
+  "engines": {
+    "firefox": ">=47.0a1"
+  },
+  "license": "MPL-2.0"
+}

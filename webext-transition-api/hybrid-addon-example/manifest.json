@@ -1,0 +1,21 @@
+{
+  "name": "hybrid-addon-example",
+  "version": "0.1.0",
+
+  "background": {
+    "scripts": ["background-page.js"]
+  },
+  "content_scripts": [
+    {"matches": ["https://www.mozilla.org/*"], "js": ["content-script.js"]}
+  ],
+
+  "manifest_version": 2,
+  "description": "A skeleton hybrid addon based on Addon SDK and WebExtension APIs",
+  "permissions": ["tabs"],
+
+  "applications": {
+    "gecko": {
+      "id": "hybrid-addon-example@mozilla.com"
+    }
+  }
+}
