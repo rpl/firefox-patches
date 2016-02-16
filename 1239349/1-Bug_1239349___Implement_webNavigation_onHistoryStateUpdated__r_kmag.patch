@@ -2,7 +2,7 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1455239599 -3600
 #      Fri Feb 12 02:13:19 2016 +0100
-# Node ID 33ebf0276746c7d597aa216c2790e939c7ee669e
+# Node ID a3e74c57f8504f995517904d4a49668a0d65c59f
 # Parent  5d8b06b5b67e5422e6168fcfaa2ed4fac58b2640
 Bug 1239349 - Implement webNavigation.onHistoryStateUpdated. r?kmag
 
@@ -208,7 +208,7 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -24,61 +24,118 @@ addMessageListener("Extension:DisableWeb
+@@ -24,16 +24,29 @@ addMessageListener("Extension:DisableWeb
  });
  
  var WebProgressListener = {
@@ -219,14 +219,16 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
                                            Ci.nsIWebProgress.NOTIFY_LOCATION);
 +
 +
-+    // This WeakMap keeps track of the pathname and hash of the previous location
++    // This WeakMap (DOMWindow -> nsIURI) keeps track of the pathname and hash of the previous location
 +    // of the existent docShells.
-+    this.docShellPreviousLocationMap = new WeakMap();
++    this.previousURIMap = new WeakMap();
 +
-+    // Initialize the docShellPreviousLocationMap with the current location info
-+    // of the existent docShells.
++    // Initialize the previousURIMap by populating it with the current URIs of all the existent docShells.
 +    for (let currentDocShell of WebNavigationFrames.iterateDocShellTree(docShell)) {
-+      this.updatePreviousLocationInfo(currentDocShell);
++      let win = currentDocShell.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);
++      let { currentURI } = currentDocShell.QueryInterface(Ci.nsIWebNavigation);
++
++      this.previousURIMap.set(win, currentURI);
 +    }
    },
  
@@ -236,32 +238,7 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
      }
      let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
                                .getInterface(Ci.nsIWebProgress);
-     webProgress.removeProgressListener(this);
-   },
- 
-+  updatePreviousLocationInfo(docShell) {
-+    let win = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-+                      .getInterface(Ci.nsIWebProgress)
-+                      .DOMWindow;
-+    let currentURI = docShell.QueryInterface(Ci.nsIWebNavigation).currentURI;
-+
-+    let previousInfo = this.docShellPreviousLocationMap.get(win);
-+
-+    // Extract from the URI the path (which contains the location.pathname and location.search)
-+    // and the hash.
-+    let updatedInfo = {
-+      path: currentURI.specIgnoringRef.replace(currentURI.prePath, ""),
-+      hash: currentURI.ref,
-+    };
-+
-+    this.docShellPreviousLocationMap.set(win, updatedInfo);
-+
-+    return {
-+      hashChanged: !(previousInfo && previousInfo.hash == updatedInfo.hash),
-+      pathChanged: !(previousInfo && previousInfo.path == updatedInfo.path),
-+    };
-+  },
-+
+@@ -43,42 +56,70 @@ var WebProgressListener = {
    onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
      let data = {
        requestURL: request.QueryInterface(Ci.nsIChannel).URI.spec,
@@ -292,16 +269,21 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
    },
  
    onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
-+    let changedDocShell = webProgress.QueryInterface(Ci.nsIDocShell);
-+    let changedLocationInfo = this.updatePreviousLocationInfo(changedDocShell);
-+    let loadType = webProgress.loadType;
++    let { DOMWindow, loadType } = webProgress;
++
++    // Get the previous URI loaded in the DOMWindow.
++    let previousURI = this.previousURIMap.get(DOMWindow);
++
++    // Update the URI in the map with the new locationURI.
++    this.previousURIMap.set(DOMWindow, locationURI);
 +
 +    let isSameDocument = (flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT);
 +    let isHistoryStateUpdated = false;
 +    let isReferenceFragmentUpdated = false;
 +
 +    if (isSameDocument) {
-+      let { pathChanged, hashChanged} = changedLocationInfo;
++      let pathChanged = !(previousURI && locationURI.equalsExceptRef(previousURI));
++      let hashChanged = !(previousURI && previousURI.ref == locationURI.ref);
 +
 +      // When the location changes but the document is the same:
 +      // - path not changed and hash changed -> |onReferenceFragmentUpdated|
