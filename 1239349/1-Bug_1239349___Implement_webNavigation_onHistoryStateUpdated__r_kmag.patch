@@ -2,7 +2,7 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1455239599 -3600
 #      Fri Feb 12 02:13:19 2016 +0100
-# Node ID a3e74c57f8504f995517904d4a49668a0d65c59f
+# Node ID f04b2575a603423ffbdd2510cfdd1f63536e60be
 # Parent  5d8b06b5b67e5422e6168fcfaa2ed4fac58b2640
 Bug 1239349 - Implement webNavigation.onHistoryStateUpdated. r?kmag
 
@@ -208,36 +208,36 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -24,16 +24,29 @@ addMessageListener("Extension:DisableWeb
+@@ -20,16 +20,29 @@ function loadListener(event) {
+ 
+ addEventListener("DOMContentLoaded", loadListener);
+ addMessageListener("Extension:DisableWebNavigation", () => {
+   removeEventListener("DOMContentLoaded", loadListener);
  });
  
  var WebProgressListener = {
    init: function() {
-     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                               .getInterface(Ci.nsIWebProgress);
-     webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_WINDOW |
-                                           Ci.nsIWebProgress.NOTIFY_LOCATION);
-+
-+
-+    // This WeakMap (DOMWindow -> nsIURI) keeps track of the pathname and hash of the previous location
-+    // of the existent docShells.
++    // This WeakMap (DOMWindow -> nsIURI) keeps track of the pathname and hash
++    // of the previous location for all the existent docShells.
 +    this.previousURIMap = new WeakMap();
 +
-+    // Initialize the previousURIMap by populating it with the current URIs of all the existent docShells.
++    // Populate the above previousURIMap by iterating over the docShells tree.
 +    for (let currentDocShell of WebNavigationFrames.iterateDocShellTree(docShell)) {
-+      let win = currentDocShell.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindow);
++      let win = currentDocShell.QueryInterface(Ci.nsIInterfaceRequestor)
++                               .getInterface(Ci.nsIDOMWindow);
 +      let { currentURI } = currentDocShell.QueryInterface(Ci.nsIWebNavigation);
 +
 +      this.previousURIMap.set(win, currentURI);
 +    }
++
+     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIWebProgress);
+     webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_WINDOW |
+                                           Ci.nsIWebProgress.NOTIFY_LOCATION);
    },
  
    uninit() {
      if (!docShell) {
-       return;
-     }
-     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
-                               .getInterface(Ci.nsIWebProgress);
 @@ -43,42 +56,70 @@ var WebProgressListener = {
    onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
      let data = {
