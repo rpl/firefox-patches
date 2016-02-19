@@ -2,18 +2,20 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1455130354 -3600
 #      Wed Feb 10 19:52:34 2016 +0100
-# Node ID 56d939bf08895a3ce628f9442dfeab45dad713be
-# Parent  9e8419aa24ae29a79bd35a712bbc10c17ce321dd
+# Node ID 3e7ccc4d8d279ab5d03ddb4a852fb500d2d5be19
+# Parent  7e5ceea9eb9e152860cc2fe2c612ed4c5dc610d9
 Bug 1227462 - tabs.create and tabs.update should check URLs using checkLoadURL. r=kmag
+
+MozReview-Commit-ID: EKFRpoSuXrF
 
 diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
 --- a/browser/components/extensions/ext-tabs.js
 +++ b/browser/components/extensions/ext-tabs.js
-@@ -263,26 +263,30 @@ extensions.registerSchemaAPI("tabs", nul
-         AllWindowEvents.addListener("TabClose", tabListener);
-         return () => {
-           WindowListManager.removeCloseListener(windowListener);
-           AllWindowEvents.removeListener("TabClose", tabListener);
+@@ -392,26 +392,30 @@ extensions.registerSchemaAPI("tabs", nul
+           AllWindowEvents.removeListener("progress", progressListener);
+           AllWindowEvents.removeListener("TabAttrModified", listener);
+           AllWindowEvents.removeListener("TabPinned", listener);
+           AllWindowEvents.removeListener("TabUnpinned", listener);
          };
        }).api(),
  
@@ -44,7 +46,7 @@ diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/exte
              if (active) {
                window.gBrowser.selectedTab = tab;
              }
-@@ -326,20 +330,33 @@ extensions.registerSchemaAPI("tabs", nul
+@@ -455,20 +459,33 @@ extensions.registerSchemaAPI("tabs", nul
            tab.ownerDocument.defaultView.gBrowser.removeTab(tab);
          }
  
@@ -82,7 +84,7 @@ diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/exte
 diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
 --- a/toolkit/components/extensions/ExtensionUtils.jsm
 +++ b/toolkit/components/extensions/ExtensionUtils.jsm
-@@ -139,16 +139,19 @@ class BaseContext {
+@@ -142,16 +142,19 @@ class BaseContext {
  
      let flags = ssm.STANDARD;
      if (!options.allowScript) {

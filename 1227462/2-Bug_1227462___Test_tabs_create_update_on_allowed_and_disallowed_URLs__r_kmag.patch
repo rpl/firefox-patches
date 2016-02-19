@@ -2,15 +2,17 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1455130507 -3600
 #      Wed Feb 10 19:55:07 2016 +0100
-# Node ID 99f21c86a584de53254eafb8e5facd72185d1988
-# Parent  56d939bf08895a3ce628f9442dfeab45dad713be
+# Node ID 415f1b525f1f092590f6cad91fb4f29747355e5d
+# Parent  3e7ccc4d8d279ab5d03ddb4a852fb500d2d5be19
 Bug 1227462 - Test tabs.create/update on allowed and disallowed URLs. r=kmag
+
+MozReview-Commit-ID: 2cZST9GwTaw
 
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -25,16 +25,18 @@ support-files =
- [browser_ext_tabs_captureVisibleTab.js]
+@@ -27,18 +27,20 @@ support-files =
+ [browser_ext_tabs_events.js]
  [browser_ext_tabs_executeScript.js]
  [browser_ext_tabs_executeScript_good.js]
  [browser_ext_tabs_executeScript_bad.js]
@@ -19,12 +21,14 @@ diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/co
  [browser_ext_tabs_getCurrent.js]
  [browser_ext_tabs_create.js]
 +[browser_ext_tabs_create_invalid_url.js]
+ [browser_ext_tabs_duplicate.js]
  [browser_ext_tabs_update.js]
 +[browser_ext_tabs_update_url.js]
  [browser_ext_tabs_onUpdated.js]
  [browser_ext_tabs_sendMessage.js]
  [browser_ext_tabs_move.js]
  [browser_ext_tabs_move_window.js]
+ [browser_ext_windows_create_tabId.js]
  [browser_ext_windows_update.js]
  [browser_ext_contentscript_connect.js]
  [browser_ext_tab_runtimeConnect.js]
