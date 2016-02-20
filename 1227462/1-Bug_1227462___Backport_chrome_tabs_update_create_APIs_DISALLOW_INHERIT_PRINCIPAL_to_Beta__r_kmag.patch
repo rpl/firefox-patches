@@ -1,0 +1,130 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1455919727 -3600
+#      Fri Feb 19 23:08:47 2016 +0100
+# Node ID 6d20e232f025f8d7836012a5c6fc28e094db3d22
+# Parent  b935e0100697bde8bfc19d56a7ae6beb8722dff5
+Bug 1227462 - Backport chrome.tabs.update/create APIs DISALLOW_INHERIT_PRINCIPAL to Beta. r=kmag
+
+diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/extensions/ext-tabs.js
+--- a/browser/components/extensions/ext-tabs.js
++++ b/browser/components/extensions/ext-tabs.js
+@@ -260,18 +260,32 @@ extensions.registerSchemaAPI("tabs", nul
+         };
+       }).api(),
+ 
+       create: function(createProperties, callback) {
+         if (!createProperties) {
+           createProperties = {};
+         }
+ 
+-        let url = createProperties.url || aboutNewTabService.newTabURL;
+-        url = extension.baseURI.resolve(url);
++        let url;
++
++        if (createProperties.url) {
++          url = context.uri.resolve(createProperties.url);
++
++          if (!context.checkLoadURL(url)) {
++            // TODO: runtime.lastError should be set to `Invalid url: ${updateProperties.url}`
++            if (callback) {
++              runSafe(context, callback, undefined);
++            }
++
++            return;
++          }
++        } else {
++          url = aboutNewTabService.newTabURL;
++        }
+ 
+         function createInWindow(window) {
+           let tab = window.gBrowser.addTab(url);
+ 
+           let active = true;
+           if ("active" in createProperties) {
+             active = createProperties.active;
+           } else if ("selected" in createProperties) {
+@@ -324,34 +338,54 @@ extensions.registerSchemaAPI("tabs", nul
+         if (callback) {
+           runSafe(context, callback);
+         }
+       },
+ 
+       update: function(tabId, updateProperties, callback) {
+         let tab = tabId !== null ? TabManager.getTab(tabId) : TabManager.activeTab;
+         let tabbrowser = tab.ownerDocument.defaultView.gBrowser;
++
++        if (!tab) {
++          // TODO: runtime.lastError should be set to `No tab with id: ${tabId}`
++          if (callback) {
++            runSafe(context, callback, undefined);
++          }
++          return;
++        }
++
+         if (updateProperties.url !== null) {
+-          tab.linkedBrowser.loadURI(updateProperties.url);
++          if (context.checkLoadURL(updateProperties.url)) {
++            tab.linkedBrowser.loadURI(updateProperties.url);
++          } else {
++            // TODO: runtime.lastError should be set to `Invalid url: ${updateProperties.url}`
++            if (callback) {
++              runSafe(context, callback, undefined);
++            }
++            return;
++          }
+         }
++
++        // FIXME: highlighted/selected, muted, openerTabId
++
+         if (updateProperties.active !== null) {
+           if (updateProperties.active) {
+             tabbrowser.selectedTab = tab;
+           } else {
+             // Not sure what to do here? Which tab should we select?
+           }
+         }
++
+         if (updateProperties.pinned !== null) {
+           if (updateProperties.pinned) {
+             tabbrowser.pinTab(tab);
+           } else {
+             tabbrowser.unpinTab(tab);
+           }
+         }
+-        // FIXME: highlighted/selected, muted, openerTabId
+ 
+         if (callback) {
+           runSafe(context, callback, TabManager.convert(extension, tab));
+         }
+       },
+ 
+       reload: function(tabId, reloadProperties, callback) {
+         let tab = tabId !== null ? TabManager.getTab(tabId) : TabManager.activeTab;
+diff --git a/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
+--- a/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
++++ b/browser/components/extensions/test/browser/browser_ext_tabs_onUpdated.js
+@@ -154,21 +154,21 @@ add_task(function* test_url() {
+   yield do_test_update(function background() {
+     // Create a new tab for testing update.
+     browser.tabs.create({}, function(tab) {
+       browser.tabs.onUpdated.addListener(function onUpdated(tabId, changeInfo) {
+         // Check callback
+         browser.test.assertEq(tabId, tab.id, "Check tab id");
+         browser.test.log("onUpdate: " + JSON.stringify(changeInfo));
+         if ("url" in changeInfo) {
+-          browser.test.assertEq("about:preferences", changeInfo.url,
++          browser.test.assertEq("about:blank", changeInfo.url,
+                                 "Check changeInfo.url");
+           browser.tabs.onUpdated.removeListener(onUpdated);
+           // Remove created tab.
+           browser.tabs.remove(tabId);
+           browser.test.notifyPass("finish");
+           return;
+         }
+       });
+-      browser.tabs.update(tab.id, {url: "about:preferences"});
++      browser.tabs.update(tab.id, {url: "about:blank"});
+     });
+   });
+ });
