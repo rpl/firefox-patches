@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1455130354 -3600
-#      Wed Feb 10 19:52:34 2016 +0100
-# Node ID 3e7ccc4d8d279ab5d03ddb4a852fb500d2d5be19
-# Parent  7e5ceea9eb9e152860cc2fe2c612ed4c5dc610d9
+# Date 1456420439 -3600
+#      Thu Feb 25 18:13:59 2016 +0100
+# Node ID 27ecf7da2c3119f799c3292d26a155293b7fa10c
+# Parent  17ba8c582eba5fb32809f1480867c200f69b5e2f
 Bug 1227462 - tabs.create and tabs.update should check URLs using checkLoadURL. r=kmag
 
 MozReview-Commit-ID: EKFRpoSuXrF
@@ -30,8 +30,8 @@ diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/exte
 -            } else {
 -              url = window.BROWSER_NEW_TAB_URL;
 +
-+              if (!context.checkLoadURL(url, { dontReportErrors: true })) {
-+                reject({ message: `URL not allowed: ${url}`});
++              if (!context.checkLoadURL(url, {dontReportErrors: true})) {
++                reject({message: `URL not allowed: ${url}`});
 +                return;
 +              }
              }
@@ -57,7 +57,7 @@ diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/exte
          let tab = tabId !== null ? TabManager.getTab(tabId) : TabManager.activeTab;
 +
 +        if (!tab) {
-+          return Promise.reject({ message: `No tab found with tabId: ${tabId}` });
++          return Promise.reject({message: `No tab found with tabId: ${tabId}`});
 +        }
 +
          let tabbrowser = tab.ownerDocument.defaultView.gBrowser;
@@ -66,8 +66,8 @@ diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/exte
 -          tab.linkedBrowser.loadURI(updateProperties.url);
 +          let url = context.uri.resolve(updateProperties.url);
 +
-+          if (!context.checkLoadURL(url, { dontReportErrors: true })) {
-+            return Promise.reject({ message: `URL not allowed: ${url}`});
++          if (!context.checkLoadURL(url, {dontReportErrors: true})) {
++            return Promise.reject({message: `URL not allowed: ${url}`});
 +          }
 +
 +          tab.linkedBrowser.loadURI(url);
@@ -84,7 +84,7 @@ diff --git a/browser/components/extensions/ext-tabs.js b/browser/components/exte
 diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
 --- a/toolkit/components/extensions/ExtensionUtils.jsm
 +++ b/toolkit/components/extensions/ExtensionUtils.jsm
-@@ -142,16 +142,19 @@ class BaseContext {
+@@ -145,16 +145,19 @@ class BaseContext {
  
      let flags = ssm.STANDARD;
      if (!options.allowScript) {
