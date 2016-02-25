@@ -2,7 +2,7 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1455130507 -3600
 #      Wed Feb 10 19:55:07 2016 +0100
-# Node ID 50c9dbd74daf8dc1149f1eae0cb5210d84165aae
+# Node ID 031e3b78c4e44ac1761b43a34d186bc3ed036a24
 # Parent  7f41d91876c8a2c6f3986564cf2132e9ac1b036d
 Bug 1227462 - Backport test tabs.create/update on allowed and disallowed URLs to Aurora. r=kmag
 
@@ -141,9 +141,9 @@ new file mode 100644
 +
 +        let onTabsUpdateError = (error) => {
 +          if (!isErrorExpected) {
-+            browser.test.fails(`tabs.update with URL ${tabsUpdateURL} should not be rejected`);
++            browser.test.fail(`tabs.update with URL ${tabsUpdateURL} should not be rejected`);
 +          } else {
-+            browser.test.fails("tabs.update should be rejected with the expected error message");
++            browser.test.assertTrue(error, "tabs.update has been rejected as expected");
 +          }
 +        };
 +
@@ -155,7 +155,7 @@ new file mode 100644
 +              if (tabs) {
 +                resolve(tabs);
 +              } else {
-+                reject();
++                reject(true);
 +              }
 +            });
 +          }).then(onTabsUpdated, onTabsUpdateError)

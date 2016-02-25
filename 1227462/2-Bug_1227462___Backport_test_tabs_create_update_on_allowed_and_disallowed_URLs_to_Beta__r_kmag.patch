@@ -2,7 +2,7 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1455130507 -3600
 #      Wed Feb 10 19:55:07 2016 +0100
-# Node ID 22e5069c53596c4e6a72a78210298242ac9bb06a
+# Node ID dbc9c7886616cb640bb16cae9d7e0a320404af46
 # Parent  6d20e232f025f8d7836012a5c6fc28e094db3d22
 Bug 1227462 - Backport test tabs.create/update on allowed and disallowed URLs to Beta. r=kmag
 
@@ -139,9 +139,9 @@ new file mode 100644
 +
 +        let onTabsUpdateError = (error) => {
 +          if (!isErrorExpected) {
-+            browser.test.fails(`tabs.update with URL ${tabsUpdateURL} should not be rejected`);
++            browser.test.fail(`tabs.update with URL ${tabsUpdateURL} should not be rejected`);
 +          } else {
-+            browser.test.fails("tabs.update should be rejected with the expected error message");
++            browser.test.assertTrue(error, "tabs.update has been rejected as expected");
 +          }
 +        };
 +
@@ -153,7 +153,7 @@ new file mode 100644
 +              if (tabs) {
 +                resolve(tabs);
 +              } else {
-+                reject();
++                reject(true);
 +              }
 +            });
 +          }).then(onTabsUpdated, onTabsUpdateError)
