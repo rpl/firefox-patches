@@ -1,0 +1,342 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1456198754 -3600
+#      Tue Feb 23 04:39:14 2016 +0100
+# Node ID f32306cafefcf397a1292f88699f60cfbf17d835
+# Parent  135340a254f4b16c86b0c7dd320253c4a1a0776e
+Bug 1190687 - [webext] Add webNavigation.onCreatedNavigationTarget implementation
+
+MozReview-Commit-ID: KYVKkVUSOzR
+
+diff --git a/browser/base/content/content.js b/browser/base/content/content.js
+--- a/browser/base/content/content.js
++++ b/browser/base/content/content.js
+@@ -428,20 +428,24 @@ var ClickEventHandler = {
+         node) {
+       let referrerAttrValue = Services.netUtils.parseAttributePolicyString(node.
+                               getAttribute("referrerpolicy"));
+       if (referrerAttrValue !== Ci.nsIHttpChannel.REFERRER_POLICY_DEFAULT) {
+         referrerPolicy = referrerAttrValue;
+       }
+     }
+ 
++    let frameOuterWindowID = ownerDoc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
++          .getInterface(Ci.nsIDOMWindowUtils)
++          .outerWindowID;
++
+     let json = { button: event.button, shiftKey: event.shiftKey,
+                  ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+                  altKey: event.altKey, href: null, title: null,
+-                 bookmark: false, referrerPolicy: referrerPolicy };
++                 bookmark: false, referrerPolicy, frameOuterWindowID };
+ 
+     if (href) {
+       try {
+         BrowserUtils.urlSecurityCheck(href, principal);
+       } catch (e) {
+         return;
+       }
+ 
+diff --git a/browser/base/content/nsContextMenu.js b/browser/base/content/nsContextMenu.js
+--- a/browser/base/content/nsContextMenu.js
++++ b/browser/base/content/nsContextMenu.js
+@@ -949,16 +949,17 @@ nsContextMenu.prototype = {
+     // Otherwise make sure that nothing in the parent chain disables spellchecking
+     return aNode.spellcheck;
+   },
+ 
+   _openLinkInParameters : function (extra) {
+     let params = { charset: gContextMenuContentData.charSet,
+                    referrerURI: gContextMenuContentData.documentURIObject,
+                    referrerPolicy: gContextMenuContentData.referrerPolicy,
++                   frameOuterWindowID: gContextMenuContentData.frameOuterWindowID,
+                    noReferrer: this.linkHasNoReferrer };
+     for (let p in extra)
+       params[p] = extra[p];
+     return params;
+   },
+ 
+   // Open linked-to URL in a new window.
+   openLink : function () {
+diff --git a/browser/base/content/utilityOverlay.js b/browser/base/content/utilityOverlay.js
+--- a/browser/base/content/utilityOverlay.js
++++ b/browser/base/content/utilityOverlay.js
+@@ -12,16 +12,20 @@ Components.utils.import("resource:///mod
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "ShellService",
+                                   "resource:///modules/ShellService.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
+                                    "@mozilla.org/browser/aboutnewtab-service;1",
+                                    "nsIAboutNewTabService");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "WebNavigation",
++                                  "resource://gre/modules/WebNavigation.jsm");
++
++
+ this.__defineGetter__("BROWSER_NEW_TAB_URL", () => {
+   if (PrivateBrowsingUtils.isWindowPrivate(window) &&
+       !PrivateBrowsingUtils.permanentPrivateBrowsing &&
+       !aboutNewTabService.overridden) {
+     return "about:privatebrowsing";
+   }
+   return aboutNewTabService.newTabURL;
+ });
+@@ -278,17 +282,30 @@ function openLinkIn(url, where, params) 
+     sa.AppendElement(allowThirdPartyFixupSupports);
+     sa.AppendElement(referrerPolicySupports);
+ 
+     let features = "chrome,dialog=no,all";
+     if (aIsPrivate) {
+       features += ",private";
+     }
+ 
+-    Services.ww.openWindow(w || window, getBrowserURL(), null, features, sa);
++    let win = Services.ww.openWindow(w || window, getBrowserURL(), null, features, sa);
++    let waitNewWindowLoaded = () => {
++      win.removeEventListener("load", waitNewWindowLoaded, true);
++      WebNavigation.sendCreatedNavigationTarget({
++        tab: win.gBrowser.selectedTab,
++        sourceTab: (w || window).gBrowser.selectedTab,
++        data: {
++          url,
++          sourceWindowId: params.frameOuterWindowID,
++        }
++      });
++    };
++    win.addEventListener("load", waitNewWindowLoaded, true);
++
+     return;
+   }
+ 
+   let loadInBackground = where == "current" ? false : aInBackground;
+   if (loadInBackground == null) {
+     loadInBackground = aFromChrome ?
+                          false :
+                          getBoolPref("browser.tabs.loadInBackground");
+@@ -350,29 +367,37 @@ function openLinkIn(url, where, params) 
+       referrerPolicy: aReferrerPolicy,
+       postData: aPostData,
+     });
+     break;
+   case "tabshifted":
+     loadInBackground = !loadInBackground;
+     // fall through
+   case "tab":
+-    w.gBrowser.loadOneTab(url, {
++    let tab = w.gBrowser.loadOneTab(url, {
+       referrerURI: aReferrerURI,
+       referrerPolicy: aReferrerPolicy,
+       charset: aCharset,
+       postData: aPostData,
+       inBackground: loadInBackground,
+       allowThirdPartyFixup: aAllowThirdPartyFixup,
+       relatedToCurrent: aRelatedToCurrent,
+       skipAnimation: aSkipTabAnimation,
+       allowMixedContent: aAllowMixedContent,
+       noReferrer: aNoReferrer,
+       userContextId: aUserContextId
+     });
++    WebNavigation.sendCreatedNavigationTarget({
++      tab,
++      sourceTab: w.gBrowser.selectedTab,
++      data: {
++        url,
++        sourceWindowId: params.frameOuterWindowID,
++      }
++    });
+     break;
+   }
+ 
+   w.gBrowser.selectedBrowser.focus();
+ 
+   if (!loadInBackground && w.isBlankPageURL(url)) {
+     w.focusAndSelectUrlBar();
+   }
+diff --git a/browser/modules/ContentClick.jsm b/browser/modules/ContentClick.jsm
+--- a/browser/modules/ContentClick.jsm
++++ b/browser/modules/ContentClick.jsm
+@@ -66,17 +66,18 @@ var ContentClick = {
+     if (where == "current")
+       return;
+ 
+     // Todo(903022): code for where == save
+ 
+     let params = { charset: browser.characterSet,
+                    referrerURI: browser.documentURI,
+                    referrerPolicy: json.referrerPolicy,
+-                   noReferrer: json.noReferrer };
++                   noReferrer: json.noReferrer,
++                   frameOuterWindowID: json.frameOuterWindowID };
+     window.openLinkIn(json.href, where, params);
+ 
+     // Mark the page as a user followed link.  This is done so that history can
+     // distinguish automatic embed visits from user activated ones.  For example
+     // pages loaded in frames are embed visits and lost with the session, while
+     // visits across frames should be preserved.
+     try {
+       if (!PrivateBrowsingUtils.isWindowPrivate(window))
+diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
+--- a/toolkit/components/extensions/ext-webNavigation.js
++++ b/toolkit/components/extensions/ext-webNavigation.js
+@@ -30,27 +30,40 @@ function WebNavigationEventManager(conte
+       let tabId = TabManager.getBrowserId(data.browser);
+       if (tabId == -1) {
+         return;
+       }
+ 
+       let data2 = {
+         url: data.url,
+         timeStamp: Date.now(),
+-        frameId: ExtensionManagement.getFrameId(data.windowId),
+-        parentFrameId: ExtensionManagement.getParentFrameId(data.parentWindowId, data.windowId),
+       };
+ 
++      if (data.windowId) {
++        data2.frameId = ExtensionManagement.getFrameId(data.windowId);
++        data2.parentFrameId = ExtensionManagement.getParentFrameId(data.parentWindowId, data.windowId);
++      }
++
++      if (data.sourceWindowId) {
++        data2.sourceFrameId = ExtensionManagement.getFrameId(data.sourceWindowId);
++      }
++
+       // Fills in tabId typically.
+       let result = {};
+       extensions.emit("fill-browser-data", data.browser, data2, result);
+       if (result.cancel) {
+         return;
+       }
+ 
++      if (data.sourceTab) {
++        let data3 = {};
++        extensions.emit("fill-browser-data", data.sourceTab.linkedBrowser, data3, result);
++        data2.sourceTabId = data3.tabId;
++      }
++
+       runSafe(context, callback, data2);
+     };
+ 
+     WebNavigation[eventName].addListener(listener);
+     return () => {
+       WebNavigation[eventName].removeListener(listener);
+     };
+   };
+@@ -74,17 +87,17 @@ extensions.registerSchemaAPI("webNavigat
+   return {
+     webNavigation: {
+       onBeforeNavigate: new WebNavigationEventManager(context, "onBeforeNavigate").api(),
+       onCommitted: new WebNavigationEventManager(context, "onCommitted").api(),
+       onDOMContentLoaded: new WebNavigationEventManager(context, "onDOMContentLoaded").api(),
+       onCompleted: new WebNavigationEventManager(context, "onCompleted").api(),
+       onErrorOccurred: new WebNavigationEventManager(context, "onErrorOccurred").api(),
+       onReferenceFragmentUpdated: new WebNavigationEventManager(context, "onReferenceFragmentUpdated").api(),
+-      onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
++      onCreatedNavigationTarget: new WebNavigationEventManager(context, "onCreatedNavigationTarget").api(),
+       getAllFrames(details) {
+         let tab = TabManager.getTab(details.tabId);
+         if (!tab) {
+           return Promise.reject({message: `No tab found with tabId: ${details.tabId}`});
+         }
+ 
+         let {innerWindowID, messageManager} = tab.linkedBrowser;
+         let recipient = {innerWindowID};
+diff --git a/toolkit/components/extensions/schemas/web_navigation.json b/toolkit/components/extensions/schemas/web_navigation.json
+--- a/toolkit/components/extensions/schemas/web_navigation.json
++++ b/toolkit/components/extensions/schemas/web_navigation.json
+@@ -267,17 +267,16 @@
+               "error": {"unsupported": true, "type": "string", "description": "The error description."},
+               "timeStamp": {"type": "number", "description": "The time when the error occurred, in milliseconds since the epoch."}
+             }
+           }
+         ]
+       },
+       {
+         "name": "onCreatedNavigationTarget",
+-        "unsupported": true,
+         "type": "function",
+         "description": "Fired when a new window, or a new tab in an existing window, is created to host a navigation.",
+         "filters": [
+           {
+             "name": "url",
+             "type": "array",
+             "items": { "$ref": "events.UrlFilter" },
+             "description": "Conditions that the URL being navigated to must satisfy. The 'schemes' and 'ports' fields of UrlFilter are ignored for this event."
+diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
+--- a/toolkit/modules/addons/WebNavigation.jsm
++++ b/toolkit/modules/addons/WebNavigation.jsm
+@@ -10,19 +10,16 @@ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+ // TODO:
+ // Transition types and qualifiers
+-// onReferenceFragmentUpdated also triggers for pushState
+-// getFrames, getAllFrames
+-// onCreatedNavigationTarget, onHistoryStateUpdated
+ 
+ var Manager = {
+   listeners: new Map(),
+ 
+   init() {
+     Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
+     Services.mm.addMessageListener("Extension:StateChange", this);
+     Services.mm.addMessageListener("Extension:LocationChange", this);
+@@ -105,16 +102,26 @@ var Manager = {
+       this.fire("onCommitted", browser, data, {url});
+     }
+   },
+ 
+   onLoad(browser, data) {
+     this.fire("onDOMContentLoaded", browser, data, {url: data.url});
+   },
+ 
++  onCreatedNavigationTarget(sourceTab, tab, data) {
++    let {sourceWindowId, url} = data;
++
++    this.fire("onCreatedNavigationTarget", tab.linkedBrowser, data, {
++      sourceTab,
++      sourceWindowId,
++      url,
++    });
++  },
++
+   fire(type, browser, data, extra) {
+     let listeners = this.listeners.get(type);
+     if (!listeners) {
+       return;
+     }
+ 
+     let details = {
+       browser,
+@@ -137,21 +144,25 @@ var Manager = {
+ 
+ const EVENTS = [
+   "onBeforeNavigate",
+   "onCommitted",
+   "onDOMContentLoaded",
+   "onCompleted",
+   "onErrorOccurred",
+   "onReferenceFragmentUpdated",
++  "onCreatedNavigationTarget",
+ 
+-  // "onCreatedNavigationTarget",
+   // "onHistoryStateUpdated",
+ ];
+ 
+-var WebNavigation = {};
++var WebNavigation = {
++  sendCreatedNavigationTarget({sourceTab, tab , data}) {
++    Manager.onCreatedNavigationTarget(sourceTab, tab, data);
++  }
++};
+ 
+ for (let event of EVENTS) {
+   WebNavigation[event] = {
+     addListener: Manager.addListener.bind(Manager, event),
+     removeListener: Manager.removeListener.bind(Manager, event),
+   };
+ }
