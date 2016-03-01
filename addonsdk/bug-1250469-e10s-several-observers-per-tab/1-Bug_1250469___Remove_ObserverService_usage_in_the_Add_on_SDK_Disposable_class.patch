@@ -1,0 +1,165 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1456837909 -3600
+#      Tue Mar 01 14:11:49 2016 +0100
+# Node ID ad5fc984d30e0a280526d2c881f387679d0e7996
+# Parent  2fa086d51b6a8d94566493b34cbce00a37af5024
+Bug 1250469 - Remove ObserverService usage in the Add-on SDK Disposable class
+
+MozReview-Commit-ID: 32X9M07FbHO
+
+diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/sdk/core/disposable.js
+--- a/addon-sdk/source/lib/sdk/core/disposable.js
++++ b/addon-sdk/source/lib/sdk/core/disposable.js
+@@ -3,31 +3,27 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+ module.metadata = {
+   "stability": "experimental"
+ };
+ 
+-
+ const { Class } = require("./heritage");
+-const { Observer, subscribe, unsubscribe, observe } = require("./observer");
+-const { isWeak, WeakReference } = require("./reference");
+ const method = require("../../method/core");
+ 
+ const unloadSubject = require('@loader/unload');
+ const addonUnloadTopic = "sdk:loader:destroy";
+ 
+-
++const { on } = require('../system/events');
+ 
+ const uninstall = method("disposable/uninstall");
+ exports.uninstall = uninstall;
+ 
+-
+ const shutdown = method("disposable/shutdown");
+ exports.shutdown = shutdown;
+ 
+ const disable = method("disposable/disable");
+ exports.disable = disable;
+ 
+ const upgrade = method("disposable/upgrade");
+ exports.upgrade = upgrade;
+@@ -37,38 +33,59 @@ exports.downgrade = downgrade;
+ 
+ const unload = method("disposable/unload");
+ exports.unload = unload;
+ 
+ const dispose = method("disposable/dispose");
+ exports.dispose = dispose;
+ dispose.define(Object, object => object.dispose());
+ 
+-
+ const setup = method("disposable/setup");
+ exports.setup = setup;
+ setup.define(Object, (object, ...args) => object.setup(...args));
+ 
++const addonUnloadListeners = new Map();
++const onAddonUnload = method("disposable/onAddonUnload");
++
++on(addonUnloadTopic, ({ subject, data }) => {
++  for (let unloader of addonUnloadListeners.values()) {
++    try {
++      unloader({ subject, data });
++    } catch(e) {
++      // TODO: log exception on running the unloader
++    }
++  }
++});
+ 
+ // Set's up disposable instance.
+ const setupDisposable = disposable => {
+-  subscribe(disposable, addonUnloadTopic, isWeak(disposable));
++  let unloader = ({ subject, data }) => {
++    if (subject.wrappedJSObject == unloadSubject) {
++      addonUnloadListeners.delete(disposable, unloader);
++      onAddonUnload(disposable, subject, addonUnloadTopic, data);
++    }
++  };
++
++  addonUnloadListeners.set(disposable, unloader);
+ };
+ exports.setupDisposable = setupDisposable;
+ 
+ // Tears down disposable instance.
+ const disposeDisposable = disposable => {
+-  unsubscribe(disposable, addonUnloadTopic);
++  let unloader = addonUnloadListeners.get(disposable);
++
++  if (unloader) {
++    addonUnloadListeners.delete(disposable);
++  }
+ };
+ exports.disposeDisposable = disposeDisposable;
+ 
+ // Base type that takes care of disposing it's instances on add-on unload.
+ // Also makes sure to remove unload listener if it's already being disposed.
+ const Disposable = Class({
+-  implements: [Observer],
+   initialize: function(...args) {
+     // First setup instance before initializing it's disposal. If instance
+     // fails to initialize then there is no instance to be disposed at the
+     // unload.
+     setup(this, ...args);
+     setupDisposable(this);
+   },
+   destroy: function(reason) {
+@@ -83,46 +100,50 @@ const Disposable = Class({
+   dispose: function() {
+     // Implement your cleanup logic here.
+   }
+ });
+ exports.Disposable = Disposable;
+ 
+ // Disposable instances observe add-on unload notifications in
+ // order to trigger `unload` on them.
+-observe.define(Disposable, (disposable, subject, topic, data) => {
++onAddonUnload.define(Disposable, (disposable, subject, topic, data) => {
+   const isUnloadTopic = topic === addonUnloadTopic;
+   const isUnloadSubject = subject.wrappedJSObject === unloadSubject;
++  const unloader = addonUnloadListeners.get(disposable);
+   if (isUnloadTopic && isUnloadSubject) {
+-    unsubscribe(disposable, topic);
++    if (unloader) {
++      addonUnloadListeners.delete(unloader);
++    }
++
+     unload(disposable);
+   }
+ });
+ 
+ const unloaders = {
+   destroy: dispose,
+   uninstall: uninstall,
+   shutdown: shutdown,
+   disable: disable,
+   upgrade: upgrade,
+   downgrade: downgrade
+-}
++};
++
+ const unloaded = new WeakMap();
+ unload.define(Disposable, (disposable, reason) => {
+   if (!unloaded.get(disposable)) {
+     unloaded.set(disposable, true);
+     // Pick an unload handler associated with an unload
+     // reason (falling back to destroy if not found) and
+     // delegate unloading to it.
+     const unload = unloaders[reason] || unloaders.destroy;
+     unload(disposable);
+   }
+ });
+ 
+-
+ // If add-on is disabled munally, it's being upgraded, downgraded
+ // or uniststalled `dispose` is invoked to undo any changes that
+ // has being done by it in this session.
+ disable.define(Disposable, dispose);
+ downgrade.define(Disposable, dispose);
+ upgrade.define(Disposable, dispose);
+ uninstall.define(Disposable, dispose);
+ 
