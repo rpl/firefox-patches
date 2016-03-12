@@ -1,0 +1,254 @@
+# HG changeset patch
+# User bsilverberg <bsilverberg@mozilla.com>
+# Date 1456238800 18000
+#      Tue Feb 23 09:46:40 2016 -0500
+# Node ID 25467bd655731d6da36bcf41a72302dd888f88da
+# Parent  135340a254f4b16c86b0c7dd320253c4a1a0776e
+Bug 1246754 - Complete the implementation of chrome.i18n.detectLanguage, r?kmag
+
+MozReview-Commit-ID: ARj7NJHj7s9
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -117,16 +117,22 @@ var api = context => {
+     i18n: {
+       getMessage: function(messageName, substitutions) {
+         return context.extension.localizeMessage(messageName, substitutions);
+       },
+ 
+       getUILanguage: function() {
+         return context.extension.localeData.uiLocale;
+       },
++
++      detectLanguage: function(text) {
++        dump("\n------- inside detectLanguage in ExtensionContent ---- \n");
++        dump(context.extension.localeData.detectLanguage(text));
++        return context.extension.localeData.detectLanguage(text);
++      },
+     },
+   };
+ };
+ 
+ // Represents a content script.
+ function Script(options, deferred = PromiseUtils.defer()) {
+   this.options = options;
+   this.run_at = this.options.run_at;
+diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
+--- a/toolkit/components/extensions/ExtensionUtils.jsm
++++ b/toolkit/components/extensions/ExtensionUtils.jsm
+@@ -11,17 +11,18 @@ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                   "resource://gre/modules/AppConstants.jsm");
+-
++XPCOMUtils.defineLazyModuleGetter(this, "LanguageDetector",
++                                  "resource:///modules/translation/LanguageDetector.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "Locale",
+                                   "resource://gre/modules/Locale.jsm");
+ 
+ function filterStack(error) {
+   return String(error.stack).replace(/(^.*(Task\.jsm|Promise-backend\.js).*\n)+/gm, "<Promise Chain>\n");
+ }
+ 
+ // Run a function and report exceptions.
+@@ -429,16 +430,23 @@ LocaleData.prototype = {
+   },
+ 
+   get uiLocale() {
+     // Return the browser locale, but convert it to a Chrome-style
+     // locale code.
+     return Locale.getLocale().replace(/-/g, "_");
+   },
+ 
++  detectLanguage(text) {
++    return LanguageDetector.detectLanguage(text).then(result => ({
++      isReliable: result.confident, languages: result.languages.map(lang => {
++        return {language: lang.languageCode, percentage: lang.percent};
++      }),
++    }));
++  },
+ };
+ 
+ // This is a generic class for managing event listeners. Example usage:
+ //
+ // new EventManager(context, "api.subAPI", fire => {
+ //   let listener = (...) => {
+ //     // Fire any listeners registered with addListener.
+ //     fire(arg1, arg2);
+diff --git a/toolkit/components/extensions/ext-i18n.js b/toolkit/components/extensions/ext-i18n.js
+--- a/toolkit/components/extensions/ext-i18n.js
++++ b/toolkit/components/extensions/ext-i18n.js
+@@ -5,11 +5,15 @@ extensions.registerSchemaAPI("i18n", nul
+     i18n: {
+       getMessage: function(messageName, substitutions) {
+         return extension.localizeMessage(messageName, substitutions);
+       },
+ 
+       getUILanguage: function() {
+         return extension.localeData.uiLocale;
+       },
++
++      detectLanguage: function(text) {
++        return extension.localeData.detectLanguage(text);
++      },
+     },
+   };
+ });
+diff --git a/toolkit/components/extensions/schemas/i18n.json b/toolkit/components/extensions/schemas/i18n.json
+--- a/toolkit/components/extensions/schemas/i18n.json
++++ b/toolkit/components/extensions/schemas/i18n.json
+@@ -73,17 +73,16 @@
+         "parameters": [],
+         "returns": {
+           "type": "string",
+           "description": "The browser UI language code such as en-US or fr-FR."
+         }
+       },
+       {
+         "name": "detectLanguage",
+-        "unsupported": true,
+         "type": "function",
+         "description": "Detects the language of the provided text using CLD.",
+         "async": "callback",
+         "parameters": [
+           {
+             "type": "string",
+             "name": "text",
+             "description": "User input string to be translated."
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_i18n.html b/toolkit/components/extensions/test/mochitest/test_ext_i18n.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_i18n.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_i18n.html
+@@ -237,12 +237,127 @@ add_task(function* test_get_ui_language(
+   extension.sendMessage(["expect-results", "he"]);
+   yield extension.awaitMessage("done");
+ 
+   win.close();
+ 
+   yield extension.unload();
+ });
+ 
++
++add_task(function* test_detect_language() {
++  const af_string = " aam skukuza die naam beteken hy wat skoonvee of hy wat alles onderstebo keer wysig " +
++    "bosveldkampe boskampe is kleiner afgeleë ruskampe wat oor min fasiliteite beskik daar is geen restaurante " +
++    "of winkels nie en slegs oornagbesoekers word toegelaat bateleur";
++  // String with intermixed French/English text
++  const fr_en_string = "France is the largest country in Western Europe and the third-largest in Europe as a whole. " +
++    "A accès aux chiens et aux frontaux qui lui ont été il peut consulter et modifier ses collections et exporter " +
++    "Cet article concerne le pays européen aujourd’hui appelé République française. Pour d’autres usages du nom France, " +
++    "Pour une aide rapide et effective, veuiller trouver votre aide dans le menu ci-dessus." +
++    "Motoring events began soon after the construction of the first successful gasoline-fueled automobiles. The quick brown fox jumped over the lazy dog";
++
++  function backgroundScript() {
++    function checkResult(source, result, expected) {
++      browser.test.assertEq(expected.isReliable, result.isReliable, "result.confident is true");
++      browser.test.assertEq(
++        expected.languages.length,
++        result.languages.length,
++        `result.languages contains the expected number of languages in ${source}`);
++      expected.languages.forEach((lang, index) => {
++        browser.test.assertEq(
++          lang.percentage,
++          result.languages[index].percentage,
++          `element ${index} of result.languages array has the expected percentage in ${source}`);
++        browser.test.assertEq(
++          lang.language,
++          result.languages[index].language,
++          `element ${index} of result.languages array has the expected language in ${source}`);
++      });
++    }
++
++    let tabId;
++
++    browser.tabs.query({currentWindow: true, active: true}, tabs => {
++      tabId = tabs[0].id;
++      browser.test.sendMessage("ready");
++    });
++
++    browser.test.onMessage.addListener(([msg, expected]) => {
++      Promise.all([
++        browser.i18n.detectLanguage(msg),
++        new Promise(
++          resolve => browser.tabs.sendMessage(tabId, msg, resolve)),
++      ]).then(([backgroundResults, contentResults]) => {
++        checkResult("background", backgroundResults, expected);
++        checkResult("contentScript", contentResults, expected);
++
++        browser.test.sendMessage("done");
++      });
++    });
++  }
++
++  function content() {
++    browser.runtime.onMessage.addListener((msg, sender, respond) => {
++      dump("\n------ content script received msg -----\n");
++      browser.i18n.detectLanguage(msg, respond);
++      dump("\n------ called detectLanguage -----\n");
++      return true;
++    });
++  }
++
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      "content_scripts": [{
++        "matches": ["http://mochi.test/*/file_sample.html"],
++        "run_at": "document_start",
++        "js": ["content_script.js"],
++      }],
++    },
++
++    background: `(${backgroundScript})()`,
++
++    files: {
++      "content_script.js": `(${content})()`,
++    },
++  });
++
++  let win = window.open("file_sample.html");
++
++  yield extension.startup();
++  yield extension.awaitMessage("ready");
++
++  let expected = {
++    isReliable: true,
++    languages: [
++      {
++        language: "fr",
++        percentage: 67
++      },
++      {
++        language: "en",
++        percentage: 32
++      }
++    ]
++  }
++  extension.sendMessage([fr_en_string, expected]);
++  yield extension.awaitMessage("done");
++
++  expected = {
++    isReliable: true,
++    languages: [
++      {
++        language: "af",
++        percentage: 99
++      }
++    ]
++  }
++  extension.sendMessage([af_string, expected]);
++  yield extension.awaitMessage("done");
++
++  win.close();
++
++  yield extension.unload();
++});
++
+ </script>
+ 
+ </body>
+ </html>

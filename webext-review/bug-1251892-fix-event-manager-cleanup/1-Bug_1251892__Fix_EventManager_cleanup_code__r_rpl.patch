@@ -1,0 +1,83 @@
+# HG changeset patch
+# User Kris Maglione <maglione.k@gmail.com>
+# Date 1456613589 28800
+#      Sat Feb 27 14:53:09 2016 -0800
+# Node ID be8c9bb30b1f51a54f5108bc6cfc0fad7ccf65f3
+# Parent  2fa086d51b6a8d94566493b34cbce00a37af5024
+Bug 1251892: Fix EventManager cleanup code. r?rpl
+
+MozReview-Commit-ID: FUHnELOAeGw
+
+diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
+--- a/toolkit/components/extensions/ExtensionUtils.jsm
++++ b/toolkit/components/extensions/ExtensionUtils.jsm
+@@ -470,45 +470,43 @@ LocaleData.prototype = {
+ // multiple listeners are registered. |register| should return an
+ // unregister function that will unregister the listener.
+ function EventManager(context, name, register) {
+   this.context = context;
+   this.name = name;
+   this.register = register;
+   this.unregister = null;
+   this.callbacks = new Set();
+-  this.registered = false;
+ }
+ 
+ EventManager.prototype = {
+   addListener(callback) {
+     if (typeof(callback) != "function") {
+       dump(`Expected function\n${Error().stack}`);
+       return;
+     }
+ 
+-    if (!this.registered) {
++    if (!this.callbacks.size) {
+       this.context.callOnClose(this);
+ 
+       let fireFunc = this.fire.bind(this);
+       let fireWithoutClone = this.fireWithoutClone.bind(this);
+       fireFunc.withoutClone = fireWithoutClone;
+       this.unregister = this.register(fireFunc);
+-      this.registered = true;
+     }
+     this.callbacks.add(callback);
+   },
+ 
+   removeListener(callback) {
+-    if (!this.registered) {
++    if (!this.callbacks.size) {
+       return;
+     }
+ 
+     this.callbacks.delete(callback);
+-    if (this.callbacks.length == 0) {
++    if (this.callbacks.size == 0) {
+       this.unregister();
+ 
+       this.context.forgetOnClose(this);
+     }
+   },
+ 
+   hasListener(callback) {
+     return this.callbacks.has(callback);
+@@ -522,17 +520,19 @@ EventManager.prototype = {
+ 
+   fireWithoutClone(...args) {
+     for (let callback of this.callbacks) {
+       runSafeSyncWithoutClone(callback, ...args);
+     }
+   },
+ 
+   close() {
+-    this.unregister();
++    if (this.callbacks.size) {
++      this.unregister();
++    }
+   },
+ 
+   api() {
+     return {
+       addListener: callback => this.addListener(callback),
+       removeListener: callback => this.removeListener(callback),
+       hasListener: callback => this.hasListener(callback),
+     };

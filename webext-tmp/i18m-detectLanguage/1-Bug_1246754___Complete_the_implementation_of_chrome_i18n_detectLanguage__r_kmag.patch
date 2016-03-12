@@ -1,0 +1,106 @@
+# HG changeset patch
+# User bsilverberg <bsilverberg@mozilla.com>
+# Date 1455039938 18000
+#      Tue Feb 09 12:45:38 2016 -0500
+# Node ID 7edd1fcf725b6ea025a7eccbdd037591ddc92bf0
+# Parent  9e8419aa24ae29a79bd35a712bbc10c17ce321dd
+Bug 1246754 - Complete the implementation of chrome.i18n.detectLanguage, r?kmag
+
+diff --git a/toolkit/components/extensions/ext-i18n.js b/toolkit/components/extensions/ext-i18n.js
+--- a/toolkit/components/extensions/ext-i18n.js
++++ b/toolkit/components/extensions/ext-i18n.js
+@@ -1,11 +1,25 @@
+ "use strict";
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "LanguageDetector",
++  "resource:///modules/translation/LanguageDetector.jsm");
++
+ extensions.registerSchemaAPI("i18n", null, (extension, context) => {
+   return {
+     i18n: {
+       getMessage: function(messageName, substitutions) {
+         return extension.localizeMessage(messageName, substitutions);
+       },
++      detectLanguage: function(text) {
++        return new Promise((resolve, reject) => {
++          let result = LanguageDetector.detectLanguage(text);
++          result.then(result => {
++            // do something with result and return it:
++            resolve(result);
++            // or reject with an error (which also set lastError)
++            //reject({ message: "error message"});
++          });
++        });
++      },
+     },
+   };
+ });
+diff --git a/toolkit/components/extensions/schemas/i18n.json b/toolkit/components/extensions/schemas/i18n.json
+--- a/toolkit/components/extensions/schemas/i18n.json
++++ b/toolkit/components/extensions/schemas/i18n.json
+@@ -74,17 +74,16 @@
+         "parameters": [],
+         "returns": {
+           "type": "string",
+           "description": "The browser UI language code such as en-US or fr-FR."
+         }
+       },
+       {
+         "name": "detectLanguage",
+-        "unsupported": true,
+         "type": "function",
+         "description": "Detects the language of the provided text using CLD.",
+         "async": "callback",
+         "parameters": [
+           {
+             "type": "string",
+             "name": "text",
+             "description": "User input string to be translated."
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_i18n.html b/toolkit/components/extensions/test/mochitest/test_ext_i18n.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_i18n.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_i18n.html
+@@ -156,12 +156,44 @@ add_task(function* test_i18n() {
+   let win = window.open("file_sample.html");
+   yield extension.awaitMessage("content-script-finished");
+   win.close();
+ 
+   yield extension.awaitFinish("l10n");
+   yield extension.unload();
+ });
+ 
++add_task(function* test_detect_language() {
++
++  function backgroundScript() {
++    const af_string = " aam skukuza die naam beteken hy wat skoonvee of hy wat alles onderstebo keer wysig bosveldkampe boskampe is kleiner afgeleë ruskampe wat oor min fasiliteite beskik daar is geen restaurante of winkels nie en slegs oornagbesoekers word toegelaat bateleur";
++
++    browser.test.log("running test_detect_language");
++    browser.i18n.detectLanguage(af_string,
++      result => {
++        result.then(result => {
++          dump("-- In test --\n");
++          dump(JSON.stringify(result, null, 4));
++          dump("\n-----\n");
++          browser.test.assertEq(true, result.confident, "result.confident should be true");
++          browser.test.assertEq("af", result.language, "result.language should be detected as 'af'");
++        })
++      }
++    );
++    browser.test.notifyPass("test_detect_language");
++  }
++
++  let extensionData = {
++    background: "(" + backgroundScript.toString() + ")()",
++  };
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++  yield extension.startup();
++  info("extension loaded");
++  yield extension.awaitFinish("test_detect_language");
++  yield extension.unload();
++  info("extension unloaded");
++});
++
+ </script>
+ 
+ </body>
+ </html>

@@ -1,0 +1,36 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1455851356 -3600
+#      Fri Feb 19 04:09:16 2016 +0100
+# Node ID ac05867718f7510bf4ba7c69f56b2ee7800a6bb9
+# Parent  33fc723946aa45248df83c204f256816deafeede
+Bug 1249144 - [webext] fix sorting collected frame details in webNavigation tests. r?kmag
+
+MozReview-Commit-ID: ay5fGRGSpW
+
+diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
+--- a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
++++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
+@@ -134,17 +134,21 @@ add_task(function* testWebNavigationFram
+     getFrameResults,
+   } = yield extension.awaitMessage("webNavigationFrames.done");
+ 
+   is(getAllFramesDetails.length, 3, "expected number of frames found");
+   is(getAllFramesDetails.length, collectedDetails.length,
+      "number of frames found should equal the number onCompleted events collected");
+ 
+   // ordered by frameId
+-  let sortByFrameId = (el) => el ? el.frameId : -1;
++  let sortByFrameId = (el1, el2) => {
++    let val1 = el1 ? el1.frameId : -1;
++    let val2 = el2 ? el2.frameId : -1;
++    return val1 - val2;
++  };
+ 
+   collectedDetails = collectedDetails.sort(sortByFrameId);
+   getAllFramesDetails = getAllFramesDetails.sort(sortByFrameId);
+   getFrameResults = getFrameResults.sort(sortByFrameId);
+ 
+   info("check frame details content");
+ 
+   is(getFrameResults.length, getAllFramesDetails.length,

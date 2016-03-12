@@ -1,0 +1,151 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457633215 -3600
+#      Thu Mar 10 19:06:55 2016 +0100
+# Node ID 6e52198ebd8f826dfec3cf5a99e27df68407ed0d
+# Parent  cf251ea68829860989cb79c7bc09d50c3fa601fc
+Bug 1253565 - [webext] reusable 'UnrecognizedProperty' type for manifest schema validation. r?kmag
+
+MozReview-Commit-ID: LLWb07ybvlb
+
+diff --git a/toolkit/components/extensions/schemas/manifest.json b/toolkit/components/extensions/schemas/manifest.json
+--- a/toolkit/components/extensions/schemas/manifest.json
++++ b/toolkit/components/extensions/schemas/manifest.json
+@@ -90,30 +90,32 @@
+               {
+                 "type": "object",
+                 "properties": {
+                   "page": { "$ref": "ExtensionURL" },
+                   "persistent": {
+                     "optional": true,
+                     "$ref": "PersistentBackgroundProperty"
+                   }
+-                }
++                },
++                "additionalProperties": { "$ref": "UnrecognizedProperty" }
+               },
+               {
+                 "type": "object",
+                 "properties": {
+                   "scripts": {
+                     "type": "array",
+                     "items": { "$ref": "ExtensionURL" }
+                   },
+                   "persistent": {
+                     "optional": true,
+                     "$ref": "PersistentBackgroundProperty"
+                   }
+-                }
++                },
++                "additionalProperties": { "$ref": "UnrecognizedProperty" }
+               }
+             ],
+             "optional": true
+           },
+ 
+           "content_scripts": {
+             "type": "array",
+             "optional": true,
+@@ -136,20 +138,17 @@
+ 
+           "web_accessible_resources": {
+             "type": "array",
+             "items": { "type": "string" },
+             "optional": true
+           }
+         },
+ 
+-        "additionalProperties": {
+-          "type": "any",
+-          "deprecated": "An unexpected property was found in the WebExtension manifest"
+-        }
++        "additionalProperties": { "$ref": "UnrecognizedProperty" }
+       },
+       {
+         "id": "Permission",
+         "choices": [
+           {
+             "type": "string",
+             "enum": [
+               "alarms",
+@@ -195,16 +194,17 @@
+             "pattern": "^file:///.*$"
+           }
+         ]
+       },
+       {
+         "id": "ContentScript",
+         "type": "object",
+         "description": "Details of the script or CSS to inject. Either the code or the file property must be set, but both may not be set at the same time. Based on InjectDetails, but using underscore rather than camel case naming conventions.",
++        "additionalProperties": { "$ref": "UnrecognizedProperty" },
+         "properties": {
+           "matches": {
+             "type": "array",
+             "optional": false,
+             "minItems": 1,
+             "items": { "$ref": "MatchPattern" }
+           },
+           "exclude_matches": {
+@@ -262,15 +262,20 @@
+           },
+           {
+             "type": "object",
+             "isInstanceOf": "ImageData"
+           }
+         ]
+       },
+       {
++        "id": "UnrecognizedProperty",
++        "type": "any",
++        "deprecated": "An unexpected property was found in the WebExtension manifest."
++      },
++      {
+         "id": "PersistentBackgroundProperty",
+         "type": "boolean",
+         "deprecated": "Event pages are not currently supported. This will run as a persistent background page."
+       }
+     ]
+   }
+ ]
+diff --git a/toolkit/components/extensions/test/mochitest/test_chrome_ext_eventpage_warning.html b/toolkit/components/extensions/test/mochitest/test_chrome_ext_eventpage_warning.html
+--- a/toolkit/components/extensions/test/mochitest/test_chrome_ext_eventpage_warning.html
++++ b/toolkit/components/extensions/test/mochitest/test_chrome_ext_eventpage_warning.html
+@@ -68,15 +68,38 @@ add_task(function* test_eventpages() {
+     let [, x] = yield Promise.all([extension.startup(), extension.awaitMessage("running")]);
+     is(x, 1, "got correct value from extension");
+     info("test complete");
+     yield extension.unload();
+     info("extension unloaded successfully");
+ 
+     SimpleTest.endMonitorConsole();
+     yield waitForConsole;
++
++    waitForConsole = new Promise(resolve => {
++      SimpleTest.monitorConsole(resolve, [{
++        message: /Reading manifest: Error processing background.nonExistentProp: An unexpected property was found/,
++      }]);
++    });
++
++    info("testing additional unrecognized properties on background page");
++
++    extension = createEventPageExtension({
++      "scripts": ["event-page-script.js"],
++      "nonExistentProp": true,
++    });
++
++    info("load complete");
++    [, x] = yield Promise.all([extension.startup(), extension.awaitMessage("running")]);
++    is(x, 1, "got correct value from extension");
++    info("test complete");
++    yield extension.unload();
++    info("extension unloaded successfully");
++
++    SimpleTest.endMonitorConsole();
++    yield waitForConsole;
+   }
+ });
+ 
+ </script>
+ 
+ </body>
+ </html>

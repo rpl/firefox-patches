@@ -1,0 +1,39 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457639001 -3600
+#      Thu Mar 10 20:43:21 2016 +0100
+# Node ID ff35977decd2d1e87d22dd43295cdc777ef77204
+# Parent  7c9f3d3099e8d719faa7a8651de21c32fb1e8fb1
+Bug TBF - [addon-sdk] test-tabs-common testAttachOnMultipleDocuments
+
+MozReview-Commit-ID: Dxw7GusNOcR
+
+diff --git a/addon-sdk/source/lib/sdk/content/worker.js b/addon-sdk/source/lib/sdk/content/worker.js
+--- a/addon-sdk/source/lib/sdk/content/worker.js
++++ b/addon-sdk/source/lib/sdk/content/worker.js
+@@ -158,23 +158,22 @@ connect.define(Worker, function(worker, 
+ detach.define(Worker, function(worker) {
+   let model = modelFor(worker);
+   if (!model.attached)
+     return;
+ 
+   processes.port.off('sdk/worker/event', worker.receive);
+   model.attached = false;
+   model.destroyed = true;
+-  emit(worker, 'detach');
+ });
+ 
+ isPrivate.define(Worker, ({ tab }) => isPrivate(tab));
+ 
+ // Something in the parent side has destroyed the worker, tell the child to
+ // detach, the child will respond when it has detached
+ destroy.define(Worker, function(worker, reason) {
+   let model = modelFor(worker);
+-  model.destroyed = true;
+-  if (!model.attached)
++  if (!model.attached || model.destroyed)
+     return;
+ 
++  model.destroyed = true;
+   worker.send('detach', reason);
+ });

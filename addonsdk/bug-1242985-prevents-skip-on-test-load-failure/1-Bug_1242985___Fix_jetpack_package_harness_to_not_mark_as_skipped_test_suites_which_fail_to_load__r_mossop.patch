@@ -1,0 +1,40 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1453822911 -3600
+#      Tue Jan 26 16:41:51 2016 +0100
+# Node ID caf1c92d36d7d6b56534ee594955fbd060c21058
+# Parent  0fa26d9b2b8f947356bd746cf5dc4c42785a06a2
+Bug 1242985 - Fix jetpack-package-harness to not mark as skipped test suites which fail to load. r?mossop
+
+diff --git a/testing/mochitest/jetpack-package-harness.js b/testing/mochitest/jetpack-package-harness.js
+--- a/testing/mochitest/jetpack-package-harness.js
++++ b/testing/mochitest/jetpack-package-harness.js
+@@ -49,19 +49,25 @@ function testModule(require, { url, expe
+       let suiteModule;
+       try {
+         dump("TEST-INFO: " + path + " | Loading test module\n");
+         suiteModule = loaderModule.main(loader, "tests/" + path.substring(0, path.length - 3));
+       }
+       catch (e) {
+         // If `Unsupported Application` error thrown during test,
+         // skip the test suite
+-        suiteModule = {
+-          'test suite skipped': assert => assert.pass(e.message)
+-        };
++        if (/Unsupported Application/.test(e.message)) {
++          suiteModule = {
++            'test suite skipped': assert => assert.pass(e.message)
++          };
++        } else {
++          suiteModule = {
++            'test suite failed to load': assert => assert.fail(`${e.message}: ${e.stack}`)
++          };
++        }
+       }
+ 
+       for (let name of Object.keys(suiteModule).sort()) {
+         if (NOT_TESTS.indexOf(name) != -1)
+           continue;
+ 
+         tests.push({
+           setup: suiteModule.setup,

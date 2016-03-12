@@ -1,0 +1,30 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1453811417 -3600
+#      Tue Jan 26 13:30:17 2016 +0100
+# Node ID 75b356974e750072cb152cb6cb6ad4acbc62e85f
+# Parent  0fa26d9b2b8f947356bd746cf5dc4c42785a06a2
+Bug 1242752 - Fix exception raised when a WebExtension iframe is destroyed. r=kmag
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -411,17 +411,17 @@ var DocumentManager = {
+           context.close();
+         }
+ 
+         this.contentScriptWindows.delete(windowId);
+       }
+ 
+       // Close any existent iframe extension page context for the destroyed window.
+       if (this.extensionPageWindows.has(windowId)) {
+-        let context = this.extensionWindows.get(windowId);
++        let context = this.extensionPageWindows.get(windowId);
+         context.close();
+         this.extensionPageWindows.delete(windowId);
+       }
+     }
+   },
+ 
+   handleEvent: function(event) {
+     let window = event.currentTarget;

@@ -1,0 +1,33 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1454592638 -3600
+#      Thu Feb 04 14:30:38 2016 +0100
+# Node ID 4b60983a550ea4ea41c213459cd3cd57d8fa2789
+# Parent  ced4e3f6c8bcf408df4a4f35b69f1c4d40ee7cb2
+Bug TBF - [webext] catch and report error on FlushJarCache file removing
+
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -1128,16 +1128,21 @@ Extension.prototype = extend(Object.crea
+     Services.obs.removeObserver(this, "xpcom-shutdown");
+ 
+     this.broadcast("Extension:FlushJarCache", {path: file.path}).then(() => {
+       // We can't delete this file until everyone using it has
+       // closed it (because Windows is dumb). So we wait for all the
+       // child processes (including the parent) to flush their JAR
+       // caches. These caches may keep the file open.
+       file.remove(false);
++    }).catch(e => {
++      dump(`Extension error: ${e.message} ${e.filename || e.fileName}:${e.lineNumber} :: ${e.stack || new Error().stack}\n`);
++      Cu.reportError(e);
++
++      throw e;
+     });
+   },
+ 
+   shutdown() {
+     this.hasShutdown = true;
+     if (!this.manifest) {
+       ExtensionManagement.shutdownExtension(this.uuid);
+ 

@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1456198754 -3600
 #      Tue Feb 23 04:39:14 2016 +0100
-# Node ID f32306cafefcf397a1292f88699f60cfbf17d835
-# Parent  135340a254f4b16c86b0c7dd320253c4a1a0776e
+# Node ID 40ebb5658d516f447f2ff88ab066cc02230b4182
+# Parent  2fa086d51b6a8d94566493b34cbce00a37af5024
 Bug 1190687 - [webext] Add webNavigation.onCreatedNavigationTarget implementation
 
 MozReview-Commit-ID: KYVKkVUSOzR
@@ -11,7 +11,7 @@ MozReview-Commit-ID: KYVKkVUSOzR
 diff --git a/browser/base/content/content.js b/browser/base/content/content.js
 --- a/browser/base/content/content.js
 +++ b/browser/base/content/content.js
-@@ -428,20 +428,24 @@ var ClickEventHandler = {
+@@ -414,20 +414,24 @@ var ClickEventHandler = {
          node) {
        let referrerAttrValue = Services.netUtils.parseAttributePolicyString(node.
                                getAttribute("referrerpolicy"));
@@ -179,7 +179,25 @@ diff --git a/browser/modules/ContentClick.jsm b/browser/modules/ContentClick.jsm
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js
-@@ -30,27 +30,40 @@ function WebNavigationEventManager(conte
+@@ -9,17 +9,16 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ XPCOMUtils.defineLazyModuleGetter(this, "MatchPattern",
+                                   "resource://gre/modules/MatchPattern.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "WebNavigation",
+                                   "resource://gre/modules/WebNavigation.jsm");
+ 
+ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ var {
+   SingletonEventManager,
+-  ignoreEvent,
+   runSafe,
+ } = ExtensionUtils;
+ 
+ // Similar to WebRequestEventManager but for WebNavigation.
+ function WebNavigationEventManager(context, eventName) {
+   let name = `webNavigation.${eventName}`;
+   let register = callback => {
+     let listener = data => {
+@@ -30,27 +29,40 @@ function WebNavigationEventManager(conte
        let tabId = TabManager.getBrowserId(data.browser);
        if (tabId == -1) {
          return;
@@ -222,8 +240,7 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
        WebNavigation[eventName].removeListener(listener);
      };
    };
-@@ -74,17 +87,17 @@ extensions.registerSchemaAPI("webNavigat
-   return {
+@@ -75,17 +87,17 @@ extensions.registerSchemaAPI("webNavigat
      webNavigation: {
        onBeforeNavigate: new WebNavigationEventManager(context, "onBeforeNavigate").api(),
        onCommitted: new WebNavigationEventManager(context, "onCommitted").api(),
@@ -231,6 +248,7 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
        onCompleted: new WebNavigationEventManager(context, "onCompleted").api(),
        onErrorOccurred: new WebNavigationEventManager(context, "onErrorOccurred").api(),
        onReferenceFragmentUpdated: new WebNavigationEventManager(context, "onReferenceFragmentUpdated").api(),
+       onHistoryStateUpdated: new WebNavigationEventManager(context, "onHistoryStateUpdated").api(),
 -      onCreatedNavigationTarget: ignoreEvent(context, "webNavigation.onCreatedNavigationTarget"),
 +      onCreatedNavigationTarget: new WebNavigationEventManager(context, "onCreatedNavigationTarget").api(),
        getAllFrames(details) {
@@ -285,7 +303,7 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
      Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
      Services.mm.addMessageListener("Extension:StateChange", this);
      Services.mm.addMessageListener("Extension:LocationChange", this);
-@@ -105,16 +102,26 @@ var Manager = {
+@@ -108,16 +105,26 @@ var Manager = {
        this.fire("onCommitted", browser, data, {url});
      }
    },
@@ -312,8 +330,7 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
  
      let details = {
        browser,
-@@ -137,21 +144,25 @@ var Manager = {
- 
+@@ -141,19 +148,23 @@ var Manager = {
  const EVENTS = [
    "onBeforeNavigate",
    "onCommitted",
@@ -321,17 +338,16 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
    "onCompleted",
    "onErrorOccurred",
    "onReferenceFragmentUpdated",
-+  "onCreatedNavigationTarget",
- 
+   "onHistoryStateUpdated",
 -  // "onCreatedNavigationTarget",
-   // "onHistoryStateUpdated",
++  "onCreatedNavigationTarget",
  ];
  
 -var WebNavigation = {};
 +var WebNavigation = {
-+  sendCreatedNavigationTarget({sourceTab, tab , data}) {
++  sendCreatedNavigationTarget({sourceTab, tab, data}) {
 +    Manager.onCreatedNavigationTarget(sourceTab, tab, data);
-+  }
++  },
 +};
  
  for (let event of EVENTS) {

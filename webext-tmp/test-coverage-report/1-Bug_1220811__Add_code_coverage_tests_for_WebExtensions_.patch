@@ -1,0 +1,656 @@
+# HG changeset patch
+# User Kris Maglione <maglione.k@gmail.com>
+# Date 1455125598 -3600
+#      Wed Feb 10 18:33:18 2016 +0100
+# Node ID 6b4f5c1023df668644a8c694ac5b6ae90b1acfe3
+# Parent  31150215eedfe1406dbd92058635eb619e817939
+Bug 1220811: Add code coverage tests for WebExtensions.
+
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -51,16 +51,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                   "resource://gre/modules/AppConstants.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "MessageChannel",
+                                   "resource://gre/modules/MessageChannel.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
+                                   "resource://gre/modules/AddonManager.jsm");
+ 
+ Cu.import("resource://gre/modules/ExtensionManagement.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ // Register built-in parts of the API. Other parts may be registered
+ // in browser/, mobile/, or b2g/.
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-alarms.js");
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-backgroundPage.js");
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-cookies.js");
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-downloads.js");
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-notifications.js");
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -17,16 +17,19 @@ this.EXPORTED_SYMBOLS = ["ExtensionConte
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/AppConstants.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "ExtensionManagement",
+                                   "resource://gre/modules/ExtensionManagement.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "MatchPattern",
+                                   "resource://gre/modules/MatchPattern.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
+--- a/toolkit/components/extensions/ExtensionManagement.jsm
++++ b/toolkit/components/extensions/ExtensionManagement.jsm
+@@ -9,16 +9,19 @@ this.EXPORTED_SYMBOLS = ["ExtensionManag
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/AppConstants.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ /*
+  * This file should be kept short and simple since it's loaded even
+  * when no extensions are running.
+  */
+ 
+ // Keep track of frame IDs for content windows. Mostly we can just use
+ // the outer window ID as the frame ID. However, the API specifies
+diff --git a/toolkit/components/extensions/ExtensionStorage.jsm b/toolkit/components/extensions/ExtensionStorage.jsm
+--- a/toolkit/components/extensions/ExtensionStorage.jsm
++++ b/toolkit/components/extensions/ExtensionStorage.jsm
+@@ -10,16 +10,19 @@ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/osfile.jsm");
+ Cu.import("resource://gre/modules/AsyncShutdown.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ /* globals OS ExtensionStorage */
+ 
+ var Path = OS.Path;
+ var profileDir = OS.Constants.Path.profileDir;
+ 
+ this.ExtensionStorage = {
+   cache: new Map(),
+diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
+--- a/toolkit/components/extensions/ExtensionUtils.jsm
++++ b/toolkit/components/extensions/ExtensionUtils.jsm
+@@ -8,16 +8,19 @@ this.EXPORTED_SYMBOLS = ["ExtensionUtils
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Locale",
+                                   "resource://gre/modules/Locale.jsm");
+ 
+ function filterStack(error) {
+   return String(error.stack).replace(/(^.*(Task\.jsm|Promise-backend\.js).*\n)+/gm, "<Promise Chain>\n");
+ }
+ 
+diff --git a/toolkit/components/extensions/MessageChannel.jsm b/toolkit/components/extensions/MessageChannel.jsm
+--- a/toolkit/components/extensions/MessageChannel.jsm
++++ b/toolkit/components/extensions/MessageChannel.jsm
+@@ -1,14 +1,18 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
++Components.utils.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
++
+ /**
+  * This module provides wrappers around standard message managers to
+  * simplify bidirectional communication. It currently allows a caller to
+  * send a message to a single listener, and receive a reply. If there
+  * are no matching listeners, or the message manager disconnects before
+  * a reply is received, the caller is returned an error.
+  *
+  * Since each message must have only one recipient, the listener end may
+diff --git a/toolkit/components/extensions/Schemas.jsm b/toolkit/components/extensions/Schemas.jsm
+--- a/toolkit/components/extensions/Schemas.jsm
++++ b/toolkit/components/extensions/Schemas.jsm
+@@ -5,16 +5,19 @@
+ "use strict";
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ var {
+   instanceOf,
+ } = ExtensionUtils;
+ 
+ this.EXPORTED_SYMBOLS = ["Schemas"];
+ 
+diff --git a/toolkit/components/extensions/instrument_code.py b/toolkit/components/extensions/instrument_code.py
+new file mode 100755
+--- /dev/null
++++ b/toolkit/components/extensions/instrument_code.py
+@@ -0,0 +1,61 @@
++#!/usr/bin/env python
++from __future__ import print_function
++import json
++import os
++import subprocess
++
++
++EXTS = '.js', '.jsm'
++
++DATA_DIRS = ('dist/bin', 'dist/bin/browser')
++
++CODE_DIRS = ('toolkit/components/extensions/',
++             'browser/components/extensions/',
++             'toolkit/modules/addons/',
++             'toolkit/components/utils/simpleServices.js')
++
++REPO = os.path.abspath('.')
++CODE_DIRS = tuple(os.path.join(REPO, d) for d in CODE_DIRS)
++
++processes = {}
++
++
++mach = subprocess.Popen(['./mach', 'environment', '--format=json'],
++                        stdout=subprocess.PIPE)
++
++data = mach.communicate()[0]
++if not isinstance(data, type(u'')):
++    # Oh, Python...
++    data = data.decode('utf-8')
++
++config = json.loads(data)
++
++print('Entering object directory %s' % config['topobjdir'])
++os.chdir(config['topobjdir'])
++
++
++def instrument(input, output):
++    print('Instrumenting %s' % input[len(REPO) + 1:])
++
++    proc = subprocess.Popen(['istanbul', 'instrument', input],
++                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
++    processes[output] = proc
++
++for data_dir in DATA_DIRS:
++    data_file = 'faster/install_%s' % data_dir.replace('/', '_')
++    with open(data_file) as f:
++        for line in f:
++            fields = line.rstrip().split('\x1f')
++            if len(fields) == 3:
++                _, output, source = fields
++                if source.startswith(CODE_DIRS) and source.endswith(EXTS):
++                    instrument(source, '%s/%s' % (data_dir, output))
++
++for path, proc in processes.items():
++    stdout, stderr = proc.communicate()
++    if stdout and not stderr:
++        os.unlink(path)
++        with open(path, 'wb') as f:
++            f.write(stdout)
++    else:
++        print('Error processing "%s": %s' % (path, stderr))
+diff --git a/toolkit/components/extensions/test/xpcshell/head.js b/toolkit/components/extensions/test/xpcshell/head.js
+--- a/toolkit/components/extensions/test/xpcshell/head.js
++++ b/toolkit/components/extensions/test/xpcshell/head.js
+@@ -3,8 +3,12 @@
+ const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+ 
+ Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                   "resource://gre/modules/NetUtil.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "WebExtCoverage",
++                                  "resource://gre/modules/WebExtCoverage.jsm");
++
++do_register_cleanup(() => WebExtCoverage.saveAllCoverage(false));
+diff --git a/toolkit/components/extensions/test_coverage.sh b/toolkit/components/extensions/test_coverage.sh
+new file mode 100755
+--- /dev/null
++++ b/toolkit/components/extensions/test_coverage.sh
+@@ -0,0 +1,49 @@
++#!/bin/sh
++set -e
++
++IFS="$(echo)"
++cd $(hg root)
++
++echo Instrumenting WebExtension code
++${PYTHON:-python} toolkit/components/extensions/instrument_code.py
++
++if test -n "$GECKO_JS_COVERAGE_OUTPUT_DIR"
++then tmpdir="$GECKO_JS_COVERAGE_OUTPUT_DIR"
++else tmpdir=$(mktemp -td webext-coverage.XXXXXX)
++fi
++export GECKO_JS_COVERAGE_OUTPUT_DIR="$tmpdir"
++
++echo
++echo Outputting coverage data to: $tmpdir
++echo
++
++mochi() {
++  mach mochitest --keep-open=false "$@"
++  mach mochitest --keep-open=false --e10s "$@"
++}
++
++mochi --quiet toolkit/components/extensions/test/mochitest
++mochi --quiet browser/components/extensions/test/browser
++mach xpcshell-test toolkit/components/extensions/test/xpcshell
++mach xpcshell-test \
++  toolkit/mozapps/extensions/test/xpcshell/test_update_webextensions.js \
++  toolkit/mozapps/extensions/test/xpcshell/test_webextension.js \
++  toolkit/mozapps/extensions/test/xpcshell/test_webextension_icons.js
++
++
++cd "$tmpdir"
++mkdir coverage
++
++echo
++echo Generating full coverage report at "$tmpdir/coverage/index.html"
++istanbul report html
++echo
++
++for dir in content default
++do
++  echo Generating $dir process coverage report at "$tmpdir/coverage/$dir/index.html"
++  istanbul report --dir "coverage/$dir" --include "coverage-$dir-*.json" html
++  echo
++done
++
++# vim:se sts=2 sw=2 et ft=sh:
+diff --git a/toolkit/components/utils/simpleServices.js b/toolkit/components/utils/simpleServices.js
+--- a/toolkit/components/utils/simpleServices.js
++++ b/toolkit/components/utils/simpleServices.js
+@@ -13,16 +13,19 @@
+ "use strict";
+ 
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Ci = Components.interfaces;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                   "resource://gre/modules/NetUtil.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                   "resource://gre/modules/Services.jsm");
+ 
+ function RemoteTagServiceService()
+ {
+diff --git a/toolkit/modules/addons/MatchPattern.jsm b/toolkit/modules/addons/MatchPattern.jsm
+--- a/toolkit/modules/addons/MatchPattern.jsm
++++ b/toolkit/modules/addons/MatchPattern.jsm
+@@ -6,16 +6,21 @@
+ 
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
+                                   "resource://gre/modules/NetUtil.jsm");
+ 
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
++
++
+ this.EXPORTED_SYMBOLS = ["MatchPattern"];
+ 
+ /* globals MatchPattern */
+ 
+ const PERMITTED_SCHEMES = ["http", "https", "file", "ftp", "app"];
+ 
+ // This function converts a glob pattern (containing * and possibly ?
+ // as wildcards) to a regular expression.
+diff --git a/toolkit/modules/addons/WebExtCoverage.jsm b/toolkit/modules/addons/WebExtCoverage.jsm
+new file mode 100644
+--- /dev/null
++++ b/toolkit/modules/addons/WebExtCoverage.jsm
+@@ -0,0 +1,117 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
++
++this.EXPORTED_SYMBOLS = ["WebExtCoverage"];
++
++Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "OS",
++                                  "resource://gre/modules/osfile.jsm");
++XPCOMUtils.defineLazyServiceGetter(this, "environment",
++                                   "@mozilla.org/process/environment;1",
++                                   Ci.nsIEnvironment);
++/* globals environment */
++
++
++const COVERAGE_PROPERTY = "__coverage__";
++const ENV_COVERAGE_OUTPUT_DIR = "GECKO_JS_COVERAGE_OUTPUT_DIR";
++
++const PROCESS_TYPES = Object.freeze({
++  [Services.appinfo.PROCESS_TYPE_DEFAULT]: "default",
++  [Services.appinfo.PROCESS_TYPE_CONTENT]: "content",
++});
++
++
++let globalID = 0;
++let initialized = false;
++
++function mangleFilename(filename) {
++  return filename.replace(new RegExp("^(resource|chrome)://[^/]+/|^file://.*/obj[^/]*/dist/bin/"), "")
++                 .replace(/\//g, "-");
++}
++
++this.WebExtCoverage = {
++  promises: new Set(),
++
++  coverageObjects: new Map(),
++
++  init() {
++    if (initialized) {
++      return this.outputDir;
++    }
++    initialized = true;
++
++    this.outputDir = environment.get(ENV_COVERAGE_OUTPUT_DIR);
++    if (!this.outputDir) {
++      return false;
++    }
++
++    let { processID, processType } = Services.appinfo;
++    this.baseFilename = `coverage-${PROCESS_TYPES[processType]}-pid_${processID}`;
++
++    let barrier = OS.File.contentChildShutdown || OS.File.profileBeforeChange;
++    barrier.addBlocker("WebExtension coverage data flush",
++                       () => this.saveAllCoverage());
++
++    return true;
++  },
++
++  register(global) {
++    if (!(COVERAGE_PROPERTY in global)) {
++      return;
++    }
++    if (!this.init()) {
++      return;
++    }
++
++    let name = [this.baseFilename,
++                mangleFilename(Components.stack.caller.filename),
++                globalID++].join("-");
++
++    let outputFile = `${name}.json`;
++
++    this.coverageObjects.set(outputFile, global[COVERAGE_PROPERTY]);
++
++    if ("addEventListener" in global) {
++      let listener = () => {
++        global.removeEventListener("unload", listener);
++        this.saveCoverage(outputFile, true);
++      };
++      global.addEventListener("unload", listener);
++    }
++  },
++
++  writeCoverageFile(filename, coverage) {
++    let path = OS.Path.join(this.outputDir, filename);
++    let promise = OS.File.writeAtomic(path, JSON.stringify(coverage),
++                                      { tmpPath: `${path}.tmp` });
++
++    this.promises.add(promise);
++    return promise.then(() => {
++      this.promises.delete(promise);
++    });
++  },
++
++  saveCoverage(filename, finalize = true) {
++    let coverage = this.coverageObjects.get(filename);
++    if (finalize) {
++      this.coverageObjects.delete(filename);
++    }
++
++    return this.writeCoverageFile(filename, coverage);
++  },
++
++  saveAllCoverage(finalize = true) {
++    for (let filename of this.coverageObjects.keys()) {
++      this.saveCoverage(filename, finalize);
++    }
++
++    return Promise.all(this.promises);
++  },
++};
+diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
+--- a/toolkit/modules/addons/WebNavigation.jsm
++++ b/toolkit/modules/addons/WebNavigation.jsm
+@@ -7,16 +7,19 @@
+ const EXPORTED_SYMBOLS = ["WebNavigation"];
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ // TODO:
+ // Transition types and qualifiers
+ // onReferenceFragmentUpdated also triggers for pushState
+ // getFrames, getAllFrames
+ // onCreatedNavigationTarget, onHistoryStateUpdated
+ 
+ var Manager = {
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -1,16 +1,19 @@
+ "use strict";
+ 
+ /* globals docShell */
+ 
+ var Ci = Components.interfaces;
+ 
+ Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+ 
++Components.utils.import("resource://gre/modules/WebExtCoverage.jsm");
++WebExtCoverage.register(this);
++
+ XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
+                                   "resource://gre/modules/WebNavigationFrames.jsm");
+ 
+ function loadListener(event) {
+   let document = event.target;
+   let window = document.defaultView;
+   let url = document.documentURI;
+   let windowId = WebNavigationFrames.getWindowId(window);
+diff --git a/toolkit/modules/addons/WebNavigationFrames.jsm b/toolkit/modules/addons/WebNavigationFrames.jsm
+--- a/toolkit/modules/addons/WebNavigationFrames.jsm
++++ b/toolkit/modules/addons/WebNavigationFrames.jsm
+@@ -1,14 +1,17 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
++Components.utils.import("resource://gre/modules/WebExtCoverage.jsm");
++WebExtCoverage.register(this);
++
+ const EXPORTED_SYMBOLS = ["WebNavigationFrames"];
+ 
+ var Ci = Components.interfaces;
+ 
+ /* exported WebNavigationFrames */
+ 
+ function getWindowId(window) {
+   return window.QueryInterface(Ci.nsIInterfaceRequestor)
+diff --git a/toolkit/modules/addons/WebRequest.jsm b/toolkit/modules/addons/WebRequest.jsm
+--- a/toolkit/modules/addons/WebRequest.jsm
++++ b/toolkit/modules/addons/WebRequest.jsm
+@@ -10,16 +10,19 @@ const EXPORTED_SYMBOLS = ["WebRequest"];
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
+                                   "resource://gre/modules/BrowserUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "WebRequestCommon",
+                                   "resource://gre/modules/WebRequestCommon.jsm");
+ 
+ // TODO
+ // Figure out how to handle requestId. Gecko seems to have no such thing. (Bug 1163862)
+diff --git a/toolkit/modules/addons/WebRequestCommon.jsm b/toolkit/modules/addons/WebRequestCommon.jsm
+--- a/toolkit/modules/addons/WebRequestCommon.jsm
++++ b/toolkit/modules/addons/WebRequestCommon.jsm
+@@ -8,16 +8,20 @@ const EXPORTED_SYMBOLS = ["WebRequestCom
+ 
+ /* exported WebRequestCommon */
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
++
+ var WebRequestCommon = {
+   typeForPolicyType(type) {
+     switch (type) {
+       case Ci.nsIContentPolicy.TYPE_DOCUMENT: return "main_frame";
+       case Ci.nsIContentPolicy.TYPE_SUBDOCUMENT: return "sub_frame";
+       case Ci.nsIContentPolicy.TYPE_STYLESHEET: return "stylesheet";
+       case Ci.nsIContentPolicy.TYPE_SCRIPT: return "script";
+       case Ci.nsIContentPolicy.TYPE_IMAGE: return "image";
+diff --git a/toolkit/modules/addons/WebRequestContent.js b/toolkit/modules/addons/WebRequestContent.js
+--- a/toolkit/modules/addons/WebRequestContent.js
++++ b/toolkit/modules/addons/WebRequestContent.js
+@@ -6,16 +6,19 @@
+ 
+ var Ci = Components.interfaces;
+ var Cc = Components.classes;
+ var Cu = Components.utils;
+ var Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/WebExtCoverage.jsm");
++
++WebExtCoverage.register(this);
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "MatchPattern",
+                                   "resource://gre/modules/MatchPattern.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "WebRequestCommon",
+                                   "resource://gre/modules/WebRequestCommon.jsm");
+ 
+ var ContentPolicy = {
+   _classDescription: "WebRequest content policy",
+diff --git a/toolkit/modules/moz.build b/toolkit/modules/moz.build
+--- a/toolkit/modules/moz.build
++++ b/toolkit/modules/moz.build
+@@ -12,16 +12,17 @@ MOCHITEST_CHROME_MANIFESTS += ['tests/ch
+ TESTING_JS_MODULES += [
+     'tests/PromiseTestUtils.jsm',
+ ]
+ 
+ SPHINX_TREES['toolkit_modules'] = 'docs'
+ 
+ EXTRA_JS_MODULES += [
+     'addons/MatchPattern.jsm',
++    'addons/WebExtCoverage.jsm',
+     'addons/WebNavigation.jsm',
+     'addons/WebNavigationContent.js',
+     'addons/WebNavigationFrames.jsm',
+     'addons/WebRequest.jsm',
+     'addons/WebRequestCommon.jsm',
+     'addons/WebRequestContent.js',
+     'Battery.jsm',
+     'BinarySearch.jsm',
+diff --git a/toolkit/mozapps/extensions/test/xpcshell/head_addons.js b/toolkit/mozapps/extensions/test/xpcshell/head_addons.js
+--- a/toolkit/mozapps/extensions/test/xpcshell/head_addons.js
++++ b/toolkit/mozapps/extensions/test/xpcshell/head_addons.js
+@@ -31,16 +31,20 @@ Components.utils.import("resource://gre/
+ Components.utils.import("resource://gre/modules/osfile.jsm");
+ Components.utils.import("resource://gre/modules/AsyncShutdown.jsm");
+ Components.utils.import("resource://testing-common/MockRegistrar.jsm");
+ 
+ XPCOMUtils.defineLazyModuleGetter(this, "Extension",
+                                   "resource://gre/modules/Extension.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "HttpServer",
+                                   "resource://testing-common/httpd.js");
++XPCOMUtils.defineLazyModuleGetter(this, "WebExtCoverage",
++                                  "resource://gre/modules/WebExtCoverage.jsm");
++
++do_register_cleanup(() => WebExtCoverage.saveAllCoverage(false));
+ 
+ // We need some internal bits of AddonManager
+ var AMscope = Components.utils.import("resource://gre/modules/AddonManager.jsm");
+ var AddonManager = AMscope.AddonManager;
+ var AddonManagerInternal = AMscope.AddonManagerInternal;
+ // Mock out AddonManager's reference to the AsyncShutdown module so we can shut
+ // down AddonManager from the test
+ var MockAsyncShutdown = {

@@ -1,0 +1,90 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457358093 -3600
+#      Mon Mar 07 14:41:33 2016 +0100
+# Node ID 2ff8803ca8d0d5cf18b1ef0b3966248b63edf88f
+# Parent  d53f6871ec137d77e57f53fe8cf90da8afe0e671
+Bug 1211665 - [webext] Console.jsm for webextension pages and contentWindow.console for content-scripts. r?kmag
+
+- create a console object using the Console jsm for webextensions, which generates console message events
+  which can be already been collected by the Addon Debugger's webconsole
+- use the contentWindow console object for content-scripts, which generates console message events
+  which can be already logged in the Tab's webconsole
+
+MozReview-Commit-ID: C1cS463gAY6
+
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -49,16 +49,18 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ XPCOMUtils.defineLazyModuleGetter(this, "Task",
+                                   "resource://gre/modules/Task.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                   "resource://gre/modules/AppConstants.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "MessageChannel",
+                                   "resource://gre/modules/MessageChannel.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
+                                   "resource://gre/modules/AddonManager.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPI",
++                                  "resource://gre/modules/Console.jsm");
+ 
+ Cu.import("resource://gre/modules/ExtensionManagement.jsm");
+ 
+ // Register built-in parts of the API. Other parts may be registered
+ // in browser/, mobile/, or b2g/.
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-alarms.js");
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-backgroundPage.js");
+ ExtensionManagement.registerScript("chrome://extensions/content/ext-cookies.js");
+@@ -451,16 +453,28 @@ GlobalManager = {
+           },
+           hasListener(path, name, listener) {
+             return findPath(path)[name].hasListener.call(null, listener);
+           },
+         };
+         Schemas.inject(browserObj, schemaWrapper);
+       };
+ 
++      // We inject a console object created using the Console jsm as a short term
++      // solution to get the log messages from the WebExtensions pages into the
++      // current Addon Developer Toolbox's webconsole.
++      let injectConsole = () => {
++        let addonConsole = new ConsoleAPI({
++          consoleID: extension.id ? "addon/" + extension.id : "",
++        });
++        let addonConsoleObj = Cu.cloneInto(addonConsole, contentWindow, {cloneFunctions: true});
++        Cu.waiveXrays(contentWindow).console = addonConsoleObj;
++      };
++
++      injectConsole();
+       injectObject("browser", null);
+       injectObject("chrome", () => {});
+     };
+ 
+     let id = ExtensionManagement.getAddonIdForWindow(contentWindow);
+ 
+     // We don't inject privileged APIs into sub-frames of a UI page.
+     const {FULL_PRIVILEGES} = ExtensionManagement.API_LEVELS;
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -340,16 +340,20 @@ class ExtensionContext extends BaseConte
+     Cu.waiveXrays(this.sandbox).chrome = this.chromeObj;
+ 
+     injectAPI(api(this), this.chromeObj);
+ 
+     // This is an iframe with content script API enabled. (See Bug 1214658 for rationale)
+     if (isExtensionPage) {
+       Cu.waiveXrays(this.contentWindow).chrome = this.chromeObj;
+       Cu.waiveXrays(this.contentWindow).browser = this.chromeObj;
++    } else {
++      // For content script, we copy the console object from the wrapped contentWindow,
++      // which will log the messages in the tab's webconsole.
++      Cu.waiveXrays(this.sandbox).console = this.contentWindow.console;
+     }
+   }
+ 
+   get cloneScope() {
+     return this.sandbox;
+   }
+ 
+   execute(script, shouldRun) {

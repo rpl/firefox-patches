@@ -1,0 +1,652 @@
+# HG changeset patch
+# User Johann Hofmann <mail@johann-hofmann.com>
+# Date 1448383208 -3600
+#      Tue Nov 24 17:40:08 2015 +0100
+# Node ID 8f9836f5a21646fc052456451f8756ca0691bf05
+# Parent  5d8b06b5b67e5422e6168fcfaa2ed4fac58b2640
+Bug 1225743 - Implement chrome.bookmarks.search
+
+MozReview-Commit-ID: 1NgMocSZ99U
+
+diff --git a/browser/components/extensions/ext-bookmarks.js b/browser/components/extensions/ext-bookmarks.js
+--- a/browser/components/extensions/ext-bookmarks.js
++++ b/browser/components/extensions/ext-bookmarks.js
+@@ -106,17 +106,19 @@ extensions.registerSchemaAPI("bookmarks"
+       getTree: function() {
+         return getTree(Bookmarks.rootGuid, false);
+       },
+ 
+       getSubTree: function(id) {
+         return getTree(id, false);
+       },
+ 
+-      // search
++      search: function(query) {
++        return Bookmarks.search(query).then(result => result.map(convert));
++      },
+ 
+       create: function(bookmark) {
+         let info = {
+           title: bookmark.title || "",
+         };
+ 
+         // If url is NULL or missing, it will be a folder.
+         if (bookmark.url !== null) {
+diff --git a/browser/components/extensions/schemas/bookmarks.json b/browser/components/extensions/schemas/bookmarks.json
+--- a/browser/components/extensions/schemas/bookmarks.json
++++ b/browser/components/extensions/schemas/bookmarks.json
+@@ -229,17 +229,16 @@
+                 "items": { "$ref": "BookmarkTreeNode" }
+               }
+             ]
+           }
+         ]
+       },
+       {
+         "name": "search",
+-        "unsupported": true,
+         "type": "function",
+         "description": "Searches for BookmarkTreeNodes matching the given query. Queries specified with an object produce BookmarkTreeNodes matching all specified properties.",
+         "async": "callback",
+         "parameters": [
+           {
+             "name": "query",
+             "description": "Either a string of words and quoted phrases that are matched against bookmark URLs and titles, or an object. If an object, the properties <code>query</code>, <code>url</code>, and <code>title</code> may be specified and bookmarks matching all specified properties will be produced.",
+             "choices": [
+@@ -253,16 +252,17 @@
+                 "properties": {
+                   "query": {
+                     "type": "string",
+                     "optional": true,
+                     "description": "A string of words and quoted phrases that are matched against bookmark URLs and titles."
+                   },
+                   "url": {
+                     "type": "string",
++                    "format": "url",
+                     "optional": true,
+                     "description": "The URL of the bookmark; matches verbatim. Note that folders have no URL."
+                   },
+                   "title": {
+                     "type": "string",
+                     "optional": true,
+                     "description": "The title of the bookmark; matches verbatim."
+                   }
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_bookmarks.html b/toolkit/components/extensions/test/mochitest/test_ext_bookmarks.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_bookmarks.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_bookmarks.html
+@@ -82,16 +82,168 @@ function backgroundScript() {
+     return browser.bookmarks.remove(ourId);
+   }).then(() => {
+     return browser.bookmarks.get(ourId).catch(tallyFailure);
+   }).then(results => {
+     return browser.bookmarks.remove("000000000000").catch(tallyFailure);
+   }).then(() => {
+     browser.test.assertEq(5, failures, "Expected failures");
+ 
++  // test bookmarks.search
++
++  }).then(() => {
++    return Promise.all([
++        browser.bookmarks.create({title: "MØzillä", url: "http://møzîllä.örg"}),
++        browser.bookmarks.create({title: "Example", url: "http://example.org"}),
++        browser.bookmarks.create({title: "Mozilla Folder"}),
++        browser.bookmarks.create({title: "EFF", url: "http://eff.org"}),
++        browser.bookmarks.create({title: "Menu Item", url: "http://menu.org", parentId: "menu________"}),
++        browser.bookmarks.create({title: "Toolbar Item", url: "http://toolbar.org", parentId: "toolbar_____"}),
++    ]);
++  }).then(results => {
++    return Promise.all([
++        browser.bookmarks.create({title: "Mozilla", url: "http://allizom.org", parentId: results[1].id}),
++        browser.bookmarks.create({title: "Mozilla Corporation", url: "http://allizom.com", parentId: results[1].id}),
++        browser.bookmarks.create({title: "Firefox", url: "http://allizom.org/firefox", parentId: results[1].id}),
++    ]);
++  }).then(() => {
++
++  // returns all items on empty object
++    return browser.bookmarks.search({});
++  }).then(results => {
++    browser.test.assertTrue(results.length >= 9);
++
++  // throws an error for invalid query objects
++    return browser.bookmarks.search();
++  }).catch(error => {
++    browser.test.assertTrue(error.message.includes("Incorrect argument types for bookmarks.search"));
++
++    return browser.bookmarks.search(null);
++  }).catch(error => {
++    browser.test.assertTrue(error.message.includes("Incorrect argument types for bookmarks.search"));
++
++    return browser.bookmarks.search(function(){});
++  }).catch(error => {
++    browser.test.assertTrue(error.message.includes("Incorrect argument types for bookmarks.search"));
++
++    return browser.bookmarks.search({banana: "banana"});
++  }).catch(error => {
++    browser.test.assertTrue(error.message.includes("banana"));
++    browser.test.assertTrue(error.message.includes("bookmarks.search"));
++
++    return browser.bookmarks.search({url: "spider-man vs. batman"});
++  }).catch(error => {
++    browser.test.assertTrue(error.message.includes("spider-man vs. batman"));
++    browser.test.assertTrue(error.message.includes("not a valid URL"));
++    browser.test.assertTrue(error.message.includes("bookmarks.search"));
++
++  // queries the url
++    return browser.bookmarks.search("example.org");
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("Example", results[0].title);
++    browser.test.assertEq("http://example.org/", results[0].url);
++    browser.test.assertEq(2, results[0].index);
++
++  // queries the title
++    return browser.bookmarks.search("EFF");
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("EFF", results[0].title);
++    browser.test.assertEq("http://eff.org/", results[0].url);
++    browser.test.assertEq("unfiled_____", results[0].parentId);
++    browser.test.assertEq(0, results[0].index);
++
++  // finds menu items
++    return browser.bookmarks.search("Menu Item");
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("Menu Item", results[0].title);
++    browser.test.assertEq("http://menu.org/", results[0].url);
++    browser.test.assertEq("menu________", results[0].parentId);
++
++  // finds toolbar items
++    return browser.bookmarks.search("Toolbar Item");
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("Toolbar Item", results[0].title);
++    browser.test.assertEq("http://toolbar.org/", results[0].url);
++    browser.test.assertEq("toolbar_____", results[0].parentId);
++
++  // finds folders
++    return browser.bookmarks.search("Mozilla Folder");
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("Mozilla Folder", results[0].title);
++
++  // is case-insensitive
++    return browser.bookmarks.search("corporation");
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("Mozilla Corporation", results[0].title);
++
++  // is case-insensitive for non-ascii
++    return browser.bookmarks.search("MøZILLÄ");
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("MØzillä", results[0].title);
++
++  // returns multiple results
++    return browser.bookmarks.search("allizom");
++  }).then(results => {
++    browser.test.assertEq(3, results.length);
++    browser.test.assertEq("Mozilla", results[0].title);
++    browser.test.assertEq("Mozilla Corporation", results[1].title);
++    browser.test.assertEq("Firefox", results[2].title);
++
++  // accepts a url field
++    return browser.bookmarks.search({url: "http://allizom.com/"});
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("Mozilla Corporation", results[0].title);
++    browser.test.assertEq("http://allizom.com/", results[0].url);
++
++  // normalizes urls
++    return browser.bookmarks.search({url: "http://allizom.com"});
++  }).then(results => {
++    browser.test.assertEq(results.length, 1);
++    browser.test.assertEq("Mozilla Corporation", results[0].title);
++    browser.test.assertEq("http://allizom.com/", results[0].url);
++
++  // normalizes urls even more
++    return browser.bookmarks.search({url: "http:allizom.com"});
++  }).then(results => {
++    browser.test.assertEq(results.length, 1);
++    browser.test.assertEq("Mozilla Corporation", results[0].title);
++    browser.test.assertEq("http://allizom.com/", results[0].url);
++
++  // accepts a title field
++    return browser.bookmarks.search({title: "Mozilla"});
++  }).then(results => {
++    browser.test.assertEq(results.length, 1);
++    browser.test.assertEq("Mozilla", results[0].title);
++    browser.test.assertEq("http://allizom.org/", results[0].url);
++
++  // can combine title and query
++    return browser.bookmarks.search({title: "Mozilla", query: "allizom"});
++  }).then(results => {
++    browser.test.assertEq(1, results.length);
++    browser.test.assertEq("Mozilla", results[0].title);
++    browser.test.assertEq("http://allizom.org/", results[0].url);
++
++  // uses AND conditions
++    return browser.bookmarks.search({title: "EFF", query: "allizom"});
++  }).then(results => {
++    browser.test.assertEq(0, results.length);
++
++  // returns an empty array on item not found
++    return browser.bookmarks.search("microsoft");
++  }).then(results => {
++    browser.test.assertEq(0, results.length);
++
+     browser.test.notifyPass("bookmarks");
+   }).catch(error => {
+     browser.test.fail(`Error: ${String(error)} :: ${error.stack}`);
+   });
+ }
+ 
+ let extensionData = {
+   background: "(" + backgroundScript.toString() + ")()",
+diff --git a/toolkit/components/places/Bookmarks.jsm b/toolkit/components/places/Bookmarks.jsm
+--- a/toolkit/components/places/Bookmarks.jsm
++++ b/toolkit/components/places/Bookmarks.jsm
+@@ -77,16 +77,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/Sqlite.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
+                                   "resource://gre/modules/PlacesUtils.jsm");
+ 
+ // Imposed to limit database size.
+ const DB_URL_LENGTH_MAX = 65536;
+ const DB_TITLE_LENGTH_MAX = 4096;
+ 
++const MATCH_BOUNDARY = Ci.mozIPlacesAutoComplete.MATCH_BOUNDARY;
++const BEHAVIOR_BOOKMARK = Ci.mozIPlacesAutoComplete.BEHAVIOR_BOOKMARK;
++
+ var Bookmarks = Object.freeze({
+   /**
+    * Item's type constants.
+    * These should stay consistent with nsINavBookmarksService.idl
+    */
+   TYPE_BOOKMARK: 1,
+   TYPE_FOLDER: 2,
+   TYPE_SEPARATOR: 3,
+@@ -442,16 +445,67 @@ var Bookmarks = Object.freeze({
+              WHERE id IN (SELECT id FROM moz_bookmarks WHERE guid = :folderGuid )
+             `, { folderGuid, time });
+         }
+       }.bind(this))
+     );
+   },
+ 
+   /**
++   * Searches a list of bookmark-items by a search term, url or title.
++   *
++   * @param query
++   *        Either a string to use as search term, or an object
++   *        containing any of these keys: query, title or url with the
++   *        corresponding string to match as value.
++   *        The url property can be either a string or an nsIURI.
++   *
++   * @return {Promise} resolved when the search is complete.
++   * @resolves to an array of found bookmark-items.
++   * @rejects if an error happens while searching.
++   * @throws if the arguments are invalid.
++   *
++   * @note Any unknown property in the query object is ignored.
++   *       Known properties may be overwritten.
++   */
++  search(query) {
++    if (!query) {
++      throw new Error("Query object is required");
++    }
++    if (typeof query === "string") {
++      query = { query: query };
++    }
++    if (typeof query !== "object") {
++      throw new Error("Query must be an object or a string");
++    }
++    if (query.query && typeof query.query !== "string") {
++      throw new Error("Query option must be a string");
++    }
++    if (query.title && typeof query.title !== "string") {
++      throw new Error("Title option must be a string");
++    }
++
++    if (query.url) {
++      if (typeof query.url === "string" || (query.url instanceof URL)) {
++        query.url = new URL(query.url).href;
++      } else if (query.url instanceof Ci.nsIURI) {
++        query.url = query.url.spec;
++      } else {
++        throw new Error("Url option must be a string or a URL object");
++      }
++    }
++
++    return Task.spawn(function* () {
++      let results = yield queryBookmarks(query);
++
++      return results;
++    });
++  },
++
++  /**
+    * Fetches information about a bookmark-item.
+    *
+    * REMARK: any successful call to this method resolves to a single
+    *         bookmark-item (or null), even when multiple bookmarks may exist
+    *         (e.g. fetching by url).  If you wish to retrieve all of the
+    *         bookmarks for a given match, use the callback instead.
+    *
+    * Input can be either a guid or an object with one, and only one, of these
+@@ -819,16 +873,66 @@ function insertBookmark(item, parent) {
+     if (item.hasOwnProperty("title") && item.title === null)
+       delete item.title;
+ 
+     return item;
+   }));
+ }
+ 
+ ////////////////////////////////////////////////////////////////////////////////
++// Query implementation.
++
++function queryBookmarks(info) {
++  let queryParams = {tags_folder: PlacesUtils.tagsFolderId};
++  // we're searching for bookmarks, so exclude tags
++  let queryString = "WHERE p.parent <> :tags_folder";
++
++  if (info.title) {
++    queryString += " AND b.title = :title";
++    queryParams.title = info.title;
++  }
++
++  if (info.url) {
++    queryString += " AND h.url = :url";
++    queryParams.url = info.url;
++  }
++
++  if (info.query) {
++    queryString += " AND AUTOCOMPLETE_MATCH(:query, h.url, b.title, NULL, NULL, 1, 1, NULL, :matchBehavior, :searchBehavior) ";
++    queryParams.query = info.query;
++    queryParams.matchBehavior = MATCH_BOUNDARY;
++    queryParams.searchBehavior = BEHAVIOR_BOOKMARK;
++  }
++
++  return PlacesUtils.withConnectionWrapper("Bookmarks.jsm: queryBookmarks",
++    Task.async(function*(db) {
++
++    // _id, _childCount, _grandParentId and _parentId fields
++    // are required to be in the result by the converting function
++    // hence setting them to NULL
++    let rows = yield db.executeCached(
++      `SELECT b.guid, IFNULL(p.guid, "") AS parentGuid, b.position AS 'index',
++              b.dateAdded, b.lastModified, b.type, b.title,
++              h.url AS url, b.parent, p.parent,
++              NULL AS _id,
++              NULL AS _childCount,
++              NULL AS _grandParentId,
++              NULL AS _parentId
++       FROM moz_bookmarks b
++       LEFT JOIN moz_bookmarks p ON p.id = b.parent
++       LEFT JOIN moz_places h ON h.id = b.fk
++       ${queryString}
++      `, queryParams);
++
++    return rowsToItemsArray(rows);
++  }));
++}
++
++
++////////////////////////////////////////////////////////////////////////////////
+ // Fetch implementation.
+ 
+ function fetchBookmark(info) {
+   return PlacesUtils.withConnectionWrapper("Bookmarks.jsm: fetchBookmark",
+     Task.async(function*(db) {
+ 
+     let rows = yield db.executeCached(
+       `SELECT b.guid, IFNULL(p.guid, "") AS parentGuid, b.position AS 'index',
+diff --git a/toolkit/components/places/tests/bookmarks/test_bookmarks_search.js b/toolkit/components/places/tests/bookmarks/test_bookmarks_search.js
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/places/tests/bookmarks/test_bookmarks_search.js
+@@ -0,0 +1,223 @@
++add_task(function* invalid_input_throws() {
++  Assert.throws(() => PlacesUtils.bookmarks.search(),
++                /Query object is required/);
++  Assert.throws(() => PlacesUtils.bookmarks.search(null),
++                /Query object is required/);
++  Assert.throws(() => PlacesUtils.bookmarks.search({title: 50}),
++                /Title option must be a string/);
++  Assert.throws(() => PlacesUtils.bookmarks.search({url: {url: "wombat"}}),
++                /Url option must be a string or a URL object/);
++  Assert.throws(() => PlacesUtils.bookmarks.search(50),
++                /Query must be an object or a string/);
++  Assert.throws(() => PlacesUtils.bookmarks.search(true),
++                /Query must be an object or a string/);
++});
++
++add_task(function* search_bookmark() {
++  yield PlacesUtils.bookmarks.eraseEverything();
++
++  let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.com/",
++                                                 title: "a bookmark" });
++  let bm2 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.org/",
++                                                 title: "another bookmark" });
++  let bm3 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.menuGuid,
++                                                 url: "http://menu.org/",
++                                                 title: "a menu bookmark" });
++  let bm4 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.toolbarGuid,
++                                                 url: "http://toolbar.org/",
++                                                 title: "a toolbar bookmark" });
++  checkBookmarkObject(bm1);
++  checkBookmarkObject(bm2);
++  checkBookmarkObject(bm3);
++  checkBookmarkObject(bm4);
++
++  // finds a result by query
++  let results = yield PlacesUtils.bookmarks.search("example.com");
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm1, results[0]);
++
++  // finds multiple results
++  results = yield PlacesUtils.bookmarks.search("example");
++  Assert.equal(results.length, 2);
++  checkBookmarkObject(results[0]);
++  checkBookmarkObject(results[1]);
++
++  // finds menu bookmarks
++  results = yield PlacesUtils.bookmarks.search("a menu bookmark");
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm3, results[0]);
++
++  // finds toolbar bookmarks
++  results = yield PlacesUtils.bookmarks.search("a toolbar bookmark");
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm4, results[0]);
++
++  yield PlacesUtils.bookmarks.eraseEverything();
++});
++
++add_task(function* search_bookmark_by_query_object() {
++  let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.com/",
++                                                 title: "a bookmark" });
++  let bm2 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.org/",
++                                                 title: "another bookmark" });
++  checkBookmarkObject(bm1);
++  checkBookmarkObject(bm2);
++
++  let results = yield PlacesUtils.bookmarks.search({query: "example.com"});
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++
++  Assert.deepEqual(bm1, results[0]);
++
++  results = yield PlacesUtils.bookmarks.search({query: "example"});
++  Assert.equal(results.length, 2);
++  checkBookmarkObject(results[0]);
++  checkBookmarkObject(results[1]);
++
++  yield PlacesUtils.bookmarks.eraseEverything();
++});
++
++add_task(function* search_bookmark_by_url() {
++  let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.com/",
++                                                 title: "a bookmark" });
++  let bm2 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.org/path",
++                                                 title: "another bookmark" });
++  let bm3 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.org/path",
++                                                 title: "third bookmark" });
++  checkBookmarkObject(bm1);
++  checkBookmarkObject(bm2);
++  checkBookmarkObject(bm3);
++
++  // finds the correct result by url
++  let results = yield PlacesUtils.bookmarks.search({url: "http://example.com/"});
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm1, results[0]);
++
++  // normalizes the url
++  results = yield PlacesUtils.bookmarks.search({url: "http:/example.com"});
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm1, results[0]);
++
++  // returns multiple matches
++  results = yield PlacesUtils.bookmarks.search({url: "http://example.org/path"});
++  Assert.equal(results.length, 2);
++
++  // requires exact match
++  results = yield PlacesUtils.bookmarks.search({url: "http://example.org/"});
++  Assert.equal(results.length, 0);
++
++  yield PlacesUtils.bookmarks.eraseEverything();
++});
++
++add_task(function* search_bookmark_by_title() {
++  let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.com/",
++                                                 title: "a bookmark" });
++  let bm2 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.org/path",
++                                                 title: "another bookmark" });
++  let bm3 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.net/",
++                                                 title: "another bookmark" });
++  checkBookmarkObject(bm1);
++  checkBookmarkObject(bm2);
++  checkBookmarkObject(bm3);
++
++  // finds the correct result by title
++  let results = yield PlacesUtils.bookmarks.search({title: "a bookmark"});
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm1, results[0]);
++
++  // returns multiple matches
++  results = yield PlacesUtils.bookmarks.search({title: "another bookmark"});
++  Assert.equal(results.length, 2);
++
++  // requires exact match
++  results = yield PlacesUtils.bookmarks.search({title: "bookmark"});
++  Assert.equal(results.length, 0);
++
++  yield PlacesUtils.bookmarks.eraseEverything();
++});
++
++add_task(function* search_bookmark_combinations() {
++  let bm1 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.com/",
++                                                 title: "a bookmark" });
++  let bm2 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.org/path",
++                                                 title: "another bookmark" });
++  let bm3 = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.unfiledGuid,
++                                                 url: "http://example.net/",
++                                                 title: "third bookmark" });
++  checkBookmarkObject(bm1);
++  checkBookmarkObject(bm2);
++  checkBookmarkObject(bm3);
++
++  // finds the correct result if title and url match
++  let results = yield PlacesUtils.bookmarks.search({url: "http://example.com/", title: "a bookmark"});
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm1, results[0]);
++
++  // does not match if query is not matching but url and title match
++  results = yield PlacesUtils.bookmarks.search({url: "http://example.com/", title: "a bookmark", query: "nonexistent"});
++  Assert.equal(results.length, 0);
++
++  // does not match if one parameter is not matching
++  results = yield PlacesUtils.bookmarks.search({url: "http://what.ever", title: "a bookmark"});
++  Assert.equal(results.length, 0);
++
++  // query only matches if other fields match as well
++  results = yield PlacesUtils.bookmarks.search({query: "bookmark", url: "http://example.net/"});
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm3, results[0]);
++
++  // non-matching query will also return no results
++  results = yield PlacesUtils.bookmarks.search({query: "nonexistent", url: "http://example.net/"});
++  Assert.equal(results.length, 0);
++
++  yield PlacesUtils.bookmarks.eraseEverything();
++});
++
++add_task(function* search_folder() {
++  let folder = yield PlacesUtils.bookmarks.insert({ parentGuid: PlacesUtils.bookmarks.menuGuid,
++                                                 type: PlacesUtils.bookmarks.TYPE_FOLDER,
++                                                 title: "a test folder" });
++  let bm = yield PlacesUtils.bookmarks.insert({ parentGuid: folder.guid,
++                                                 url: "http://example.com/",
++                                                 title: "a bookmark" });
++  checkBookmarkObject(folder);
++  checkBookmarkObject(bm);
++
++  // also finds folders
++  let results = yield PlacesUtils.bookmarks.search("a test folder");
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.equal(folder.title, results[0].title);
++  Assert.equal(folder.type, results[0].type);
++  Assert.equal(folder.parentGuid, results[0].parentGuid);
++
++  // finds elements in folders
++  results = yield PlacesUtils.bookmarks.search("example.com");
++  Assert.equal(results.length, 1);
++  checkBookmarkObject(results[0]);
++  Assert.deepEqual(bm, results[0]);
++  Assert.equal(folder.guid, results[0].parentGuid);
++
++  yield PlacesUtils.bookmarks.eraseEverything();
++});
++
+diff --git a/toolkit/components/places/tests/bookmarks/xpcshell.ini b/toolkit/components/places/tests/bookmarks/xpcshell.ini
+--- a/toolkit/components/places/tests/bookmarks/xpcshell.ini
++++ b/toolkit/components/places/tests/bookmarks/xpcshell.ini
+@@ -32,16 +32,17 @@ skip-if = toolkit == 'android' || toolki
+ [test_bookmarkstree_cache.js]
+ [test_bookmarks.js]
+ [test_bookmarks_eraseEverything.js]
+ [test_bookmarks_fetch.js]
+ [test_bookmarks_insert.js]
+ [test_bookmarks_notifications.js]
+ [test_bookmarks_remove.js]
+ [test_bookmarks_reorder.js]
++[test_bookmarks_search.js]
+ [test_bookmarks_update.js]
+ [test_changeBookmarkURI.js]
+ [test_getBookmarkedURIFor.js]
+ [test_keywords.js]
+ [test_nsINavBookmarkObserver.js]
+ [test_protectRoots.js]
+ [test_removeItem.js]
+ [test_savedsearches.js]

@@ -1,0 +1,120 @@
+# HG changeset patch
+# User iawaknahc <louischan0325@gmail.com>
+# Date 1457537854 -3600
+#      Wed Mar 09 16:37:34 2016 +0100
+# Node ID e17ac2d58342416170df9b6f7d94e3abaad1110a
+# Parent  ee8f304d9d624328cfd126dd7ed7aa6e35df5b52
+Bug 1148200 - Move isJSONable to sdk/lang/type.
+
+MozReview-Commit-ID: 9DjvYFGl7rX
+
+diff --git a/addon-sdk/source/lib/sdk/content/loader.js b/addon-sdk/source/lib/sdk/content/loader.js
+--- a/addon-sdk/source/lib/sdk/content/loader.js
++++ b/addon-sdk/source/lib/sdk/content/loader.js
+@@ -4,30 +4,20 @@
+ "use strict";
+ 
+ module.metadata = {
+   "stability": "unstable"
+ };
+ 
+ const { isValidURI, isLocalURL, URL } = require('../url');
+ const { contract } = require('../util/contract');
+-const { isString, isNil, instanceOf } = require('../lang/type');
++const { isString, isNil, instanceOf, isJSONable } = require('../lang/type');
+ const { validateOptions,
+   string, array, object, either, required } = require('../deprecated/api-utils');
+ 
+-const isJSONable = (value) => {
+-  try {
+-    JSON.parse(JSON.stringify(value));
+-  }
+-  catch (e) {
+-    return false;
+-  }
+-  return true;
+-};
+-
+ const isValidScriptFile = (value) =>
+   (isString(value) || instanceOf(value, URL)) && isLocalURL(value);
+ 
+ // map of property validations
+ const valid = {
+   contentURL: {
+     is: either(string, object),
+     ok: url => isNil(url) || isLocalURL(url) || isValidURI(url),
+diff --git a/addon-sdk/source/lib/sdk/lang/type.js b/addon-sdk/source/lib/sdk/lang/type.js
+--- a/addon-sdk/source/lib/sdk/lang/type.js
++++ b/addon-sdk/source/lib/sdk/lang/type.js
+@@ -211,16 +211,30 @@ function isJSON(value, visited) {
+                         isJSON($.value, visited));
+             }));
+ }
+ exports.isJSON = function (value) {
+   return isJSON(value);
+ };
+ 
+ /**
++ * Returns `true` if `value` is JSONable
++ */
++const isJSONable = (value) => {
++  try {
++    JSON.parse(JSON.stringify(value));
++  }
++  catch (e) {
++    return false;
++  }
++  return true;
++};
++exports.isJSONable = isJSONable;
++
++/**
+  * Returns if `value` is an instance of a given `Type`. This is exactly same as
+  * `value instanceof Type` with a difference that `Type` can be from a scope
+  * that has a different top level object. (Like in case where `Type` is a
+  * function from different iframe / jetpack module / sandbox).
+  */
+ function instanceOf(value, Type) {
+   var isConstructorNameSame;
+   var isConstructorSourceSame;
+diff --git a/addon-sdk/source/test/test-lang-type.js b/addon-sdk/source/test/test-lang-type.js
+--- a/addon-sdk/source/test/test-lang-type.js
++++ b/addon-sdk/source/test/test-lang-type.js
+@@ -96,16 +96,37 @@ exports["test json atoms"] = function (a
+   assert.ok(utils.isJSON(undefined), "`undefined` is JSON");
+   assert.ok(utils.isJSON(NaN), "`NaN` is JSON");
+   assert.ok(utils.isJSON(Infinity), "`Infinity` is JSON");
+   assert.ok(utils.isJSON(true) && utils.isJSON(false), "booleans are JSON");
+   assert.ok(utils.isJSON(4), utils.isJSON(0), "numbers are JSON");
+   assert.ok(utils.isJSON("foo bar"), "strings are JSON");
+ };
+ 
++exports["test jsonable values"] = function (assert) {
++  assert.ok(utils.isJSONable(null), "`null` is JSONable");
++  assert.ok(!utils.isJSONable(undefined), "`undefined` is not JSONable");
++  assert.ok(utils.isJSONable(NaN), "`NaN` is JSONable");
++  assert.ok(utils.isJSONable(Infinity), "`Infinity` is JSONable");
++  assert.ok(utils.isJSONable(true) && utils.isJSONable(false), "booleans are JSONable");
++  assert.ok(utils.isJSONable(0), "numbers are JSONable");
++  assert.ok(utils.isJSONable("foo bar"), "strings are JSONable");
++  assert.ok(!utils.isJSONable(function(){}), "functions are not JSONable");
++
++  const functionWithToJSON = function(){};
++  functionWithToJSON.toJSON = function() { return "foo bar"; };
++  assert.ok(utils.isJSONable(functionWithToJSON), "functions with toJSON() are JSONable");
++
++  assert.ok(utils.isJSONable({}), "`{}` is JSONable");
++
++  const foo = {};
++  foo.bar = foo;
++  assert.ok(!utils.isJSONable(foo), "recursive objects are not JSONable");
++};
++
+ exports["test instanceOf"] = function (assert) {
+   assert.ok(utils.instanceOf(assert, Object),
+             "assert is object from other sandbox");
+   assert.ok(utils.instanceOf(new Date(), Date), "instance of date");
+   assert.ok(!utils.instanceOf(null, Object), "null is not an instance");
+ };
+ 
+ exports["test json"] = function (assert) {

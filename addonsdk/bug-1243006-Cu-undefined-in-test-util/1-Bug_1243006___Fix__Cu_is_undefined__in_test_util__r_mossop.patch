@@ -1,0 +1,27 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1453825525 -3600
+#      Tue Jan 26 17:25:25 2016 +0100
+# Node ID 0248ce993513094de7ed991a959786f3b5586c26
+# Parent  0fa26d9b2b8f947356bd746cf5dc4c42785a06a2
+Bug 1243006 - Fix "Cu is undefined" in test-util. r?mossop
+
+diff --git a/addon-sdk/source/test/util.js b/addon-sdk/source/test/util.js
+--- a/addon-sdk/source/test/util.js
++++ b/addon-sdk/source/test/util.js
+@@ -1,14 +1,14 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ "use strict";
+ 
+-const {Cc, Ci} = require("chrome");
++const {Cc, Ci, Cu} = require("chrome");
+ const {getMostRecentBrowserWindow, open} = require("sdk/window/utils");
+ const tabUtils = require("sdk/tabs/utils");
+ const {when} = require("sdk/dom/events");
+ 
+ 
+ var observerService = Cc["@mozilla.org/observer-service;1"]
+                       .getService(Ci.nsIObserverService);
+ 

@@ -1,0 +1,105 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+# Date 1453610654 -3600
+#      Sun Jan 24 05:44:14 2016 +0100
+# Node ID f6d8c7e230d01c27aeac1423df31693e2aa43e77
+# Parent  ef05e9f5b1f69118bf9d9b49f1b6cc713dbc6f42
+Bug 1098617 - Deprecate __iterator__ in the "sdk/util/collection" module
+
+diff --git a/addon-sdk/source/lib/sdk/util/collection.js b/addon-sdk/source/lib/sdk/util/collection.js
+--- a/addon-sdk/source/lib/sdk/util/collection.js
++++ b/addon-sdk/source/lib/sdk/util/collection.js
+@@ -36,16 +36,18 @@ exports.addCollectionProperty = function
+     },
+ 
+     get: function get() {
+       return publicIface;
+     }
+   });
+ };
+ 
++const { deprecateUsage } = require('../util/deprecate');
++
+ /**
+  * A collection is ordered, like an array, but its items are unique, like a set.
+  *
+  * @param array
+  *        The collection is backed by an array.  If this is given, it will be
+  *        used as the backing array.  This way the caller can fully control the
+  *        collection.  Otherwise a new empty array will be used, and no one but
+  *        the collection will have access to it.
+@@ -53,21 +55,26 @@ exports.addCollectionProperty = function
+ function Collection(array) {
+   array = array || [];
+ 
+   /**
+    * Provides iteration over the collection.  Items are yielded in the order
+    * they were added.
+    */
+   this.__iterator__ = function Collection___iterator__() {
++    deprecateUsage("for ... in and __iterator__ are deprecated and will be removed soon."+Error().stack);
+     let items = array.slice();
+     for (let i = 0; i < items.length; i++)
+       yield items[i];
+   };
+ 
++  this[Symbol.iterator] = function Collection_Iterator() {
++    return array[Symbol.iterator]();
++  };
++
+   /**
+    * The number of items in the collection.
+    */
+   this.__defineGetter__("length", function Collection_get_length() {
+     return array.length;
+   });
+ 
+   /**
+diff --git a/addon-sdk/source/test/test-collection.js b/addon-sdk/source/test/test-collection.js
+--- a/addon-sdk/source/test/test-collection.js
++++ b/addon-sdk/source/test/test-collection.js
+@@ -104,17 +104,17 @@ function addRemove(assert, coll, initial
+                "All inserted items should be removed");
+ }
+ 
+ // Asserts that the items in coll are the items of array.
+ function compare(assert, coll, array) {
+   assert.equal(coll.length, array.length,
+                "Collection length should be correct");
+   let numItems = 0;
+-  for (let item in coll) {
++  for (let item of coll) {
+     assert.equal(item, array[numItems], "Items should be equal");
+     numItems++;
+   }
+   assert.equal(numItems, array.length,
+                "Number of items in iteration should be correct");
+ }
+ 
+ // Returns a new object with a collection property named "coll".  backingArray,
+diff --git a/addon-sdk/source/test/test-deprecated-iterator.js b/addon-sdk/source/test/test-deprecated-iterator.js
+--- a/addon-sdk/source/test/test-deprecated-iterator.js
++++ b/addon-sdk/source/test/test-deprecated-iterator.js
+@@ -49,11 +49,22 @@ exports.testDeprecatedBrowserWindowsIter
+     for (let key in browserWindows) {
+       /* empty block */
+     }
+   }
+ 
+   testDeprecatedIterator(assert, callDeprecatedBrowserWindowsIterator, "callDeprecatedBrowserWindowsIterator");
+ };
+ 
++exports.testDeprecatedCollectionIterator = function(assert) {
++  function callDeprecatedCollectionIterator(require) {
++    const { Collection } = require('sdk/util/collection');
++    let collection = new Collection(["foo", "bar"]);
+ 
++    for (let key in collection) {
++      /* empty block */
++    }
++  }
++
++  testDeprecatedIterator(assert, callDeprecatedCollectionIterator, "callDeprecatedCollectionIterator");
++};
+ 
+ require('sdk/test').run(exports);

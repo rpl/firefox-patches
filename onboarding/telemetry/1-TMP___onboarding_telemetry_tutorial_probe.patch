@@ -1,0 +1,33 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1456419761 -3600
+#      Thu Feb 25 18:02:41 2016 +0100
+# Node ID cc26a5b70a52b4387bb4cea71df57de4ba283169
+# Parent  7a39bf96ab31a00d8fa370d4f318213b914bd77b
+TMP - onboarding telemetry tutorial probe
+
+MozReview-Commit-ID: 5LDEIwi4dB9
+
+diff --git a/toolkit/components/telemetry/Histograms.json b/toolkit/components/telemetry/Histograms.json
+--- a/toolkit/components/telemetry/Histograms.json
++++ b/toolkit/components/telemetry/Histograms.json
+@@ -10322,10 +10322,19 @@
+   },
+   "TAB_SWITCH_CACHE_POSITION": {
+     "expires_in_version": "55",
+     "bug_numbers": [1242013],
+     "kind": "linear",
+     "high": 100,
+     "n_buckets": 50,
+     "description": "Position in (theoretical) tab cache of tab being switched to"
++  },
++  "TELEMETRY_TUTORIAL_PROBE": {
++    "alert_emails": ["lgreco@mozilla.com"],
++    "bug_numbers": [1242013],
++    "expires_in_version": "50",
++    "kind": "exponential",
++    "high": 1000,
++    "n_buckets": 50,
++    "description": "Telemetry tutorial probe (ms)"
+   }
+ }

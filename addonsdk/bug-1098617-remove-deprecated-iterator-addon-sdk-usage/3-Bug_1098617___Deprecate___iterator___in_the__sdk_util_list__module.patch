@@ -1,0 +1,242 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+# Date 1453610654 -3600
+#      Sun Jan 24 05:44:14 2016 +0100
+# Node ID ef05e9f5b1f69118bf9d9b49f1b6cc713dbc6f42
+# Parent  39d7a88743e071f6ebe3f097d3ccd5b008309e99
+Bug 1098617 - Deprecate __iterator__ in the "sdk/util/list" module
+
+diff --git a/addon-sdk/source/lib/sdk/util/list.js b/addon-sdk/source/lib/sdk/util/list.js
+--- a/addon-sdk/source/lib/sdk/util/list.js
++++ b/addon-sdk/source/lib/sdk/util/list.js
+@@ -32,33 +32,48 @@ const listOptions = {
+   },
+    /**
+     * Returns a string representing this list.
+     * @returns {String}
+     */
+   toString: function toString() {
+     return 'List(' + listNS(this).keyValueMap + ')';
+   },
++
+   /**
+-   * Custom iterator providing `List`s enumeration behavior.
+-   * We cant reuse `_iterator` that is defined by `Iterable` since it provides
+-   * iteration in an arbitrary order.
+-   * @see https://developer.mozilla.org/en/JavaScript/Reference/Statements/for...in
+-   * @param {Boolean} onKeys
++   * Returns an iterator of the existent list keys and enable
++   * 'for (... of list.keys())' to replace deprecated any
++   * 'for (... in list)' usage.
++   * @returns {Array Iterator}
+    */
+-  __iterator__: function __iterator__(onKeys, onKeyValue) {
+-    let array = listNS(this).keyValueMap.slice(0),
+-                i = -1;
+-    for (let element of array)
+-      yield onKeyValue ? [++i, element] : onKeys ? ++i : element;
++  keys: function keys() {
++    return listNS(this).keyValueMap.keys();
+   },
++
++  [Symbol.iterator]: function iterator() {
++    return listNS(this).keyValueMap.slice(0)[Symbol.iterator]();
++  }
+ };
+-listOptions[Symbol.iterator] = function iterator() {
+-    return listNS(this).keyValueMap.slice(0)[Symbol.iterator]();
++
++/**
++ * Custom iterator providing `List`s enumeration behavior.
++ * We cant reuse `_iterator` that is defined by `Iterable` since it provides
++ * iteration in an arbitrary order.
++ * @see https://developer.mozilla.org/en/JavaScript/Reference/Statements/for...in
++ * @param {Boolean} onKeys
++ */
++const { deprecateUsage } = require('../util/deprecate');
++listOptions["__iterator__"] = function __iterator__(onKeys, onKeyValue) {
++  deprecateUsage("for ... in and __iterator__ are deprecated and will be removed soon.");
++  let array = listNS(this).keyValueMap.slice(0),
++      i = -1;
++  for (let element of array)
++    yield onKeyValue ? [++i, element] : onKeys ? ++i : element;
+ };
++
+ const List = Class(listOptions);
+ exports.List = List;
+ 
+ function addListItem(that, value) {
+   let list = listNS(that).keyValueMap,
+       index = list.indexOf(value);
+ 
+   if (-1 === index) {
+diff --git a/addon-sdk/source/test/jetpack-package.ini b/addon-sdk/source/test/jetpack-package.ini
+--- a/addon-sdk/source/test/jetpack-package.ini
++++ b/addon-sdk/source/test/jetpack-package.ini
+@@ -44,16 +44,17 @@ support-files =
+ [test-content-sync-worker.js]
+ [test-content-worker.js]
+ [test-context-menu.js]
+ [test-context-menu@2.js]
+ [test-cuddlefish.js]
+ # Cuddlefish loader is unsupported
+ skip-if = true
+ [test-deprecate.js]
++[test-deprecated-iterator.js]
+ [test-dev-panel.js]
+ [test-diffpatcher.js]
+ [test-dispatcher.js]
+ [test-disposable.js]
+ [test-dom.js]
+ [test-environment.js]
+ [test-event-core.js]
+ [test-event-dom.js]
+diff --git a/addon-sdk/source/test/test-deprecated-iterator.js b/addon-sdk/source/test/test-deprecated-iterator.js
+new file mode 100644
+--- /dev/null
++++ b/addon-sdk/source/test/test-deprecated-iterator.js
+@@ -0,0 +1,59 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++'use strict';
++
++const { LoaderWithHookedConsole } = require("sdk/test/loader");
++const { set: setPref } = require("sdk/preferences/service");
++const DEPRECATE_PREF = "devtools.errorconsole.deprecation_warnings";
++
++setPref(DEPRECATE_PREF, true);
++
++function testDeprecatedIterator(assert, aTestFn, aTestFnName) {
++  let { loader, messages } = LoaderWithHookedConsole(module);
++  aTestFn(loader.require);
++
++  assert.equal(messages.length, 1, "only one error is dispatched");
++  assert.equal(messages[0].type, "error", "the console message is an error");
++
++  let msg = messages[0].msg;
++
++  assert.ok(msg.indexOf("__iterator__") !== -1,
++            "message contains the given message");
++  assert.ok(msg.indexOf(aTestFnName) !== -1,
++            "message contains name of the caller function");
++  assert.ok(msg.indexOf(module.uri) !== -1,
++            "message contains URI of the caller module");
++
++  loader.unload();
++};
++
++exports.testDeprecatedListIterator = function(assert) {
++  function callDeprecatedListIterator(require) {
++    const { List, addListItem } = require('sdk/util/list');
++    let list = List();
++    addListItem(list, 1);
++
++    for (let key in list) {
++      /* empty block */
++    }
++  }
++
++  testDeprecatedIterator(assert, callDeprecatedListIterator, "callDeprecatedListIterator");
++};
++
++exports.testDeprecatedBrowserWindowsIterator = function(assert) {
++  function callDeprecatedBrowserWindowsIterator(require) {
++    const { browserWindows } = require('sdk/windows');
++
++    for (let key in browserWindows) {
++      /* empty block */
++    }
++  }
++
++  testDeprecatedIterator(assert, callDeprecatedBrowserWindowsIterator, "callDeprecatedBrowserWindowsIterator");
++};
++
++
++
++require('sdk/test').run(exports);
+diff --git a/addon-sdk/source/test/test-list.js b/addon-sdk/source/test/test-list.js
+--- a/addon-sdk/source/test/test-list.js
++++ b/addon-sdk/source/test/test-list.js
+@@ -5,17 +5,17 @@
+ 
+ const { List, addListItem, removeListItem } = require('sdk/util/list');
+ const { Class } = require('sdk/core/heritage');
+ 
+ exports.testList = function(assert) {
+   let list = List();
+   addListItem(list, 1);
+ 
+-  for (let key in list) {
++  for (let key of list.keys()) {
+     assert.equal(key, 0, 'key is correct');
+     assert.equal(list[key], 1, 'value is correct');
+   }
+ 
+   let count = 0;
+   for (let ele of list) {
+     assert.equal(ele, 1, 'ele is correct');
+     assert.equal(++count, 1, 'count is correct');
+diff --git a/addon-sdk/source/test/test-windows-common.js b/addon-sdk/source/test/test-windows-common.js
+--- a/addon-sdk/source/test/test-windows-common.js
++++ b/addon-sdk/source/test/test-windows-common.js
+@@ -1,8 +1,9 @@
++
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 'use strict';
+ 
+ const { Loader } = require('sdk/test/loader');
+ const { browserWindows } = require('sdk/windows');
+ const { isFocused } = require('sdk/window/utils');
+@@ -21,26 +22,21 @@ exports.testBrowserWindowsIterator = fun
+     if (window === browserWindows.activeWindow)
+       activeWindowCount++;
+ 
+     assert.equal(windows.indexOf(window), -1, 'window not already in iterator');
+     assert.equal(browserWindows[i++], window, 'browserWindows[x] works');
+     windows.push(window);
+   }
+   assert.equal(activeWindowCount, 1, 'activeWindow was found in the iterator');
+-
+-  i = 0;
+-  for (let j in browserWindows) {
+-    assert.equal(j, i++, 'for (x in browserWindows) works');
+-  }
+ };
+ 
+ exports.testActiveWindowIsFocused = function(assert) {
+   assert.ok(isFocused(browserWindows.activeWindow), 'the active window is focused');
+-}
++};
+ 
+ exports.testWindowTabsObject_alt = function(assert, done) {
+   let window = browserWindows.activeWindow;
+   window.tabs.open({
+     url: 'data:text/html;charset=utf-8,<title>tab 2</title>',
+     inBackground: true,
+     onReady: function onReady(tab) {
+       assert.equal(tab.title, 'tab 2', 'Correct new tab title');
+diff --git a/addon-sdk/source/test/windows/test-firefox-windows.js b/addon-sdk/source/test/windows/test-firefox-windows.js
+--- a/addon-sdk/source/test/windows/test-firefox-windows.js
++++ b/addon-sdk/source/test/windows/test-firefox-windows.js
+@@ -255,17 +255,17 @@ exports.testActiveWindow = function*(ass
+   yield openTab(rawWindow3, "data:text/html;charset=utf-8,<title>window 3</title>");
+ 
+   assert.equal(rawWindow3.content.document.title, "window 3", "Got correct raw window 3");
+   assert.equal(rawWindow3.document.title, windows[2].title, "Saw correct title on window 3");
+ 
+   assert.equal(windows.length, 3, "Correct number of browser windows");
+ 
+   let count = 0;
+-  for (let window in windows) {
++  for (let window of windows) {
+     count++;
+   }
+   assert.equal(count, 3, "Correct number of windows returned by iterator");
+   assert.equal(windows.activeWindow.title, windows[2].title, "Correct active window title - 3");
+   let window3 = windows[2];
+ 
+   yield focus(rawWindow2);
+ 

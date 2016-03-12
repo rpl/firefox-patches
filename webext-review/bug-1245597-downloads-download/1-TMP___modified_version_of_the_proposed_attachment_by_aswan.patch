@@ -1,0 +1,498 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1455751336 -3600
+#      Thu Feb 18 00:22:16 2016 +0100
+# Node ID 26c12680d0fd8ced74a92aaa4e48f26083686af6
+# Parent  33fc723946aa45248df83c204f256816deafeede
+TMP - modified version of the proposed attachment by aswan
+
+MozReview-Commit-ID: 3pe1IKtPVQs
+
+diff --git a/toolkit/components/extensions/ext-downloads.js b/toolkit/components/extensions/ext-downloads.js
+--- a/toolkit/components/extensions/ext-downloads.js
++++ b/toolkit/components/extensions/ext-downloads.js
+@@ -1,20 +1,102 @@
+ "use strict";
+ 
+ var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+ 
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++XPCOMUtils.defineLazyModuleGetter(this, "Downloads",
++                                  "resource://gre/modules/Downloads.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "DownloadPaths",
++                                  "resource://gre/modules/DownloadPaths.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "OS",
++                                     "resource://gre/modules/osfile.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
++                                  "resource://gre/modules/FileUtils.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
++                                  "resource://gre/modules/NetUtil.jsm");
++
+ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ const {
+   ignoreEvent,
+ } = ExtensionUtils;
+ 
+ extensions.registerSchemaAPI("downloads", "downloads", (extension, context) => {
+   return {
+     downloads: {
++      download(options) {
++        let path;
++        if (options.filename != null) {
++          if (options.filename.length == 0) {
++            return Promise.reject({ message: "filename must not be empty" });
++          }
++
++          path = OS.Path.split(options.filename);
++          if (path.absolute) {
++            return Promise.reject({ message: "filename must not be an absolute path" });
++          }
++
++          if (path.components.some(component => component == "..")) {
++            return Promise.reject({ message: "filename must not contain back-references (..)" });
++          }
++        }
++
++        function createTarget(downloadsDir) {
++          // TODO
++          // if (options.saveAs) { }
++
++          let target = new FileUtils.File(downloadsDir);
++          if (path) {
++            path.components.every(component => target.append(component));
++          } else {
++            let uri = NetUtil.newURI(options.url);
++            let urlobj = uri.QueryInterface(Ci.nsIURL);
++
++            target.append(urlobj.fileName);
++          }
++
++          if (target.exists()) {
++            switch (options.conflictAction) {
++              case "uniquify":
++              default:
++                target = DownloadPaths.createNiceUniqueFile(target);
++                break;
++
++              case "overwrite":
++                break;
++
++              case "prompt":
++                // TODO
++                return Promise.reject({ message: "prompt not yet implemented" });
++            }
++          }
++          return target;
++        }
++
++        let download;
++        return Downloads.getPreferredDownloadsDirectory().then(downloadsDir =>
++          Downloads.createDownload({
++            source: options.url,
++            target: createTarget(downloadsDir),
++          })
++        ).then(dl => {
++          download = dl;
++          download.tryToKeepPartialData = true;
++          download.start();
++
++          return Downloads.getList(Downloads.ALL);
++        }).then(list => {
++          list.add(download);
++          // Without other chrome.downloads methods, we can't actually
++          // do anything with the id so just return a dummy value for now.
++          return 0;
++        });
++      },
++
+       // When we do open(), check for additional downloads.open permission.
+       // i.e.:
+       // open(downloadId) {
+       //   if (!extension.hasPermission("downloads.open")) {
+       //     throw new context.cloneScope.Error("Permission denied because 'downloads.open' permission is missing.");
+       //   }
+       //   ...
+       // }
+diff --git a/toolkit/components/extensions/schemas/downloads.json b/toolkit/components/extensions/schemas/downloads.json
+--- a/toolkit/components/extensions/schemas/downloads.json
++++ b/toolkit/components/extensions/schemas/downloads.json
+@@ -17,17 +17,17 @@
+   },
+   {
+     "namespace": "downloads",
+     "types": [
+       {
+         "id": "FilenameConflictAction",
+         "type": "string",
+         "enum": [
+-          "uniqify",
++          "uniquify",
+           "overwrite",
+           "prompt"
+         ]
+       },
+       {
+         "id": "InterruptReason",
+         "type": "string",
+         "enum": [
+@@ -209,17 +209,17 @@
+           }
+         }
+       }
+     ],
+     "functions": [
+       {
+         "name": "download",
+         "type": "function",
+-        "unsupported": true,
++        "async": "callback",
+         "description": "Download a URL. If the URL uses the HTTP[S] protocol, then the request will include all cookies currently set for its hostname. If both <code>filename</code> and <code>saveAs</code> are specified, then the Save As dialog will be displayed, pre-populated with the specified <code>filename</code>. If the download started successfully, <code>callback</code> will be called with the new <a href='#type-DownloadItem'>DownloadItem</a>'s <code>downloadId</code>. If there was an error starting the download, then <code>callback</code> will be called with <code>downloadId=undefined</code> and <a href='extension.html#property-lastError'>chrome.extension.lastError</a> will contain a descriptive string. The error strings are not guaranteed to remain backwards compatible between releases. You must not parse it.",
+         "parameters": [
+           {
+             "description": "What to download and how.",
+             "name": "options",
+             "type": "object",
+             "properties": {
+               "url": {
+@@ -231,30 +231,33 @@
+                 "optional": true,
+                 "type": "string"
+               },
+               "conflictAction": {
+                 "$ref": "FilenameConflictAction",
+                 "optional": true
+               },
+               "saveAs": {
++                "unsupported": true,
+                 "description": "Use a file-chooser to allow the user to select a filename.",
+                 "optional": true,
+                 "type": "boolean"
+               },
+               "method": {
++                "unsupported": true,
+                 "description": "The HTTP method to use if the URL uses the HTTP[S] protocol.",
+                 "enum": [
+                   "GET",
+                   "POST"
+                 ],
+                 "optional": true,
+                 "type": "string"
+               },
+               "headers": {
++                "unsupported": true,
+                 "optional": true,
+                 "type": "array",
+                 "description": "Extra HTTP headers to send with the request if the URL uses the HTTP[s] protocol. Each header is represented as a dictionary containing the keys <code>name</code> and either <code>value</code> or <code>binaryValue</code>, restricted to those allowed by XMLHttpRequest.",
+                 "items": {
+                   "type": "object",
+                   "properties": {
+                     "name": {
+                       "description": "Name of the HTTP header.",
+@@ -263,16 +266,17 @@
+                     "value": {
+                       "description": "Value of the HTTP header.",
+                       "type": "string"
+                     }
+                   }
+                 }
+               },
+               "body": {
++                "unsupported": true,
+                 "description": "Post body.",
+                 "optional": true,
+                 "type": "string"
+               }
+             }
+           },
+           {
+             "name": "callback",
+diff --git a/toolkit/components/extensions/test/mochitest/file_chromescript_downloads.js b/toolkit/components/extensions/test/mochitest/file_chromescript_downloads.js
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_chromescript_downloads.js
+@@ -0,0 +1,94 @@
++"use strict";
++
++/* global addMessageListener */
++
++const {
++  interfaces: Ci,
++  utils: Cu,
++  classes: Cc,
++} = Components;
++
++Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/FileUtils.jsm");
++Cu.import("resource://gre/modules/Downloads.jsm");
++
++let downloadDir;
++
++addMessageListener("setup.request", () => {
++  if (downloadDir) {
++    throw new Error("setup called twice");
++  }
++
++  downloadDir = FileUtils.getDir("TmpD", ["downloads"]);
++  downloadDir.createUnique(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
++
++  Services.prefs.setIntPref("browser.download.folderList", 2);
++  Services.prefs.setComplexValue("browser.download.dir", Ci.nsIFile, downloadDir);
++  sendAsyncMessage("setup.done", {downloadDir: downloadDir.path});
++});
++
++addMessageListener("cleanup.request", () => {
++  let success = true, message = null;
++
++  let entries = downloadDir.directoryEntries;
++  while (entries.hasMoreElements()) {
++    let entry = entries.getNext();
++    entry.QueryInterface(Ci.nsIFile);
++    success = false;
++    message = `Leftover file ${entry.path} in download directory`;
++    entry.remove(false);
++  }
++
++  downloadDir.remove(false);
++  downloadDir = null;
++
++  Services.prefs.clearUserPref("browser.download.folderList");
++  Services.prefs.clearUserPref("browser.download.dir");
++
++  sendAsyncMessage("cleanup.done", { success, message });
++});
++
++// This function is a bit of a sledgehammer, it looks at every download
++// the browser knows about and waits for all active downloads to complete.
++// But we only start one at a time and only do a handful in total, so
++// this lets us test download() without depending on anything else.
++function waitForDownloads() {
++  return Downloads.getList(Downloads.ALL)
++                  .then(list => list.getAll())
++                  .then(downloads => {
++                    let inprogress = downloads.filter(dl => !dl.stopped);
++                    return Promise.all(inprogress.map(dl => dl.whenSucceeded()));
++                  });
++}
++
++addMessageListener("check-download.request", params => {
++  return waitForDownloads().then(() => {
++    let localPath = downloadDir.clone();
++    localPath.append(params.localFile);
++
++    let success = true, message = null;
++    if (localPath.fileSize != params.expectedSize) {
++      success = false;
++      message = `Wrong file size (expected ${params.expectedSize} got ${localPath.fileSize})`;
++    }
++
++    localPath.remove(false);
++
++    sendAsyncMessage("check-download.done", { success, message });
++  });
++});
++
++addMessageListener("touch.request", filename => {
++  let file = downloadDir.clone();
++  file.append(filename);
++  file.create(Ci.nsIFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
++  sendAsyncMessage("touch.done");
++});
++
++addMessageListener("remove.request", filename => {
++  let file = downloadDir.clone();
++  file.append(filename);
++  dump(`REMOVING FILENAME: ${filename}\n`);
++  file.remove(false);
++  sendAsyncMessage("remove.done");
++});
+diff --git a/toolkit/components/extensions/test/mochitest/file_download.txt b/toolkit/components/extensions/test/mochitest/file_download.txt
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_download.txt
+@@ -0,0 +1,1 @@
++This is a sample file used in download tests.
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -17,26 +17,29 @@ support-files =
+   file_script_bad.js
+   file_script_redirect.js
+   file_script_xhr.js
+   file_sample.html
+   redirection.sjs
+   file_privilege_escalation.html
+   file_ext_test_api_injection.js
+   file_permission_xhr.html
++  file_download.txt
++  file_chromescript_downloads.js
+ 
+ [test_ext_simple.html]
+ [test_ext_schema.html]
+ skip-if = e10s # Uses a console montitor. Actual code does not depend on e10s.
+ [test_ext_geturl.html]
+ [test_ext_contentscript.html]
+ skip-if = buildapp == 'b2g' # runat != document_idle is not supported.
+ [test_ext_contentscript_create_iframe.html]
+ [test_ext_contentscript_api_injection.html]
+ [test_ext_downloads.html]
++[test_ext_downloads_download.html]
+ [test_ext_i18n_css.html]
+ [test_ext_generate.html]
+ [test_ext_idle.html]
+ [test_ext_localStorage.html]
+ [test_ext_onmessage_removelistener.html]
+ [test_ext_notifications.html]
+ [test_ext_permission_xhr.html]
+ skip-if = buildapp == 'b2g' # JavaScript error: jar:remoteopenfile:///data/local/tmp/generated-extension.xpi!/content.js, line 46: NS_ERROR_ILLEGAL_VALUE:
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_downloads_download.html b/toolkit/components/extensions/test/mochitest/test_ext_downloads_download.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_ext_downloads_download.html
+@@ -0,0 +1,146 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>WebExtension test</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/SpawnTask.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++const BASE = "http://mochi.test:8888/tests/toolkit/components/extensions/test/mochitest";
++const FILE_NAME = "file_download.txt";
++const FILE_URL = BASE + "/" + FILE_NAME;
++const FILE_NAME_UNIQUE = "file_download(1).txt";
++const FILE_LEN = 46;
++
++let chromeScript;
++function runInChrome(msg, params) {
++  const requestMsg = msg + ".request";
++  const doneMsg = msg + ".done";
++
++  return new Promise(resolve => {
++    let wait = (reply) => {
++      info(`got ${doneMsg}`);
++      chromeScript.removeMessageListener(doneMsg, wait);
++      resolve(reply);
++    };
++    info(`wait for ${doneMsg}`);
++    chromeScript.addMessageListener(doneMsg, wait);
++    info(`send ${requestMsg}`);
++    chromeScript.sendAsyncMessage(requestMsg, params);
++  });
++}
++
++function setup() {
++  let chromeScriptURL = SimpleTest.getTestFileURL("file_chromescript_downloads.js");
++  chromeScript = SpecialPowers.loadChromeScript(chromeScriptURL);
++
++  return runInChrome("setup").then(result => {
++    info(`Using download directory ${result.downloadDir}`);
++    SimpleTest.registerCleanupFunction(() => {
++      return runInChrome("cleanup").then(result => {
++        ok(result.success, result.message);
++      });
++    });
++  });
++}
++
++function backgroundScript() {
++  browser.test.onMessage.addListener(function(msg) {
++    if (msg == "download") {
++      browser.downloads.download(arguments[1])
++             .then((id) => browser.test.sendMessage("okay", { status: "success", id }))
++             .catch(error => browser.test.sendMessage("okay", { status: "error", errmsg: error.message }));
++    }
++  });
++
++  browser.test.sendMessage("ready");
++}
++
++add_task(function* test_downloads() {
++  yield setup();
++
++  let extension = ExtensionTestUtils.loadExtension({
++    background: "(" + backgroundScript.toString() + ")()",
++    manifest: {
++      permissions: ["downloads"],
++    },
++  });
++
++  function testDownload(options, description, expectedScenario) {
++    let { localFile, fileSize, errorMessage } = expectedScenario;
++    info(`test downloads.download() with ${description}`);
++
++    extension.sendMessage("download", options);
++
++    return extension.awaitMessage("okay").then(msg => {
++      if (fileSize) {
++        if (msg.status == "error") {
++          ok(false, msg.errmsg);
++          return;
++        }
++
++        ok(true, `downloads.download() should complete successfully with ${description}`);
++
++        return runInChrome("check-download", { localFile, fileSize });
++      } else if (errorMessage) {
++        if (msg.status != "error") {
++          ok(false, `downloads.download() should fail with ${description}`);
++          return;
++        }
++
++        is(msg.errmsg, errorMessage, `download.download() should fail with the expected error message`);
++      }
++      return msg;
++    });
++  }
++
++  yield extension.startup();
++  yield extension.awaitMessage("ready");
++  info("extension started");
++
++  // Call download() with just the url property.
++  yield testDownload({ url: FILE_URL }, "just source",
++                     { localFile: FILE_NAME, fileSize: FILE_LEN });
++
++  // Call download() with a filename property.
++  yield testDownload({ url: FILE_URL, filename: "newpath.txt" }, "source and filename",
++                     { localFile: "newpath.txt", fileSize: FILE_LEN });
++
++  // Check conflictAction of "uniquify".
++  yield runInChrome("touch", FILE_NAME);
++  yield testDownload({ url: FILE_URL, conflictAction: "uniquify" }, "conflictAction=uniquify",
++                     { localFile: FILE_NAME_UNIQUE, fileSize: FILE_LEN });
++  // todo check that preexisting file was not modified?
++  yield runInChrome("remove", FILE_NAME);
++
++  // Check conflictAction of "overwrite".
++  yield runInChrome("touch", FILE_NAME);
++  yield testDownload({ url: FILE_URL, conflictAction: "overwrite" }, "conflictAction=overwrite",
++                     { localFile: FILE_NAME, fileSize: FILE_LEN });
++
++  // Try to download to an empty path.
++  yield testDownload({ url: FILE_URL, filename: ""}, "empty filename",
++                     { errorMessage: "filename must not be empty"});
++
++  // Try to download to an absolute path.
++  yield testDownload({ url: FILE_URL, filename: "/tmp/file_download.txt" }, "absolute filename",
++                     { errorMessage: "filename must not be an absolute path" });
++
++  // Try to download to a relative path containing ..
++  yield testDownload({ url: FILE_URL, filename: "../file_download.txt" }, "back-refereces",
++                     { errorMessage: "filename must not contain back-references (..)"});
++
++  yield extension.unload();
++});
++
++</script>
++
++</body>
++</html>

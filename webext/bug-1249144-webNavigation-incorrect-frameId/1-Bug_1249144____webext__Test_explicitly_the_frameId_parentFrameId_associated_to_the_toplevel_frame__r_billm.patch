@@ -1,0 +1,33 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1455756969 -3600
+#      Thu Feb 18 01:56:09 2016 +0100
+# Node ID eb7ae1954e96adef1b8e4c181f2fccb5720e6caf
+# Parent  2fa086d51b6a8d94566493b34cbce00a37af5024
+Bug 1249144 - [webext] Test explicitly the frameId/parentFrameId associated to the toplevel frame. r?billm
+
+MozReview-Commit-ID: 9E7LmdyHcnG
+
+diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
+--- a/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
++++ b/browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js
+@@ -133,16 +133,19 @@ add_task(function* testWebNavigationFram
+     getAllFramesDetails,
+     getFrameResults,
+   } = yield extension.awaitMessage("webNavigationFrames.done");
+ 
+   is(getAllFramesDetails.length, 3, "expected number of frames found");
+   is(getAllFramesDetails.length, collectedDetails.length,
+      "number of frames found should equal the number onCompleted events collected");
+ 
++  is(getAllFramesDetails[0].frameId, 0, "the root frame has the expected frameId");
++  is(getAllFramesDetails[0].parentFrameId, -1, "the root frame has the expected parentFrameId");
++
+   // ordered by frameId
+   let sortByFrameId = (el1, el2) => {
+     let val1 = el1 ? el1.frameId : -1;
+     let val2 = el2 ? el2.frameId : -1;
+     return val1 - val2;
+   };
+ 
+   collectedDetails = collectedDetails.sort(sortByFrameId);

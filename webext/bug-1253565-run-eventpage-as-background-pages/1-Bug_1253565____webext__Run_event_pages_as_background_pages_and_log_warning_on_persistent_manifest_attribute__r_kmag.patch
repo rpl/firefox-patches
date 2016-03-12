@@ -1,0 +1,166 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457634484 -3600
+#      Thu Mar 10 19:28:04 2016 +0100
+# Node ID cf251ea68829860989cb79c7bc09d50c3fa601fc
+# Parent  ee0cb75bcbf99f082f6c31ba4e54d88a8b2d9f7b
+Bug 1253565 - [webext] Run event pages as background pages and log warning on persistent manifest attribute. r?kmag
+
+MozReview-Commit-ID: 9QWvRkADsQD
+
+diff --git a/toolkit/components/extensions/schemas/manifest.json b/toolkit/components/extensions/schemas/manifest.json
+--- a/toolkit/components/extensions/schemas/manifest.json
++++ b/toolkit/components/extensions/schemas/manifest.json
+@@ -85,25 +85,33 @@
+             }
+           },
+ 
+           "background": {
+             "choices": [
+               {
+                 "type": "object",
+                 "properties": {
+-                  "page": { "$ref": "ExtensionURL" }
++                  "page": { "$ref": "ExtensionURL" },
++                  "persistent": {
++                    "optional": true,
++                    "$ref": "PersistentBackgroundProperty"
++                  }
+                 }
+               },
+               {
+                 "type": "object",
+                 "properties": {
+                   "scripts": {
+                     "type": "array",
+                     "items": { "$ref": "ExtensionURL" }
++                  },
++                  "persistent": {
++                    "optional": true,
++                    "$ref": "PersistentBackgroundProperty"
+                   }
+                 }
+               }
+             ],
+             "optional": true
+           },
+ 
+           "content_scripts": {
+@@ -252,12 +260,17 @@
+             },
+             "additionalProperties": false
+           },
+           {
+             "type": "object",
+             "isInstanceOf": "ImageData"
+           }
+         ]
++      },
++      {
++        "id": "PersistentBackgroundProperty",
++        "type": "boolean",
++        "deprecated": "Event pages are not currently supported. This will run as a persistent background page."
+       }
+     ]
+   }
+ ]
+diff --git a/toolkit/components/extensions/test/mochitest/chrome.ini b/toolkit/components/extensions/test/mochitest/chrome.ini
+--- a/toolkit/components/extensions/test/mochitest/chrome.ini
++++ b/toolkit/components/extensions/test/mochitest/chrome.ini
+@@ -2,8 +2,9 @@
+ skip-if = os == 'android'
+ support-files =
+   file_download.html
+   file_download.txt
+ 
+ [test_chrome_ext_downloads_download.html]
+ [test_chrome_ext_downloads_misc.html]
+ [test_chrome_ext_downloads_search.html]
++[test_chrome_ext_eventpage_warning.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_chrome_ext_eventpage_warning.html b/toolkit/components/extensions/test/mochitest/test_chrome_ext_eventpage_warning.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_chrome_ext_eventpage_warning.html
+@@ -0,0 +1,82 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for WebExtension EventPage Warning</title>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SpawnTask.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" href="chrome://mochikit/contents/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++function createEventPageExtension(eventPage) {
++  function eventPageScript() {
++    browser.test.log("running event page as background script");
++    browser.test.sendMessage("running", 1);
++  }
++
++  return ExtensionTestUtils.loadExtension({
++    manifest: {
++      "background": eventPage,
++    },
++    files: {
++      "event-page-script.js": `(${eventPageScript})()`,
++      "event-page.html": `<html><head>
++        <meta charset="utf-8">
++        <script src="event-page-script.js"></${"script"}>
++      </head></html>`,
++    },
++  });
++}
++
++add_task(function* test_eventpages() {
++  // Used in other tests to prevent the monitorConsole to grip.
++  SimpleTest.waitForExplicitFinish();
++
++  let testCases = [
++    {
++      message: "testing event page running as a background page",
++      eventPage: {
++        "page": "event-page.html",
++        "persistent": false,
++      },
++    },
++    {
++      message: "testing event page scripts running as a background page",
++      eventPage: {
++        "scripts": ["event-page-script.js"],
++        "persistent": false,
++      },
++    },
++  ];
++
++  for (let {message, eventPage} of testCases) {
++    info(message);
++
++    // Wait for the expected logged warnings from the manifest validation.
++    let waitForConsole = new Promise(resolve => {
++      SimpleTest.monitorConsole(resolve, [{message: /Event pages are not currently supported./}]);
++    });
++
++    let extension = createEventPageExtension(eventPage);
++
++    info("load complete");
++    let [, x] = yield Promise.all([extension.startup(), extension.awaitMessage("running")]);
++    is(x, 1, "got correct value from extension");
++    info("test complete");
++    yield extension.unload();
++    info("extension unloaded successfully");
++
++    SimpleTest.endMonitorConsole();
++    yield waitForConsole;
++  }
++});
++
++</script>
++
++</body>
++</html>

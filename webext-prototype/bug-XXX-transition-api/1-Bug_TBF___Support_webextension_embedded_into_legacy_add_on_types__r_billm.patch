@@ -1,0 +1,302 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1455426545 -3600
+#      Sun Feb 14 06:09:05 2016 +0100
+# Node ID c95265e0e26e2e7cc012fff539807d8f3d067b5f
+# Parent  31150215eedfe1406dbd92058635eb619e817939
+Bug TBF - Support webextension embedded into legacy add-on types. r?billm
+
+diff --git a/addon-sdk/source/lib/sdk/addon/bootstrap.js b/addon-sdk/source/lib/sdk/addon/bootstrap.js
+--- a/addon-sdk/source/lib/sdk/addon/bootstrap.js
++++ b/addon-sdk/source/lib/sdk/addon/bootstrap.js
+@@ -118,17 +118,21 @@ Bootstrap.prototype = {
+         paths: Object.assign({
+           "": "resource://gre/modules/commonjs/",
+           "devtools/": "resource://devtools/",
+           "./": baseURI
+         }, readPaths(id)),
+         manifest: metadata,
+         metadata: metadata,
+         modules: {
+-          "@test/options": {}
++          "@test/options": {},
++          "webextension/transition-api": addon.webextension ||
++            Promise.reject(new Error("No 'webextension/transition-api' module available. " +
++                                     "('enableWebextensionTransitionContext' option not enabled " +
++                                     "in the install.rdf)"))
+         },
+         noQuit: prefs.get(`extensions.${id}.sdk.test.no-quit`, false)
+       });
+       self.loader = loader;
+ 
+       const module = Module("package.json", `${baseURI}package.json`);
+       const require = Require(loader, module);
+       const main = command === "test" ? "sdk/test/runner" : null;
+diff --git a/toolkit/components/extensions/ExtensionTransitionContext.jsm b/toolkit/components/extensions/ExtensionTransitionContext.jsm
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/ExtensionTransitionContext.jsm
+@@ -0,0 +1,132 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++this.EXPORTED_SYMBOLS = ["ExtensionTransitionAPI"];
++
++/* globals ExtensionTransitionAPI */
++
++/*
++ * This file defines a small API which help legacy add-on types to gradually transition
++ * to the WebExtension APIs by embedding a WebExtension and exchange messages between the legacy
++ * and the WebExtension add-on contexts.
++ */
++
++const Ci = Components.interfaces;
++const Cc = Components.classes;
++const Cu = Components.utils;
++const Cr = Components.results;
++const CC = Components.Constructor;
++
++Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/Extension.jsm");
++Cu.import("resource://gre/modules/ExtensionUtils.jsm");
++const {
++  MessageBroker,
++  Messenger,
++  BaseContext,
++} = ExtensionUtils;
++
++const globalBroker = new MessageBroker([Services.mm, Services.ppmm]);
++
++const systemPrincipal = CC('@mozilla.org/systemprincipal;1', 'nsIPrincipal')();
++
++const ns = Symbol();
++
++class ExtensionTransitionContext extends BaseContext {
++  constructor(data, { forgetContext }) {
++    super();
++
++    this[ns] = {};
++    this[ns].data = data;
++    this[ns].webextension = new Extension(data);
++    this[ns].forgetContext = forgetContext;
++
++    let url = this[ns].webextension.baseURI.resolve("./legacy-addon/");
++    let sender = { id: this[ns].webextension.uuid, url };
++    let filter = { extensionId: this[ns].webextension.id };
++    let delegate = { getSender() {} };
++    let addonPrincipal = Cc["@mozilla.org/systemprincipal;1"].createInstance(Ci.nsIPrincipal);
++
++    this[ns].messenger = new Messenger(this, globalBroker, sender, filter, delegate);
++    this[ns].cloneScope = Cu.Sandbox(addonPrincipal, {});
++    Cu.setSandboxMetadata(this[ns].cloneScope, { id: this[ns].webextension.id });
++
++    this[ns].loaded = false;
++    this[ns].unloaded = false;
++
++    const priv = this[ns];
++
++    this[ns].api = {
++      get loaded() { return priv.loaded; },
++      get unloaded() { return priv.unloaded; },
++      onConnect: this[ns].messenger.onConnect("runtime.onConnect")
++    };
++  }
++
++  get cloneScope() {
++    return this[ns].cloneScope;
++  }
++
++  get type() {
++    return "transition";
++  }
++
++  get contentWindow() {
++    return this[ns].cloneScope;
++  }
++
++  get principal() {
++    return systemPrincipal;
++  }
++
++  // _ -> Promise<ExtensionTransitionAPI>
++  startup() {
++    if (this[ns].loaded) {
++      return Promise.resolve(this[ns].api);
++    }
++
++    return this[ns].webextension.startup().then(() => {
++      this[ns].loaded = true;
++      this[ns].unloaded = false;
++      return this[ns].api;
++    });
++  }
++
++  // _ -> Promise<ExtensionTransitionAPI>
++  shutdown() {
++    if (!this[ns].unloaded) {
++      this[ns].webextension.shutdown();
++      this.unload();
++      this[ns].unloaded = true;
++      this[ns].loaded = false;
++      this[ns].forgetContext();
++      Cu.nukeSandbox(this[ns].cloneScope);
++    }
++
++    return Promise.resolve(this[ns].api);
++  }
++}
++
++const transitionContexts = new Map();
++
++this.ExtensionTransitionAPI = {
++  getContext(data) {
++    if (transitionContexts.has(data.id)) {
++      return transitionContexts.get(data.id);
++    }
++
++    let context = new ExtensionTransitionContext(data, {
++      forgetContext: () => {
++        if (transitionContexts.has(data.id)) {
++          transitionContexts.delete(data.id);
++        }
++      }
++    });
++    transitionContexts.set(data.id, context);
++
++    return context;
++  },
++};
+diff --git a/toolkit/components/extensions/moz.build b/toolkit/components/extensions/moz.build
+--- a/toolkit/components/extensions/moz.build
++++ b/toolkit/components/extensions/moz.build
+@@ -4,16 +4,17 @@
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ EXTRA_JS_MODULES += [
+     'Extension.jsm',
+     'ExtensionContent.jsm',
+     'ExtensionManagement.jsm',
+     'ExtensionStorage.jsm',
++    'ExtensionTransitionContext.jsm',
+     'ExtensionUtils.jsm',
+     'MessageChannel.jsm',
+     'Schemas.jsm',
+ ]
+ 
+ DIRS += ['schemas']
+ 
+ JAR_MANIFESTS += ['jar.mn']
+diff --git a/toolkit/mozapps/extensions/internal/XPIProvider.jsm b/toolkit/mozapps/extensions/internal/XPIProvider.jsm
+--- a/toolkit/mozapps/extensions/internal/XPIProvider.jsm
++++ b/toolkit/mozapps/extensions/internal/XPIProvider.jsm
+@@ -50,16 +50,19 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/Console.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "ProductAddonChecker",
+                                   "resource://gre/modules/addons/ProductAddonChecker.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                   "resource://gre/modules/UpdateUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                   "resource://gre/modules/AppConstants.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "ExtensionTransitionAPI",
++                                  "resource://gre/modules/ExtensionTransitionContext.jsm");
++
+ XPCOMUtils.defineLazyServiceGetter(this, "Blocklist",
+                                    "@mozilla.org/extensions/blocklist;1",
+                                    Ci.nsIBlocklistService);
+ XPCOMUtils.defineLazyServiceGetter(this,
+                                    "ChromeRegistry",
+                                    "@mozilla.org/chrome/chrome-registry;1",
+                                    "nsIChromeRegistry");
+ XPCOMUtils.defineLazyServiceGetter(this,
+@@ -741,16 +744,17 @@ function EM_R(aProperty) {
+ 
+ function createAddonDetails(id, aAddon) {
+   return {
+     id: id || aAddon.id,
+     type: aAddon.type,
+     version: aAddon.version,
+     multiprocessCompatible: aAddon.multiprocessCompatible,
+     runInSafeMode: aAddon.runInSafeMode,
++    enableWebextensionTransitionContext: aAddon.enableWebextensionTransitionContext,
+   };
+ }
+ 
+ /**
+  * Converts an internal add-on type to the type presented through the API.
+  *
+  * @param  aType
+  *         The internal add-on type
+@@ -1065,16 +1069,17 @@ function loadManifestFromRDF(aUri, aStre
+ 
+   addon.strictCompatibility = !(addon.type in COMPATIBLE_BY_DEFAULT_TYPES) ||
+                               getRDFProperty(ds, root, "strictCompatibility") == "true";
+ 
+   // Only read these properties for extensions.
+   if (addon.type == "extension") {
+     addon.bootstrap = getRDFProperty(ds, root, "bootstrap") == "true";
+     addon.multiprocessCompatible = getRDFProperty(ds, root, "multiprocessCompatible") == "true";
++    addon.enableWebextensionTransitionContext = getRDFProperty(ds, root, "enableWebextensionTransitionContext") == "true";
+     if (addon.optionsType &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_DIALOG &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_INLINE &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_TAB &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_INLINE_INFO) {
+       throw new Error("Install manifest specifies unknown type: " + addon.optionsType);
+     }
+   }
+@@ -4599,16 +4604,28 @@ this.XPIProvider = {
+ 
+       let params = {
+         id: aAddon.id,
+         version: aAddon.version,
+         installPath: aFile.clone(),
+         resourceURI: getURIForResourceInFile(aFile, "")
+       };
+ 
++      if (aAddon.enableWebextensionTransitionContext) {
++        let transitionContext = ExtensionTransitionAPI.getContext(params);
++        switch (aReason) {
++        case  BOOTSTRAP_REASONS.ADDON_ENABLE:
++          params.webextension = transitionContext.startup();
++          break;
++        case BOOTSTRAP_REASONS.ADDON_DISABLE:
++          params.webextension = transitionContext.shutdown();
++          break;
++        }
++      }
++
+       if (aExtraParams) {
+         for (let key in aExtraParams) {
+           params[key] = aExtraParams[key];
+         }
+       }
+ 
+       logger.debug("Calling bootstrap method " + aMethod + " on " + aAddon.id + " version " +
+                    aAddon.version);
+diff --git a/toolkit/mozapps/extensions/internal/XPIProviderUtils.js b/toolkit/mozapps/extensions/internal/XPIProviderUtils.js
+--- a/toolkit/mozapps/extensions/internal/XPIProviderUtils.js
++++ b/toolkit/mozapps/extensions/internal/XPIProviderUtils.js
+@@ -74,17 +74,17 @@ const PROP_JSON_FIELDS = ["id", "syncGUI
+                           "optionsType", "aboutURL", "icons", "iconURL", "icon64URL",
+                           "defaultLocale", "visible", "active", "userDisabled",
+                           "appDisabled", "pendingUninstall", "descriptor", "installDate",
+                           "updateDate", "applyBackgroundUpdates", "bootstrap",
+                           "skinnable", "size", "sourceURI", "releaseNotesURI",
+                           "softDisabled", "foreignInstall", "hasBinaryComponents",
+                           "strictCompatibility", "locales", "targetApplications",
+                           "targetPlatforms", "multiprocessCompatible", "signedState",
+-                          "seen"];
++                          "seen", "enableWebextensionTransitionContext"];
+ 
+ // Properties that should be migrated where possible from an old database. These
+ // shouldn't include properties that can be read directly from install.rdf files
+ // or calculated
+ const DB_MIGRATE_METADATA= ["installDate", "userDisabled", "softDisabled",
+                             "sourceURI", "applyBackgroundUpdates",
+                             "releaseNotesURI", "foreignInstall", "syncGUID"];
+ 

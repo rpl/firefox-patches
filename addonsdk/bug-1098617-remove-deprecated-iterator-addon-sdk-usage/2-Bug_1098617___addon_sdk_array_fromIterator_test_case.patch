@@ -1,0 +1,37 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+# Date 1453610654 -3600
+#      Sun Jan 24 05:44:14 2016 +0100
+# Node ID 39d7a88743e071f6ebe3f097d3ccd5b008309e99
+# Parent  c43971d788c7fc050b22131f7a944d0909e7d206
+Bug 1098617 - addon-sdk array fromIterator test case
+
+diff --git a/addon-sdk/source/test/test-array.js b/addon-sdk/source/test/test-array.js
+--- a/addon-sdk/source/test/test-array.js
++++ b/addon-sdk/source/test/test-array.js
+@@ -95,9 +95,25 @@ exports.testUnion = function(assert) {
+ 
+ exports.testFind = function(assert) {
+   let isOdd = (x) => x % 2;
+   assert.equal(array.find([2, 4, 5, 7, 8, 9], isOdd), 5);
+   assert.equal(array.find([2, 4, 6, 8], isOdd), undefined);
+   assert.equal(array.find([2, 4, 6, 8], isOdd, null), null);
+ };
+ 
++exports.testFromIterator = function(assert) {
++  let iterator = {
++    [Symbol.iterator]: function* () { yield* [ 2, 4, 6]; }
++  };
++
++  assert.deepEqual(array.fromIterator(iterator), [2, 4, 6]);
++
++  let deprecatedIterator = {
++    __iterator__: function() { yield 1; yield 5; yield 7; }
++  };
++
++  assert.throws(() => array.fromIterator(deprecatedIterator), TypeError);
++  assert.throws(() => array.fromIterator(deprecatedIterator), /iterator is not iterable/);
++
++};
++
+ require('sdk/test').run(exports);
