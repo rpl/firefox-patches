@@ -1,0 +1,144 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1211859 - WebExtension DevTools RDP Actor
+
+---
+ devtools/server/actors/moz.build                   |  1 +
+ .../server/actors/webextension-devtools-api.js     | 82 ++++++++++++++++++++++
+ devtools/server/main.js                            |  5 ++
+ 3 files changed, 88 insertions(+)
+ create mode 100644 devtools/server/actors/webextension-devtools-api.js
+
+diff --git a/devtools/server/actors/moz.build b/devtools/server/actors/moz.build
+index 02fbefb..7dbc139 100644
+--- a/devtools/server/actors/moz.build
++++ b/devtools/server/actors/moz.build
+@@ -50,11 +50,12 @@ DevToolsModules(
+     'styleeditor.js',
+     'styles.js',
+     'stylesheets.js',
+     'timeline.js',
+     'webapps.js',
+     'webaudio.js',
+     'webbrowser.js',
+     'webconsole.js',
++    'webextension-devtools-api.js',
+     'webgl.js',
+     'worker.js',
+ )
+diff --git a/devtools/server/actors/webextension-devtools-api.js b/devtools/server/actors/webextension-devtools-api.js
+new file mode 100644
+index 0000000..b50f849
+--- /dev/null
++++ b/devtools/server/actors/webextension-devtools-api.js
+@@ -0,0 +1,82 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * The webextensionDevtools actor provides the remote debugging feature needed
++ * by the WebExtension Devtools API:
++ *  - inspectedWindowEval
++ *  - inspectedWindowReload
++ *  - inspectedWindowContentScript
++ */
++
++"use strict";
++
++const {
++  method, Arg, Option, RetVal, Front, FrontClass, Actor, ActorClass
++} = require("devtools/server/protocol");
++
++const events = require("sdk/event/core");
++
++const { Cu } = require("chrome");
++
++const {
++  ExtensionContent
++} = Cu.import("resource://gre/modules/ExtensionContent.jsm", {});
++
++const WebextensionDevtoolsActor = ActorClass({
++  typeName: "webextensionDevtools",
++
++  initialize: function(conn, tabActor) {
++    Actor.prototype.initialize.call(this, conn);
++    this.parentActor = tabActor;
++    this.window = tabActor.window;
++  },
++
++  inspectedWindowEval: method(function(text, options) {
++    let result, isException = false;
++
++    try {
++      result = this.window.eval(text);
++    } catch (e) {
++      result = e.toString();
++      isException = true;
++    }
++
++    return { result, isException };
++  }, {
++    request: {
++      text: Arg(0, "string"),
++      options: Arg(1, "json")
++    },
++    response: {
++      data: RetVal("json")
++    }
++  }),
++
++  inspectedWindowReload: method(function(extensionId, options) {
++    if (options && options.injectedScript) {
++      ExtensionContent.injectScriptOnDocumentStart(
++        this.window, options.injectedScript
++      );
++    }
++
++    this.window.location.reload(options.ignoreCache || false);
++  }, {
++    request: {
++      extensionId: Arg(0, "string"),
++      options: Arg(1, "json")
++    },
++    response: {}
++  })
++});
++
++exports.WebextensionDevtoolsActor = WebextensionDevtoolsActor;
++
++exports.WebextensionDevtoolsFront = FrontClass(WebextensionDevtoolsActor, {
++  initialize: function(client, form) {
++    Front.prototype.initialize.call(this, client);
++    this.actorID = form.webextensionDevtoolsActor;
++    this.manage(this);
++  },
++});
+diff --git a/devtools/server/main.js b/devtools/server/main.js
+index 81c9f03..6253e9f 100644
+--- a/devtools/server/main.js
++++ b/devtools/server/main.js
+@@ -562,16 +562,21 @@ var DebuggerServer = {
+       constructor: "PromisesActor",
+       type: { tab: true }
+     });
+     this.registerModule("devtools/server/actors/performance-entries", {
+       prefix: "performanceEntries",
+       constructor: "PerformanceEntriesActor",
+       type: { tab: true }
+     });
++    this.registerModule("devtools/server/actors/webextension-devtools-api", {
++      prefix: "webextensionDevtools",
++      constructor: "WebextensionDevtoolsActor",
++      type: { tab: true }
++    });
+   },
+ 
+   /**
+    * Passes a set of options to the BrowserAddonActors for the given ID.
+    *
+    * @param aId string
+    *        The ID of the add-on to pass the options to
+    * @param aOptions object
+

@@ -1,0 +1,65 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+TMP: fix webextension devtools api actor after rebase
+
+---
+ .../components/extensions/test/browser/browser_ext_devtools_page.js  | 5 +++--
+ devtools/server/actors/webextension-devtools-api.js                  | 2 +-
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/browser/components/extensions/test/browser/browser_ext_devtools_page.js b/browser/components/extensions/test/browser/browser_ext_devtools_page.js
+index 86f6fac..1961c4a 100644
+--- a/browser/components/extensions/test/browser/browser_ext_devtools_page.js
++++ b/browser/components/extensions/test/browser/browser_ext_devtools_page.js
+@@ -55,23 +55,24 @@ add_task(function* test_devtools() {
+               });
+               browser.test.sendMessage("devtools_panel.inspectedWindow_eval_called")
+             </script>
+           </body>
+         </html>
+       `
+     }
+   });
++
+   info("load complete");
+   yield extension.startup();
++  info("startup complete");
+ 
+   let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "http://mochi.test:8888/");
+   let target = devtools.TargetFactory.forTab(tab);
+-
+-  //Services.prefs.setCharPref("webextension.devtools.evalType", "RDP");
++  info("target tab open")
+ 
+   yield gDevTools.showToolbox(target, 'webconsole');
+   info("developer toolbox opened")
+ 
+   yield Promise.all([
+     extension.awaitMessage("devtools_page.loaded"),
+     extension.awaitMessage("devtools_page.panels_create_called"),
+   ]);
+diff --git a/devtools/server/actors/webextension-devtools-api.js b/devtools/server/actors/webextension-devtools-api.js
+index 9002ca2..e5e2cad 100644
+--- a/devtools/server/actors/webextension-devtools-api.js
++++ b/devtools/server/actors/webextension-devtools-api.js
+@@ -40,17 +40,17 @@ const WebextensionDevtoolsActor = ActorClass({
+   inspectedWindowEval: method(function(text, options, dbgOptions) {
+     // TODO: optionally inject script in content script context
+ 
+     let evalContext = {
+       conn: this.conn,
+       evalWindow: this.window,
+       dbg: this.dbg,
+       getWebConsoleCommands: this._getWebConsoleCommands.bind(this),
+-      getActorByID: this.getActorByID.bind(this)
++      getActorByID: (actorID) => this.registeredPool.get(actorID)
+     };
+ 
+     let evalInfo = evalWithDebugger(evalContext, text, dbgOptions);
+ 
+     let evalResult = evalInfo.result;
+ 
+     /*
+       From: https://developer.chrome.com/extensions/devtools_inspectedWindow#method-eval
+

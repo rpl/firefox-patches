@@ -1,0 +1,518 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1211859 - add open extension devtools API and devtools_page and devtools_panel extension pages
+
+---
+ browser/components/extensions/ext-devtools.js      | 315 +++++++++++++++++++++
+ browser/components/extensions/jar.mn               |   1 +
+ .../components/extensions/test/browser/browser.ini |   1 +
+ .../test/browser/browser_ext_devtools_page.js      |  98 +++++++
+ browser/components/extensions/test/browser/head.js |   5 +
+ browser/components/nsBrowserGlue.js                |   1 +
+ 6 files changed, 421 insertions(+)
+ create mode 100644 browser/components/extensions/ext-devtools.js
+ create mode 100644 browser/components/extensions/test/browser/browser_ext_devtools_page.js
+
+diff --git a/browser/components/extensions/ext-devtools.js b/browser/components/extensions/ext-devtools.js
+new file mode 100644
+index 0000000..021addc
+--- /dev/null
++++ b/browser/components/extensions/ext-devtools.js
+@@ -0,0 +1,315 @@
++Cu.import("resource://gre/modules/ExtensionUtils.jsm");
++var {
++  EventManager,
++  ignoreEvent,
++  runSafe,
++  runSafeWithoutClone,
++} = ExtensionUtils;
++
++let { gDevTools } = Cu.import("resource:///modules/devtools/client/framework/gDevTools.jsm", {});
++
++// Map[extension -> devtools_page]
++let devtoolsPageMap = new Map();
++
++extensions.on("manifest_devtools_page", (type, directive, extension, manifest) => {
++  let devtoolsPage = new DevtoolsPage(manifest[directive], extension);
++  devtoolsPageMap.set(extension, devtoolsPage);
++});
++
++class DevtoolsPage {
++  constructor(url, extension) {
++    this.url = url;
++    this.extension = extension;
++
++    // Map[target -> ExtensionPage]
++    this.targetContextMap = new Map();
++
++    // Set[DevtoolsPanel]
++    this.devtoolsPanelSet = new Set();
++  }
++
++  shutdown() {
++    // TODO: destroy method
++    // - destroy devtools page toolbox contexts
++    // - destroy devtools panels
++    for (let panel of this.devtoolsPanelSet) {
++      panel.shutdown();
++    }
++    this.devtoolsPanelSet.clear();
++
++    for (let target of this.targetContextMap.keys()) {
++      this.shutdownForTarget(target);
++    }
++    this.targetContextMap.clear();
++  }
++
++  trackDevtoolsPanel(panel) {
++    this.devtoolsPanelSet.add(panel);
++  }
++
++  buildForToolbox(toolbox) {
++    if (this.targetContextMap.has(toolbox.target)) {
++      return;
++    }
++    let webNav = Services.appShell.createWindowlessBrowser(false);
++
++    let principal = Services.scriptSecurityManager.createCodebasePrincipal(this.extension.baseURI, {addonId: this.extension.id});
++
++    let interfaceRequestor = webNav.QueryInterface(Ci.nsIInterfaceRequestor);
++    let docShell = interfaceRequestor.getInterface(Ci.nsIDocShell);
++
++    let context = new ExtensionPage(this.extension, {type: "devtools_page", docShell});
++    context.toolbox = toolbox;
++    GlobalManager.injectInDocShell(docShell, this.extension, context);
++
++    docShell.createAboutBlankContentViewer(principal);
++
++    let window = webNav.document.defaultView;
++    context.contentWindow = window;
++    context.webNav = webNav;
++    context.docShell = docShell;
++
++    let url;
++    url = this.extension.baseURI.resolve(this.url);
++    webNav.loadURI(url, 0, null, null, null);
++
++    this.targetContextMap.set(toolbox.target, context);
++  }
++
++  shutdownForTarget(target) {
++    let context = this.targetContextMap.get(target);
++    if (context && context.webNav) {
++      context.webNav.loadURI("about:blank", 0, null, null, null);
++      context.webNav = null;
++    }
++  }
++}
++
++gDevTools.on("toolbox-ready", (evt, toolbox) => {
++  for (let entry of devtoolsPageMap.entries()) {
++    let [extension, devtoolsPage] = entry;
++    devtoolsPage.buildForToolbox(toolbox);
++  }
++});
++
++gDevTools.on("toolbox-destroyed", (evt, target) => {
++  for (let entry of devtoolsPageMap.entries()) {
++    let [extension, devtoolsPage] = entry;
++
++    devtoolsPage.shutdownForTarget(target);
++  }
++});
++
++function makeWidgetId(id)
++{
++  id = id.toLowerCase();
++  return id.replace(/[^a-z0-9_-]/g, "_");
++}
++
++function makeDevtoolsPanelId(id, url)
++{
++  return `${makeWidgetId(id)}-${url}-devtools-panel`;
++}
++
++class DevtoolsPanel {
++  constructor(extension, context, title, icon, url, callback) {
++    this.url = url;
++    this.parentContext = context;
++    this.extension = extension;
++
++    devtoolsPageMap.get(extension).trackDevtoolsPanel(this);
++
++    // Map[toolbox -> ExtensionPage]
++    this.toolboxContextMap = new Map();
++
++    let panelId = this.id = makeDevtoolsPanelId(extension.id, url);
++    let definition = gDevTools.getToolDefinition(panelId);
++
++    if (!definition) {
++      gDevTools.registerTool({
++        id: panelId,
++        url: "about:blank",
++        icon: icon ? this.extension.baseURI.resolve(icon) : null,
++        label: title,
++        invertIconForLightTheme: true,
++        isTargetSupported: target => target.isLocalTab,
++        build: (window, toolbox) => {
++          let context = this.buildForToolbox(window, toolbox);
++
++          return {
++            toolbox,
++            destroy() {
++              context.browser.setAttribute("src", "about:blank");
++              context.browser = null;
++              context.unload();
++            }
++          };
++        }
++      })
++    }
++  }
++
++  shutdown() {
++    for (let context of this.toolboxContextMap.values()) {
++      context.unload();
++    }
++    this.toolboxContextMap.clear();
++
++    if (gDevTools.getToolDefinition(this.id)) {
++      gDevTools.unregisterTool(this.id);
++    }
++  }
++
++  buildForToolbox(window, toolbox) {
++    let { document } = window;
++    const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
++    let browser = document.createElementNS(XUL_NS, "browser");
++    browser.setAttribute("type", "content");
++    browser.setAttribute("disableglobalhistory", "true");
++    browser.setAttribute("style", "width: 100%; height: 100%;");
++    document.body.setAttribute("style", "margin: 0; padding: 0;")
++    document.body.appendChild(browser);
++
++    let url = this.extension.baseURI.resolve(this.url);
++
++    let context = new ExtensionPage(this.extension, {
++      type: "devtools_panel",
++      contentWindow: browser.contentWindow,
++      uri: Services.io.newURI(url, null, null),
++      docShell: browser.docShell,
++    });
++    context.toolbox = toolbox;
++    context.browser = browser;
++
++    this.toolboxContextMap.set(toolbox, context);
++
++    GlobalManager.injectInDocShell(browser.docShell, this.extension, context);
++    browser.setAttribute("src", url);
++
++    return context;
++  }
++}
++
++extensions.registerAPI((extension, context) => {
++  // filter or any extension page besides devtools_page and devtools_panel types
++  if (["devtools_page", "devtools_panel"].indexOf(context.type) < 0) {
++    return;
++  }
++
++  let { toolbox } = context;
++
++  // filter out any page without a valid toolbox or target
++  // TODO: raise an exception? what about "about:blank" used to unload the
++  // devtools page?
++  if (!toolbox || !toolbox.target) {
++    return;
++  }
++
++  let { target } = toolbox;
++
++  let windowId, tabId;
++
++  if (target.isLocalTab) {
++    let browser = target.tab.linkedBrowser;
++    let parentWindow = browser.ownerDocument.defaultView;
++    windowId = WindowManager.getId(parentWindow);
++
++    let tab = parentWindow.gBrowser.getTabForBrowser(browser);
++    tabId = TabManager.getId(tab);
++
++    context.windowId = windowId;
++    context.tabId = tabId;
++  } else {
++    // TODO: windowID and tabId for remote tabs needs to get tab manager info
++    // from the TabManager on the remote side
++  }
++
++  // devtools API
++  let devtools = {
++    inspectedWindow: {
++      windowId,
++      tabId,
++      getResources() {
++        // TODO: incomplete, currently it is just a shim
++        return [ { type: "document", url: target.url } ];
++      },
++      eval(text, options = {}, cb) {
++        if (typeof options == "function") {
++          cb = options;
++          options = {};
++        }
++
++        // TODO: add support to eval options
++        // NOTE: support for evaluating into frames can use bindObjectActor?
++
++        // raise exception on unsupported options
++        for (k of ["frameURL", "useContentScriptContext", "contextSecurityOrigin"]) {
++          if (k == "frameURL" && options[k] === target.url) {
++            // tollerate unsupported frameURL if equal to the target url
++            continue;
++          }
++
++          if (options[k]) {
++            throw context.contentWindow.Error(`Unsupported option ${k}: ${options[k]}`);
++          }
++        }
++
++        // TODO: cb should receive exceptionInfo
++        target.activeConsole.evaluateJSAsync(text, (res) => {
++          if (res.error) {
++            runSafe(context, cb, res.error, true);
++          } else {
++            // TODO: check typeof result is string or dump error
++            runSafe(context, cb, res.plainResult, false);
++          }
++        }, {
++          unsafeDereference: true
++        });
++      },
++      reload(options = {}) {
++        // TODO: add support for custom userAgent, log deprecated on preprocessorScript
++
++        // raise exception on unsupported options
++        for (k of ["userAgent", "preprocessorScript"]) {
++          if (options[k]) {
++            throw context.contentWindow.Error(`Unsupported ${k} option`);
++          }
++        }
++
++        let { injectedScript, ignoreCache } = options;
++
++        target.activeConsole.evaluateJSAsync(injectedScript, _ => {}, {
++          runOnNextWindowReady: true
++        });
++
++        target.activeTab.reload({ force: ignoreCache });
++      }
++    },
++    panels: {
++      elements: {
++        createSidebarPane() {}
++      },
++      create(title, icon, url, cb) {
++        let tool = new DevtoolsPanel(extension, context, title, icon, url);
++
++        let waitReady = (evt, panel) => {
++          if (typeof cb == "function") {
++            // TODO: should return a panel object
++            runSafe(context, cb, {});
++          }
++        }
++
++        toolbox.once(`${tool.id}-ready`, waitReady);
++      }
++    }
++  };
++
++  return { devtools };
++});
++
++extensions.on("shutdown", (type, extension) => {
++  if (devtoolsPageMap.has(extension)) {
++    devtoolsPageMap.get(extension).shutdown();
++    devtoolsPageMap.delete(extension);
++  }
++});
+diff --git a/browser/components/extensions/jar.mn b/browser/components/extensions/jar.mn
+index faa5d58..ca9667d 100644
+--- a/browser/components/extensions/jar.mn
++++ b/browser/components/extensions/jar.mn
+@@ -6,8 +6,9 @@ browser.jar:
+     content/browser/extension.svg
+     content/browser/ext-utils.js
+     content/browser/ext-contextMenus.js
+     content/browser/ext-browserAction.js
+     content/browser/ext-pageAction.js
+     content/browser/ext-tabs.js
+     content/browser/ext-windows.js
+     content/browser/ext-bookmarks.js
++    content/browser/ext-devtools.js
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+index afa0702..ee6b386 100644
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -24,8 +24,9 @@ support-files =
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_getCurrent.js]
+ [browser_ext_tabs_update.js]
+ [browser_ext_tabs_onUpdated.js]
+ [browser_ext_tabs_sendMessage.js]
+ [browser_ext_windows_update.js]
+ [browser_ext_contentscript_connect.js]
+ [browser_ext_tab_runtimeConnect.js]
++[browser_ext_devtools_page.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_devtools_page.js b/browser/components/extensions/test/browser/browser_ext_devtools_page.js
+new file mode 100644
+index 0000000..86f6fac
+--- /dev/null
++++ b/browser/components/extensions/test/browser/browser_ext_devtools_page.js
+@@ -0,0 +1,98 @@
++add_task(function* test_devtools() {
++  let { gDevTools } = Cu.import("resource:///modules/devtools/client/framework/gDevTools.jsm", {});
++  let { devtools } = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {});
++
++  let extension = ExtensionTestUtils.loadExtension({
++    manifest: {
++      devtools_page: "devtools_page.html",
++    },
++    files: {
++      'devtools_page.html': `
++        <!DOCTYPE html>
++        <html>
++          <head>
++            <meta charset="utf-8">
++            <title>Devtools Page</title>
++            <script src="devtools_page.js"></script>
++          </head>
++          <body>
++
++          </body>
++        </html>
++      `,
++      'devtools_page.js': function() {
++        browser.test.sendMessage("devtools_page.loaded");
++
++        browser.test.assertTrue(browser.devtools, "browser.devtools api found");
++        browser.test.assertTrue(browser.devtools.panels, "browser.devtools.panels api found");
++        browser.test.assertTrue(browser.devtools.inspectedWindow, "browser.devtools.inspectedWindow api found");
++
++        browser.devtools.panels.create("test-panel", "icon.png", "devtools_panel.html", function(panel) {
++          browser.test.sendMessage("devtools_page.panels_create_callback")
++        });
++        browser.test.sendMessage("devtools_page.panels_create_called")
++      },
++      'devtools_panel.html': `
++        <!DOCTYPE html>
++        <html>
++          <head>
++            <meta charset="utf-8">
++          </head>
++          <body>
++            <h1>DEVTOOLSPANEL</h1>
++            <script>
++              browser.test.sendMessage("devtools_panel.loaded");
++
++              browser.test.assertTrue(browser.devtools, "browser.devtools api found");
++              browser.test.assertTrue(browser.devtools.inspectedWindow, "browser.devtools.inspectedWindow api found");
++              browser.test.assertTrue(browser.devtools.inspectedWindow.eval, "browser.devtools.inspectedWindow.eval api found");
++
++              browser.devtools.inspectedWindow.eval("({ test_key: 'test_value'})", (res, isException) => {
++                browser.test.sendMessage("devtools_panel.inspectedWindow_eval_callback")
++
++                browser.test.assertTrue(!isException, "inspectedWindow's isException should be false");
++                browser.test.assertEq("test_value", res.test_key, "inspectedWindow's result should contains the expected data");
++              });
++              browser.test.sendMessage("devtools_panel.inspectedWindow_eval_called")
++            </script>
++          </body>
++        </html>
++      `
++    }
++  });
++  info("load complete");
++  yield extension.startup();
++
++  let tab = yield BrowserTestUtils.openNewForegroundTab(gBrowser, "http://mochi.test:8888/");
++  let target = devtools.TargetFactory.forTab(tab);
++
++  //Services.prefs.setCharPref("webextension.devtools.evalType", "RDP");
++
++  yield gDevTools.showToolbox(target, 'webconsole');
++  info("developer toolbox opened")
++
++  yield Promise.all([
++    extension.awaitMessage("devtools_page.loaded"),
++    extension.awaitMessage("devtools_page.panels_create_called"),
++  ]);
++
++  info("devtools_page created and loaded")
++
++  yield gDevTools.showToolbox(target, makeDevtoolsPanelId(extension.id, "devtools_panel.html"));
++
++  yield Promise.all([
++    extension.awaitMessage("devtools_panel.loaded"),
++    extension.awaitMessage("devtools_panel.inspectedWindow_eval_called"),
++    extension.awaitMessage("devtools_panel.inspectedWindow_eval_callback")
++  ]);
++
++  info("devtools_panel created, loaded and inspectedWindow eval executed")
++
++  info("test complete");
++
++  yield extension.unload();
++  yield gDevTools.closeToolbox(target);
++  yield BrowserTestUtils.removeTab(tab);
++
++  info("extension unloaded successfully");
++});
+diff --git a/browser/components/extensions/test/browser/head.js b/browser/components/extensions/test/browser/head.js
+index aa6d9be..8d9eb9c 100644
+--- a/browser/components/extensions/test/browser/head.js
++++ b/browser/components/extensions/test/browser/head.js
+@@ -1,16 +1,21 @@
+ var {CustomizableUI} = Cu.import("resource:///modules/CustomizableUI.jsm");
+ 
+ function makeWidgetId(id)
+ {
+   id = id.toLowerCase();
+   return id.replace(/[^a-z0-9_-]/g, "_");
+ }
+ 
++function makeDevtoolsPanelId(id, url)
++{
++  return `${makeWidgetId(id)}-${url}-devtools-panel`;
++}
++
+ var focusWindow = Task.async(function* focusWindow(win)
+ {
+   let fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
+   if (fm.activeWindow == win) {
+     return;
+   }
+ 
+   let promise = new Promise(resolve => {
+diff --git a/browser/components/nsBrowserGlue.js b/browser/components/nsBrowserGlue.js
+index b765a65..638ff33 100644
+--- a/browser/components/nsBrowserGlue.js
++++ b/browser/components/nsBrowserGlue.js
+@@ -637,16 +637,17 @@ BrowserGlue.prototype = {
+ 
+     ExtensionManagement.registerScript("chrome://browser/content/ext-utils.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-browserAction.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-pageAction.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-contextMenus.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-tabs.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-windows.js");
+     ExtensionManagement.registerScript("chrome://browser/content/ext-bookmarks.js");
++    ExtensionManagement.registerScript("chrome://browser/content/ext-devtools.js");
+ 
+     this._flashHangCount = 0;
+     this._firstWindowReady = new Promise(resolve => this._firstWindowLoaded = resolve);
+   },
+ 
+   // cleanup (called on application shutdown)
+   _dispose: function BG__dispose() {
+     let os = Services.obs;
+

@@ -1,0 +1,100 @@
+diff --git a/moz.configure b/moz.configure
+--- a/moz.configure
++++ b/moz.configure
+@@ -19,27 +19,36 @@ option('--enable-artifact-builds', env='
+ 
+ @depends('--enable-artifact-builds')
+ def artifact_builds(value):
+     if value:
+         imply_option('--disable-compile-environment')
+         set_config('MOZ_ARTIFACT_BUILDS', '1')
+     return bool(value)
+ 
++option('--artifact-builds-type', env='MOZ_ARTIFACT_BUILDS_TYPE',
++       help='Select the artifact build type (e.g. debug).')
++
++@depends('--artifact-builds-type')
++def artifact_builds_type(value):
++    if value:
++        imply_option('--enable-artifact-builds')
++        imply_option('--disable-compile-environment')
++        set_config('MOZ_ARTIFACT_BUILDS_TYPE', value)
++    return value
+ 
+ option('--disable-compile-environment',
+        help='Disable compiler/library checks')
+ 
+ @depends('--disable-compile-environment')
+ def compile_environment(value):
+     if value:
+         set_config('COMPILE_ENVIRONMENT', '1')
+     return bool(value)
+ 
+-
+ @depends('--help')
+ @advanced
+ def build_backends_choices(help):
+     from mozbuild.backend import backends
+     return tuple(backends)
+ 
+ 
+ option('--enable-build-backend', nargs='+', choices=build_backends_choices,
+diff --git a/python/mozbuild/mozbuild/artifacts.py b/python/mozbuild/mozbuild/artifacts.py
+--- a/python/mozbuild/mozbuild/artifacts.py
++++ b/python/mozbuild/mozbuild/artifacts.py
+@@ -388,24 +388,34 @@ class WinArtifactJob(ArtifactJob):
+ JOB_DETAILS = {
+     # 'android-api-9': (AndroidArtifactJob, 'public/build/fennec-(.*)\.android-arm\.apk'),
+     'android-api-15': (AndroidArtifactJob, ('public/build/fennec-(.*)\.android-arm\.apk',
+                                             None)),
+     'android-x86': (AndroidArtifactJob, ('public/build/fennec-(.*)\.android-i386\.apk',
+                                          None)),
+     'linux': (LinuxArtifactJob, ('public/build/firefox-(.*)\.linux-i686\.tar\.bz2',
+                                  'public/build/firefox-(.*)\.common\.tests\.zip')),
++    'linux-debug': (LinuxArtifactJob, ('public/build/firefox-(.*)\.linux-i686\.tar\.bz2',
++                                 'public/build/firefox-(.*)\.common\.tests\.zip')),
+     'linux64': (LinuxArtifactJob, ('public/build/firefox-(.*)\.linux-x86_64\.tar\.bz2',
+                                    'public/build/firefox-(.*)\.common\.tests\.zip')),
++    'linux64-debug': (LinuxArtifactJob, ('public/build/firefox-(.*)\.linux-x86_64\.tar\.bz2',
++                                   'public/build/firefox-(.*)\.common\.tests\.zip')),
+     'macosx64': (MacArtifactJob, ('public/build/firefox-(.*)\.mac\.dmg',
+                                   'public/build/firefox-(.*)\.common\.tests\.zip')),
++    'macosx64-debug': (MacArtifactJob, ('public/build/firefox-(.*)\.mac\.dmg',
++                                  'public/build/firefox-(.*)\.common\.tests\.zip')),
+     'win32': (WinArtifactJob, ('public/build/firefox-(.*)\.win32.zip',
+                                'public/build/firefox-(.*)\.common\.tests\.zip')),
++    'win32-debug': (WinArtifactJob, ('public/build/firefox-(.*)\.win32.zip',
++                               'public/build/firefox-(.*)\.common\.tests\.zip')),
+     'win64': (WinArtifactJob, ('public/build/firefox-(.*)\.win64.zip',
+                                'public/build/firefox-(.*)\.common\.tests\.zip')),
++    'win64-debug': (WinArtifactJob, ('public/build/firefox-(.*)\.win64.zip',
++                               'public/build/firefox-(.*)\.common\.tests\.zip')),
+ }
+ 
+ 
+ 
+ def get_job_details(job, log=None):
+     cls, (package_re, tests_re) = JOB_DETAILS[job]
+     return cls(package_re, tests_re, log=log)
+ 
+@@ -751,16 +761,20 @@ class Artifacts(object):
+                 return 'android-x86'
+             return 'android-api-15'
+ 
+         target_64bit = False
+         if buildconfig.substs['target_cpu'] == 'x86_64':
+             target_64bit = True
+ 
+         if buildconfig.defines.get('XP_LINUX', False):
++            print(buildconfig.defines, bulldogging.defines.get('MOZ_ARTIFACT_BUILDS_TYPE'))
++            os.exit(1)
++            if buildconfig.defines.get('MOZ_DEBUG_SYMBOLS', False):
++              return 'linux64-debug' if target_64bit else 'linux-debug'
+             return 'linux64' if target_64bit else 'linux'
+         if buildconfig.defines.get('XP_WIN', False):
+             return 'win64' if target_64bit else 'win32'
+         if buildconfig.defines.get('XP_MACOSX', False):
+             # We only produce unified builds in automation, so the target_cpu
+             # check is not relevant.
+             return 'macosx64'
+         raise Exception('Cannot determine default job for |mach artifact|!')

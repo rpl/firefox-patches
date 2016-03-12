@@ -1,0 +1,33 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+TMP: removed unused vars
+
+---
+ devtools/server/actors/webextension-devtools-api.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/devtools/server/actors/webextension-devtools-api.js b/devtools/server/actors/webextension-devtools-api.js
+index e5e2cad..51f4935 100644
+--- a/devtools/server/actors/webextension-devtools-api.js
++++ b/devtools/server/actors/webextension-devtools-api.js
+@@ -8,17 +8,17 @@
+  *  - inspectedWindowEval
+  *  - inspectedWindowReload
+  *  - inspectedWindowContentScript
+  */
+ 
+ "use strict";
+ 
+ const {
+-  method, Arg, Option, RetVal, Front, FrontClass, Actor, ActorClass
++  method, Arg, RetVal, Front, FrontClass, Actor, ActorClass
+ } = require("devtools/server/protocol");
+ 
+ const events = require("sdk/event/core");
+ 
+ const evalWithDebugger = require("./utils/evalWithDebugger");
+ const { addWebConsoleCommands } = require("devtools/shared/webconsole/utils");
+ 
+ const { Cu } = require("chrome");
+

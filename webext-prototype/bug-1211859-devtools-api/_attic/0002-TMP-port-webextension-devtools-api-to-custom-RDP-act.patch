@@ -1,0 +1,79 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+TMP: port webextension devtools api to custom RDP actor methods
+
+---
+ browser/components/extensions/ext-devtools.js | 32 ++++++++++++++++-----------
+ 1 file changed, 19 insertions(+), 13 deletions(-)
+
+diff --git a/browser/components/extensions/ext-devtools.js b/browser/components/extensions/ext-devtools.js
+index 021addc..4b7ba8a 100644
+--- a/browser/components/extensions/ext-devtools.js
++++ b/browser/components/extensions/ext-devtools.js
+@@ -249,45 +249,51 @@ extensions.registerAPI((extension, context) => {
+             continue;
+           }
+ 
+           if (options[k]) {
+             throw context.contentWindow.Error(`Unsupported option ${k}: ${options[k]}`);
+           }
+         }
+ 
+-        // TODO: cb should receive exceptionInfo
+-        target.activeConsole.evaluateJSAsync(text, (res) => {
+-          if (res.error) {
+-            runSafe(context, cb, res.error, true);
+-          } else {
+-            // TODO: check typeof result is string or dump error
+-            runSafe(context, cb, res.plainResult, false);
++        // TODO: pass dbgOptions
++        let dbgOptions = {}
++        target.client.request({
++          extensionId: extension.id,
++          to: target.form.webextensionDevtoolsActor,
++          type: "inspectedWindowEval",
++          text, options, dbgOptions
++        }, (res) => {
++          let { result, exceptionInfo } = res.data;
++          try {
++            result = JSON.parse(result);
++          } catch(e) {
++            Cu.reportError(`Error decoding eval result: ${e.toString()}`);
+           }
+-        }, {
+-          unsafeDereference: true
++          runSafe(context, cb, result, exceptionInfo);
+         });
+       },
+       reload(options = {}) {
+         // TODO: add support for custom userAgent, log deprecated on preprocessorScript
+ 
+         // raise exception on unsupported options
+         for (k of ["userAgent", "preprocessorScript"]) {
+           if (options[k]) {
+             throw context.contentWindow.Error(`Unsupported ${k} option`);
+           }
+         }
+ 
+         let { injectedScript, ignoreCache } = options;
+ 
+-        target.activeConsole.evaluateJSAsync(injectedScript, _ => {}, {
+-          runOnNextWindowReady: true
++        target.client.request({
++          to: target.form.webextensionDevtoolsActor,
++          type: "inspectedWindowReload",
++          extensionId: extension.id,
++          options
+         });
+-
+-        target.activeTab.reload({ force: ignoreCache });
+       }
+     },
+     panels: {
+       elements: {
+         createSidebarPane() {}
+       },
+       create(title, icon, url, cb) {
+         let tool = new DevtoolsPanel(extension, context, title, icon, url);
+

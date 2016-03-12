@@ -1,0 +1,244 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+TMP: port webextension devtools actor to experimental evalWithDebugger module
+
+---
+ .../server/actors/webextension-devtools-api.js     | 172 +++++++++++++++++++--
+ 1 file changed, 162 insertions(+), 10 deletions(-)
+
+diff --git a/devtools/server/actors/webextension-devtools-api.js b/devtools/server/actors/webextension-devtools-api.js
+index b50f849..9002ca2 100644
+--- a/devtools/server/actors/webextension-devtools-api.js
++++ b/devtools/server/actors/webextension-devtools-api.js
+@@ -13,67 +13,219 @@
+ "use strict";
+ 
+ const {
+   method, Arg, Option, RetVal, Front, FrontClass, Actor, ActorClass
+ } = require("devtools/server/protocol");
+ 
+ const events = require("sdk/event/core");
+ 
++const evalWithDebugger = require("./utils/evalWithDebugger");
++const { addWebConsoleCommands } = require("devtools/shared/webconsole/utils");
++
+ const { Cu } = require("chrome");
+ 
+ const {
+   ExtensionContent
+ } = Cu.import("resource://gre/modules/ExtensionContent.jsm", {});
+ 
+ const WebextensionDevtoolsActor = ActorClass({
+   typeName: "webextensionDevtools",
+ 
+   initialize: function(conn, tabActor) {
+     Actor.prototype.initialize.call(this, conn);
+     this.parentActor = tabActor;
+     this.window = tabActor.window;
++    this.dbg = this.parentActor.makeDebugger();
+   },
+ 
+-  inspectedWindowEval: method(function(text, options) {
+-    let result, isException = false;
++  inspectedWindowEval: method(function(text, options, dbgOptions) {
++    // TODO: optionally inject script in content script context
++
++    let evalContext = {
++      conn: this.conn,
++      evalWindow: this.window,
++      dbg: this.dbg,
++      getWebConsoleCommands: this._getWebConsoleCommands.bind(this),
++      getActorByID: this.getActorByID.bind(this)
++    };
++
++    let evalInfo = evalWithDebugger(evalContext, text, dbgOptions);
++
++    let evalResult = evalInfo.result;
++
++    /*
++      From: https://developer.chrome.com/extensions/devtools_inspectedWindow#method-eval
++
++      The expression must evaluate to a JSON-compliant object, otherwise an
++      exception is thrown.
++      The eval function can report either a DevTools-side error or a JavaScript
++      exception that occurs during evaluation.
++      In either case, the result parameter of the callback is undefined.
++      In the case of a DevTools-side error, the isException parameter is
++      non-null and has isError set to true and code set to an error code.
++      In the case of a JavaScript error, isException is set to true and
++      value is set to the string value of thrown object.
++    */
++
++    let result, exceptionInfo;
+ 
+-    try {
+-      result = this.window.eval(text);
+-    } catch (e) {
+-      result = e.toString();
+-      isException = true;
++    // TODO: show in error console if no callback is waiting the result
++    // TODO: when evalResult is null/undefined and what to do
++    if (evalResult) {
++      if ("return" in evalResult) {
++        result = evalResult.return;
++        exceptionInfo = null;
++      } else if ("yield" in evalResult) {
++        result = evalResult.yield;
++      } else if ("throw" in evalResult) {
++        let error = evalResult.throw;
++        // XXXworkers: Calling unsafeDereference() returns an object with no
++        // toString method in workers. See Bug 1215120.
++        let unsafeDereference = error && (typeof error === "object") &&
++                                error.unsafeDereference();
++        let errorMessage = unsafeDereference && unsafeDereference.toString
++          ? unsafeDereference.toString()
++          : "" + error;
++
++        exceptionInfo = {
++          isException: true,
++          value: errorMessage
++        };
++      }
++    }
++
++    if (result) {
++      try {
++        let unsafeDereference = result && (typeof result === "object") &&
++                                result.unsafeDereference();
++        result = JSON.stringify(unsafeDereference);
++      } catch (e) {
++        // TODO: check how chrome behave here
++        result = null;
++        exceptionInfo = {
++          isException: false,
++          isError: true,
++          value: e.toString(),
++          description: "result is not serializable into JSON"
++        };
++      }
+     }
+ 
+-    return { result, isException };
++    console.log("RESULT", result, exceptionInfo, text, evalInfo);
++
++    return { result, exceptionInfo };
+   }, {
+     request: {
+       text: Arg(0, "string"),
+-      options: Arg(1, "json")
++      options: Arg(1, "json"),
++      dbgOptions: Arg(2, "json")
+     },
+     response: {
+       data: RetVal("json")
+     }
+   }),
+ 
+   inspectedWindowReload: method(function(extensionId, options) {
++    /**
++      From: https://developer.chrome.com/extensions/devtools_inspectedWindow#method-reload
++
++      If specified, the script will be injected into every frame of the
++      inspected page immediately upon load, before any of the frame's scripts.
++      The script will not be injected after subsequent reloads—for example,
++      if the user presses Ctrl+R.
++    */
+     if (options && options.injectedScript) {
+       ExtensionContent.injectScriptOnDocumentStart(
+         this.window, options.injectedScript
+       );
+     }
+ 
+     this.window.location.reload(options.ignoreCache || false);
+   }, {
+     request: {
+       extensionId: Arg(0, "string"),
+       options: Arg(1, "json")
+     },
+     response: {}
+-  })
++  }),
++
++  /** Helper */
++
++  /**
++   * Create an object with the API we expose to the Web Console during
++   * JavaScript evaluation.
++   * This object inherits properties and methods from the Web Console actor.
++   *
++   * @private
++   * @param object aDebuggerGlobal
++   *        A Debugger.Object that wraps a content global. This is used for the
++   *        Web Console Commands.
++   * @return object
++   *         The same object as |this|, but with an added |sandbox| property.
++   *         The sandbox holds methods and properties that can be used as
++   *         bindings during JS evaluation.
++   */
++  _getWebConsoleCommands: function(aDebuggerGlobal)
++  {
++    let helpers = {
++      window: this.window,
++      // NOTE: seems unused in webconsole utils module
++      chromeWindow: null,
++      makeDebuggeeValue: aDebuggerGlobal.makeDebuggeeValue.bind(aDebuggerGlobal),
++      // TODO: check if we need createValueGrip(aValue, this._actorPool, this.objectGrip),
++      createValueGrip: () => {},
++      sandbox: Object.create(null),
++      helperResult: null,
++      consoleActor: null,
++    };
++    addWebConsoleCommands(helpers);
++    // TODO: remove any other webconsole helpers?
++
++    // remove helpers which needs the consoleActor and doesn't make any sense in
++    // this context
++    for (var propname of ["$_", "cd"]) {
++      delete helpers[propname];
++    }
++
++    let evalWindow = this.window;
++    function maybeExport(obj, name) {
++      if (typeof obj[name] != "function") {
++        return;
++      }
++
++      // By default, chrome-implemented functions that are exposed to content
++      // refuse to accept arguments that are cross-origin for the caller. This
++      // is generally the safe thing, but causes problems for certain console
++      // helpers like cd(), where we users sometimes want to pass a cross-origin
++      // window. To circumvent this restriction, we use exportFunction along
++      // with a special option designed for this purpose. See bug 1051224.
++
++      // TODO: do we need allowCrossOriginArguments here?
++      obj[name] =
++        Cu.exportFunction(obj[name], evalWindow, { allowCrossOriginArguments: true });
++    }
++    for (let name in helpers.sandbox) {
++      let desc = Object.getOwnPropertyDescriptor(helpers.sandbox, name);
++
++      // TODO: we needs the isWorker in this context?
++      // Workers don't have access to Cu so won't be able to exportFunction.
++      /*if (!isWorker) {
++        maybeExport(desc, 'get');
++        maybeExport(desc, 'set');
++        maybeExport(desc, 'value');
++      }*/
++      if (desc.value) {
++        // Make sure the helpers can be used during eval.
++        desc.value = aDebuggerGlobal.makeDebuggeeValue(desc.value);
++      }
++      Object.defineProperty(helpers.sandbox, name, desc);
++    }
++    return helpers;
++  },
+ });
+ 
+ exports.WebextensionDevtoolsActor = WebextensionDevtoolsActor;
+ 
+ exports.WebextensionDevtoolsFront = FrontClass(WebextensionDevtoolsActor, {
+   initialize: function(client, form) {
+     Front.prototype.initialize.call(this, client);
+     this.actorID = form.webextensionDevtoolsActor;
+

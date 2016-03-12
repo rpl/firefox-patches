@@ -1,0 +1,521 @@
+# HG changeset patch
+# User Luca Greco <luca.greco@alcacoop.it>
+
+Bug 1211859 - refactoring out evailWithDebugger from webconsole actor to shared actor utils module
+
+---
+ devtools/server/actors/utils/evalWithDebugger.js | 214 +++++++++++++++++++++++
+ devtools/server/actors/utils/moz.build           |   1 +
+ devtools/server/actors/webconsole.js             | 212 ++--------------------
+ 3 files changed, 226 insertions(+), 201 deletions(-)
+ create mode 100644 devtools/server/actors/utils/evalWithDebugger.js
+
+diff --git a/devtools/server/actors/utils/evalWithDebugger.js b/devtools/server/actors/utils/evalWithDebugger.js
+new file mode 100644
+index 0000000..c782545
+--- /dev/null
++++ b/devtools/server/actors/utils/evalWithDebugger.js
+@@ -0,0 +1,214 @@
++/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++const DevToolsUtils = require("devtools/shared/DevToolsUtils");
++const { Cu } = require("chrome");
++
++/**
++ * Evaluates a string using the debugger API.
++ *
++ * To allow the variables view to update properties from the Web Console we
++ * provide the "bindObjectActor" mechanism: the Web Console tells the
++ * ObjectActor ID for which it desires to evaluate an expression. The
++ * Debugger.Object pointed at by the actor ID is bound such that it is
++ * available during expression evaluation (executeInGlobalWithBindings()).
++ *
++ * Example:
++ *   _self['foobar'] = 'test'
++ * where |_self| refers to the desired object.
++ *
++ * The |frameActor| property allows the Web Console client to provide the
++ * frame actor ID, such that the expression can be evaluated in the
++ * user-selected stack frame.
++ *
++ * For the above to work we need the debugger and the Web Console to share
++ * a connection, otherwise the Web Console actor will not find the frame
++ * actor.
++ *
++ * The Debugger.Frame comes from the jsdebugger's Debugger instance, which
++ * is different from the Web Console's Debugger instance. This means that
++ * for evaluation to work, we need to create a new instance for the Web
++ * Console Commands helpers - they need to be Debugger.Objects coming from the
++ * jsdebugger's Debugger instance.
++ *
++ * When |bindObjectActor| is used objects can come from different iframes,
++ * from different domains. To avoid permission-related errors when objects
++ * come from a different window, we also determine the object's own global,
++ * such that evaluation happens in the context of that global. This means that
++ * evaluation will happen in the object's iframe, rather than the top level
++ * window.
++ *
++ * @param string aString
++ *        String to evaluate.
++ * @param object [aOptions]
++ *        Options for evaluation:
++ *        - bindObjectActor: the ObjectActor ID to use for evaluation.
++ *          |evalWithBindings()| will be called with one additional binding:
++ *          |_self| which will point to the Debugger.Object of the given
++ *          ObjectActor.
++ *        - selectedObjectActor: Like bindObjectActor, but executes with the
++ *          top level window as the global.
++ *        - frameActor: the FrameActor ID to use for evaluation. The given
++ *        debugger frame is used for evaluation, instead of the global window.
++ *        - selectedNodeActor: the NodeActor ID of the currently selected node
++ *        in the Inspector (or null, if there is no selection). This is used
++ *        for helper functions that make reference to the currently selected
++ *        node, like $0.
++ * @return object
++ *         An object that holds the following properties:
++ *         - dbg: the debugger where the string was evaluated.
++ *         - frame: (optional) the frame where the string was evaluated.
++ *         - window: the Debugger.Object for the global where the string was
++ *         evaluated.
++ *         - result: the result of the evaluation.
++ *         - helperResult: any result coming from a Web Console commands
++ *         function.
++ *         - url: the url to evaluate the script as. Defaults to
++ *         "debugger eval code".
++ */
++module.exports = function evalWithDebugger(evalContext, aString, aOptions = {})
++{
++  let { conn, evalWindow, dbg, getWebConsoleCommands, getActorByID } = evalContext;
++
++  let trimmedString = aString.trim();
++  // The help function needs to be easy to guess, so we make the () optional.
++  if (trimmedString == "help" || trimmedString == "?") {
++    aString = "help()";
++  }
++
++  // Add easter egg for console.mihai().
++  if (trimmedString == "console.mihai()" || trimmedString == "console.mihai();") {
++    aString = "\"http://incompleteness.me/blog/2015/02/09/console-dot-mihai/\"";
++  }
++
++  // Find the Debugger.Frame of the given FrameActor.
++  let frame = null, frameActor = null;
++  if (aOptions.frameActor) {
++    frameActor = conn.getActor(aOptions.frameActor);
++    if (frameActor) {
++      frame = frameActor.frame;
++    }
++    else {
++      DevToolsUtils.reportException("evalWithDebugger",
++        Error("The frame actor was not found: " + aOptions.frameActor));
++    }
++  }
++
++  // If we've been given a frame actor in whose scope we should evaluate the
++  // expression, be sure to use that frame's Debugger (that is, the JavaScript
++  // debugger's Debugger) for the whole operation, not the console's Debugger.
++  // (One Debugger will treat a different Debugger's Debugger.Object instances
++  // as ordinary objects, not as references to be followed, so mixing
++  // debuggers causes strange behaviors.)
++  dbg = frame ? frameActor.threadActor.dbg : dbg;
++  let dbgWindow = dbg.makeGlobalObjectReference(evalWindow);
++
++  // If we have an object to bind to |_self|, create a Debugger.Object
++  // referring to that object, belonging to dbg.
++  let bindSelf = null;
++  if (aOptions.bindObjectActor || aOptions.selectedObjectActor) {
++    let objActor = getActorByID(aOptions.bindObjectActor ||
++                                     aOptions.selectedObjectActor);
++    if (objActor) {
++      let jsObj = objActor.obj.unsafeDereference();
++      // If we use the makeDebuggeeValue method of jsObj's own global, then
++      // we'll get a D.O that sees jsObj as viewed from its own compartment -
++      // that is, without wrappers. The evalWithBindings call will then wrap
++      // jsObj appropriately for the evaluation compartment.
++      let global = Cu.getGlobalForObject(jsObj);
++      let _dbgWindow = dbg.makeGlobalObjectReference(global);
++      bindSelf = dbgWindow.makeDebuggeeValue(jsObj);
++
++      if (aOptions.bindObjectActor) {
++        dbgWindow = _dbgWindow;
++      }
++    }
++  }
++
++  // Get the Web Console commands for the given debugger window.
++  let helpers = typeof getWebConsoleCommands == "function" ?
++    getWebConsoleCommands(dbgWindow) : { sandbox: Object.create(null) };
++
++  let bindings = helpers.sandbox;
++  if (bindSelf) {
++    bindings._self = bindSelf;
++  }
++
++  if (aOptions.selectedNodeActor) {
++    let actor = conn.getActor(aOptions.selectedNodeActor);
++    if (actor) {
++      helpers.selectedNode = actor.rawNode;
++    }
++  }
++
++  // Check if the Debugger.Frame or Debugger.Object for the global include
++  // $ or $$. We will not overwrite these functions with the Web Console
++  // commands.
++  let found$ = false, found$$ = false;
++  if (frame) {
++    let env = frame.environment;
++    if (env) {
++      found$ = !!env.find("$");
++      found$$ = !!env.find("$$");
++    }
++  }
++  else {
++    found$ = !!dbgWindow.getOwnPropertyDescriptor("$");
++    found$$ = !!dbgWindow.getOwnPropertyDescriptor("$$");
++  }
++
++  let $ = null, $$ = null;
++  if (found$) {
++    $ = bindings.$;
++    delete bindings.$;
++  }
++  if (found$$) {
++    $$ = bindings.$$;
++    delete bindings.$$;
++  }
++
++  // Ready to evaluate the string.
++  helpers.evalInput = aString;
++
++  let evalOptions;
++  if (typeof aOptions.url == "string") {
++    evalOptions = { url: aOptions.url };
++  }
++
++  let result;
++  if (frame) {
++    result = frame.evalWithBindings(aString, bindings, evalOptions);
++  }
++  else {
++    result = dbgWindow.executeInGlobalWithBindings(aString, bindings, evalOptions);
++  }
++
++  let helperResult = helpers.helperResult;
++  delete helpers.evalInput;
++  delete helpers.helperResult;
++  delete helpers.selectedNode;
++
++  if ($) {
++    bindings.$ = $;
++  }
++  if ($$) {
++    bindings.$$ = $$;
++  }
++
++  if (bindings._self) {
++    delete bindings._self;
++  }
++
++  return {
++    result: result,
++    helperResult: helperResult,
++    dbg: dbg,
++    frame: frame,
++    window: dbgWindow,
++  };
++};
+diff --git a/devtools/server/actors/utils/moz.build b/devtools/server/actors/utils/moz.build
+index 13bc812..5fd7c32 100644
+--- a/devtools/server/actors/utils/moz.build
++++ b/devtools/server/actors/utils/moz.build
+@@ -3,15 +3,16 @@
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ DevToolsModules(
+     'actor-registry-utils.js',
+     'audionodes.json',
+     'automation-timeline.js',
++    'evalWithDebugger.js',
+     'make-debugger.js',
+     'map-uri-to-addon-id.js',
+     'ScriptStore.js',
+     'stack.js',
+     'TabSources.js',
+     'walker-search.js'
+ )
+diff --git a/devtools/server/actors/webconsole.js b/devtools/server/actors/webconsole.js
+index d6d5539..e756f8d4 100644
+--- a/devtools/server/actors/webconsole.js
++++ b/devtools/server/actors/webconsole.js
+@@ -8,16 +8,18 @@
+ 
+ const Services = require("Services");
+ const { Cc, Ci, Cu } = require("chrome");
+ const { DebuggerServer, ActorPool } = require("devtools/server/main");
+ const { EnvironmentActor, ThreadActor } = require("devtools/server/actors/script");
+ const { ObjectActor, LongStringActor, createValueGrip, stringIsLong } = require("devtools/server/actors/object");
+ const DevToolsUtils = require("devtools/shared/DevToolsUtils");
+ 
++const evalWithDebugger = require("./utils/evalWithDebugger");
++
+ loader.lazyRequireGetter(this, "NetworkMonitor", "devtools/shared/webconsole/network-monitor", true);
+ loader.lazyRequireGetter(this, "NetworkMonitorChild", "devtools/shared/webconsole/network-monitor", true);
+ loader.lazyRequireGetter(this, "ConsoleProgressListener", "devtools/shared/webconsole/network-monitor", true);
+ loader.lazyRequireGetter(this, "events", "sdk/event/core");
+ loader.lazyRequireGetter(this, "ServerLoggingListener", "devtools/shared/webconsole/server-logger", true);
+ loader.lazyRequireGetter(this, "JSPropertyProvider", "devtools/shared/webconsole/js-property-provider", true);
+ 
+ for (let name of ["WebConsoleUtils", "ConsoleServiceListener",
+@@ -842,17 +844,25 @@ WebConsoleActor.prototype =
+     let evalOptions = {
+       bindObjectActor: aRequest.bindObjectActor,
+       frameActor: aRequest.frameActor,
+       url: aRequest.url,
+       selectedNodeActor: aRequest.selectedNodeActor,
+       selectedObjectActor: aRequest.selectedObjectActor,
+     };
+ 
+-    let evalInfo = this.evalWithDebugger(input, evalOptions);
++    let evalContext = {
++      conn: this.conn,
++      evalWindow: this.evalWindow,
++      dbg: this.dbg,
++      getWebConsoleCommands: this._getWebConsoleCommands.bind(this),
++      getActorByID: this.getActorByID.bind(this)
++    };
++    let evalInfo = evalWithDebugger(evalContext, input, evalOptions);
++
+     let evalResult = evalInfo.result;
+     let helperResult = evalInfo.helperResult;
+ 
+     let result, errorMessage, errorGrip = null;
+     if (evalResult) {
+       if ("return" in evalResult) {
+         result = evalResult.return;
+       } else if ("yield" in evalResult) {
+@@ -1069,216 +1079,16 @@ WebConsoleActor.prototype =
+         // Make sure the helpers can be used during eval.
+         desc.value = aDebuggerGlobal.makeDebuggeeValue(desc.value);
+       }
+       Object.defineProperty(helpers.sandbox, name, desc);
+     }
+     return helpers;
+   },
+ 
+-  /**
+-   * Evaluates a string using the debugger API.
+-   *
+-   * To allow the variables view to update properties from the Web Console we
+-   * provide the "bindObjectActor" mechanism: the Web Console tells the
+-   * ObjectActor ID for which it desires to evaluate an expression. The
+-   * Debugger.Object pointed at by the actor ID is bound such that it is
+-   * available during expression evaluation (executeInGlobalWithBindings()).
+-   *
+-   * Example:
+-   *   _self['foobar'] = 'test'
+-   * where |_self| refers to the desired object.
+-   *
+-   * The |frameActor| property allows the Web Console client to provide the
+-   * frame actor ID, such that the expression can be evaluated in the
+-   * user-selected stack frame.
+-   *
+-   * For the above to work we need the debugger and the Web Console to share
+-   * a connection, otherwise the Web Console actor will not find the frame
+-   * actor.
+-   *
+-   * The Debugger.Frame comes from the jsdebugger's Debugger instance, which
+-   * is different from the Web Console's Debugger instance. This means that
+-   * for evaluation to work, we need to create a new instance for the Web
+-   * Console Commands helpers - they need to be Debugger.Objects coming from the
+-   * jsdebugger's Debugger instance.
+-   *
+-   * When |bindObjectActor| is used objects can come from different iframes,
+-   * from different domains. To avoid permission-related errors when objects
+-   * come from a different window, we also determine the object's own global,
+-   * such that evaluation happens in the context of that global. This means that
+-   * evaluation will happen in the object's iframe, rather than the top level
+-   * window.
+-   *
+-   * @param string aString
+-   *        String to evaluate.
+-   * @param object [aOptions]
+-   *        Options for evaluation:
+-   *        - bindObjectActor: the ObjectActor ID to use for evaluation.
+-   *          |evalWithBindings()| will be called with one additional binding:
+-   *          |_self| which will point to the Debugger.Object of the given
+-   *          ObjectActor.
+-   *        - selectedObjectActor: Like bindObjectActor, but executes with the
+-   *          top level window as the global.
+-   *        - frameActor: the FrameActor ID to use for evaluation. The given
+-   *        debugger frame is used for evaluation, instead of the global window.
+-   *        - selectedNodeActor: the NodeActor ID of the currently selected node
+-   *        in the Inspector (or null, if there is no selection). This is used
+-   *        for helper functions that make reference to the currently selected
+-   *        node, like $0.
+-   * @return object
+-   *         An object that holds the following properties:
+-   *         - dbg: the debugger where the string was evaluated.
+-   *         - frame: (optional) the frame where the string was evaluated.
+-   *         - window: the Debugger.Object for the global where the string was
+-   *         evaluated.
+-   *         - result: the result of the evaluation.
+-   *         - helperResult: any result coming from a Web Console commands
+-   *         function.
+-   *         - url: the url to evaluate the script as. Defaults to
+-   *         "debugger eval code".
+-   */
+-  evalWithDebugger: function WCA_evalWithDebugger(aString, aOptions = {})
+-  {
+-    let trimmedString = aString.trim();
+-    // The help function needs to be easy to guess, so we make the () optional.
+-    if (trimmedString == "help" || trimmedString == "?") {
+-      aString = "help()";
+-    }
+-
+-    // Add easter egg for console.mihai().
+-    if (trimmedString == "console.mihai()" || trimmedString == "console.mihai();") {
+-      aString = "\"http://incompleteness.me/blog/2015/02/09/console-dot-mihai/\"";
+-    }
+-
+-    // Find the Debugger.Frame of the given FrameActor.
+-    let frame = null, frameActor = null;
+-    if (aOptions.frameActor) {
+-      frameActor = this.conn.getActor(aOptions.frameActor);
+-      if (frameActor) {
+-        frame = frameActor.frame;
+-      }
+-      else {
+-        DevToolsUtils.reportException("evalWithDebugger",
+-          Error("The frame actor was not found: " + aOptions.frameActor));
+-      }
+-    }
+-
+-    // If we've been given a frame actor in whose scope we should evaluate the
+-    // expression, be sure to use that frame's Debugger (that is, the JavaScript
+-    // debugger's Debugger) for the whole operation, not the console's Debugger.
+-    // (One Debugger will treat a different Debugger's Debugger.Object instances
+-    // as ordinary objects, not as references to be followed, so mixing
+-    // debuggers causes strange behaviors.)
+-    let dbg = frame ? frameActor.threadActor.dbg : this.dbg;
+-    let dbgWindow = dbg.makeGlobalObjectReference(this.evalWindow);
+-
+-    // If we have an object to bind to |_self|, create a Debugger.Object
+-    // referring to that object, belonging to dbg.
+-    let bindSelf = null;
+-    if (aOptions.bindObjectActor || aOptions.selectedObjectActor) {
+-      let objActor = this.getActorByID(aOptions.bindObjectActor ||
+-                                       aOptions.selectedObjectActor);
+-      if (objActor) {
+-        let jsObj = objActor.obj.unsafeDereference();
+-        // If we use the makeDebuggeeValue method of jsObj's own global, then
+-        // we'll get a D.O that sees jsObj as viewed from its own compartment -
+-        // that is, without wrappers. The evalWithBindings call will then wrap
+-        // jsObj appropriately for the evaluation compartment.
+-        let global = Cu.getGlobalForObject(jsObj);
+-        let _dbgWindow = dbg.makeGlobalObjectReference(global);
+-        bindSelf = dbgWindow.makeDebuggeeValue(jsObj);
+-
+-        if (aOptions.bindObjectActor) {
+-          dbgWindow = _dbgWindow;
+-        }
+-      }
+-    }
+-
+-    // Get the Web Console commands for the given debugger window.
+-    let helpers = this._getWebConsoleCommands(dbgWindow);
+-    let bindings = helpers.sandbox;
+-    if (bindSelf) {
+-      bindings._self = bindSelf;
+-    }
+-
+-    if (aOptions.selectedNodeActor) {
+-      let actor = this.conn.getActor(aOptions.selectedNodeActor);
+-      if (actor) {
+-        helpers.selectedNode = actor.rawNode;
+-      }
+-    }
+-
+-    // Check if the Debugger.Frame or Debugger.Object for the global include
+-    // $ or $$. We will not overwrite these functions with the Web Console
+-    // commands.
+-    let found$ = false, found$$ = false;
+-    if (frame) {
+-      let env = frame.environment;
+-      if (env) {
+-        found$ = !!env.find("$");
+-        found$$ = !!env.find("$$");
+-      }
+-    }
+-    else {
+-      found$ = !!dbgWindow.getOwnPropertyDescriptor("$");
+-      found$$ = !!dbgWindow.getOwnPropertyDescriptor("$$");
+-    }
+-
+-    let $ = null, $$ = null;
+-    if (found$) {
+-      $ = bindings.$;
+-      delete bindings.$;
+-    }
+-    if (found$$) {
+-      $$ = bindings.$$;
+-      delete bindings.$$;
+-    }
+-
+-    // Ready to evaluate the string.
+-    helpers.evalInput = aString;
+-
+-    let evalOptions;
+-    if (typeof aOptions.url == "string") {
+-      evalOptions = { url: aOptions.url };
+-    }
+-
+-    let result;
+-    if (frame) {
+-      result = frame.evalWithBindings(aString, bindings, evalOptions);
+-    }
+-    else {
+-      result = dbgWindow.executeInGlobalWithBindings(aString, bindings, evalOptions);
+-    }
+-
+-    let helperResult = helpers.helperResult;
+-    delete helpers.evalInput;
+-    delete helpers.helperResult;
+-    delete helpers.selectedNode;
+-
+-    if ($) {
+-      bindings.$ = $;
+-    }
+-    if ($$) {
+-      bindings.$$ = $$;
+-    }
+-
+-    if (bindings._self) {
+-      delete bindings._self;
+-    }
+-
+-    return {
+-      result: result,
+-      helperResult: helperResult,
+-      dbg: dbg,
+-      frame: frame,
+-      window: dbgWindow,
+-    };
+-  },
+-
+   //////////////////
+   // Event handlers for various listeners.
+   //////////////////
+ 
+   /**
+    * Handler for messages received from the ConsoleServiceListener. This method
+    * sends the nsIConsoleMessage to the remote Web Console client.
+    *
+
