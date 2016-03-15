@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457975172 -3600
 #      Mon Mar 14 18:06:12 2016 +0100
-# Node ID ab4581134464bafcdbfcaf419df7a2cd3382a8af
-# Parent  f0c0480732d36153e8839c7f17394d45f679f87d
+# Node ID 4940b26dce6ce3aa7456c9f3a04309783cfd763a
+# Parent  2044d148312a2097a42803107063a0da096f926d
 Bug 1211665 - ConsoleAPIStorage sets console message event's consoleID for WebExtension pages.
 
 MozReview-Commit-ID: 5v9BWLbgskd
@@ -11,7 +11,7 @@ MozReview-Commit-ID: 5v9BWLbgskd
 diff --git a/dom/base/ConsoleAPIStorage.js b/dom/base/ConsoleAPIStorage.js
 --- a/dom/base/ConsoleAPIStorage.js
 +++ b/dom/base/ConsoleAPIStorage.js
-@@ -121,16 +121,27 @@ ConsoleAPIStorageService.prototype = {
+@@ -121,16 +121,28 @@ ConsoleAPIStorageService.prototype = {
     *        A JavaScript object you want to store.
     */
    recordEvent: function CS_recordEvent(aId, aOuterId, aEvent)
@@ -26,8 +26,9 @@ diff --git a/dom/base/ConsoleAPIStorage.js b/dom/base/ConsoleAPIStorage.js
 +    let msgWindow = Services.wm.getCurrentInnerWindowWithId(aId);
 +    if (msgWindow) {
 +      let {originAttributes: {addonId}} = msgWindow.document.nodePrincipal;
++
 +      if (addonId) {
-+        aEvent.consoleID = "addon/" + addonId;
++        aEvent.consoleID = `addon/${addonId}`;
 +      }
 +    }
 +
@@ -39,3 +40,102 @@ diff --git a/dom/base/ConsoleAPIStorage.js b/dom/base/ConsoleAPIStorage.js
        storage.shift();
      }
  
+diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
+--- a/dom/tests/browser/browser.ini
++++ b/dom/tests/browser/browser.ini
+@@ -17,16 +17,18 @@ skip-if = buildapp == 'mulet'
+ [browser_test__content.js]
+ skip-if = e10s
+ [browser_ConsoleAPITests.js]
+ skip-if = e10s
+ [browser_ConsoleStorageAPITests.js]
+ skip-if = e10s
+ [browser_ConsoleStoragePBTest_perwindowpb.js]
+ skip-if = e10s
++[browser_ConsoleStorageAddonConsoleID.js]
++skip-if = e10s
+ [browser_autofocus_background.js]
+ skip-if= buildapp == 'mulet'
+ [browser_autofocus_preference.js]
+ [browser_bug1238427.js]
+ skip-if = e10s
+ [browser_bug396843.js]
+ skip-if = e10s
+ [browser_focus_steal_from_chrome.js]
+diff --git a/dom/tests/browser/browser_ConsoleStorageAddonConsoleID.js b/dom/tests/browser/browser_ConsoleStorageAddonConsoleID.js
+new file mode 100644
+--- /dev/null
++++ b/dom/tests/browser/browser_ConsoleStorageAddonConsoleID.js
+@@ -0,0 +1,72 @@
++/* Any copyright is dedicated to the Public Domain.
++ http://creativecommons.org/publicdomain/zero/1.0/ */
++
++const ConsoleAPIStorage = Cc["@mozilla.org/consoleAPI-storage;1"]
++      .getService(Ci.nsIConsoleAPIStorage);
++
++const FAKE_ADDON_ID = "test-webext-addon@mozilla.org";
++const EXPECTED_CONSOLE_ID = `addon/${FAKE_ADDON_ID}`;
++const EXPECTED_CONSOLE_MESSAGE_CONTENT = "fake-webext-addon-test-log-message";
++const ConsoleObserver = {
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
++
++  init() {
++    Services.obs.addObserver(this, "console-api-log-event", false);
++  },
++
++  uninit() {
++    Services.obs.removeObserver(this, "console-api-log-event", false);
++  },
++
++  observe(aSubject, aTopic, aData) {
++    if (aTopic == "console-api-log-event") {
++      let consoleAPIMessage = aSubject.wrappedJSObject;
++
++      is(consoleAPIMessage.arguments[0], EXPECTED_CONSOLE_MESSAGE_CONTENT,
++         "the consoleAPIMessage contains the expected message");
++      is(consoleAPIMessage.consoleID, EXPECTED_CONSOLE_ID,
++         "the consoleAPImessage contains the expected consoleID");
++
++      let cachedMessages = ConsoleAPIStorage.getEvents();
++
++      is(cachedMessages.length, 1, "found one console api messsage as expected");
++      is(cachedMessages[0].consoleID, EXPECTED_CONSOLE_ID,
++         "the cached consoleAPImessage contains the expected consoleID");
++
++      finish();
++    }
++  }
++};
++
++function test()
++{
++  ConsoleObserver.init();
++
++  waitForExplicitFinish();
++
++  let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
++  let uuid = uuidGenerator.generateUUID().number;
++  uuid = uuid.slice(1, -1); // Strip { and } off the UUID.
++  let baseURI = NetUtil.newURI("moz-extensions://${uuid}");
++  let originAttributed = {addonId: FAKE_ADDON_ID};
++  let principal = Services.scriptSecurityManager
++        .createCodebasePrincipal(baseURI, originAttributed);
++
++  let chromeWebNav = Services.appShell.createWindowlessBrowser(true);
++  let interfaceRequestor = chromeWebNav.QueryInterface(Ci.nsIInterfaceRequestor);
++  let docShell = interfaceRequestor.getInterface(Ci.nsIDocShell);
++  docShell.createAboutBlankContentViewer(principal);
++
++  info("fake webextension docShell created");
++
++  registerCleanupFunction(function() {
++    ConsoleObserver.uninit();
++    chromeWebNav.close();
++    chromeWebNav = null;
++  });
++
++  let window = docShell.contentViewer.DOMDocument.defaultView;
++  window.location = `javascript:console.log("${EXPECTED_CONSOLE_MESSAGE_CONTENT}")`;
++
++  info("fake webextension page logged a console api message");
++}
