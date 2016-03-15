@@ -1,0 +1,37 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457851183 -3600
+#      Sun Mar 13 07:39:43 2016 +0100
+# Node ID 175ff356e40322409b499931d1157fab98e11816
+# Parent  2044d148312a2097a42803107063a0da096f926d
+Bug 1208590 - [webext] Use contentWindow.console for content-scripts to log in the tab webconsole. r?kmag
+
+- use the contentWindow console object for content-scripts, which generates console message
+  events which can be already logged in the Tab's webconsole
+
+MozReview-Commit-ID: C1cS463gAY6
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -338,16 +338,20 @@ class ExtensionContext extends BaseConte
+     Cu.waiveXrays(this.sandbox).chrome = this.chromeObj;
+ 
+     injectAPI(api(this), this.chromeObj);
+ 
+     // This is an iframe with content script API enabled. (See Bug 1214658 for rationale)
+     if (isExtensionPage) {
+       Cu.waiveXrays(this.contentWindow).chrome = this.chromeObj;
+       Cu.waiveXrays(this.contentWindow).browser = this.chromeObj;
++    } else {
++      // For content script, we copy the console object from the wrapped contentWindow,
++      // which will log the messages in the tab's webconsole.
++      Cu.waiveXrays(this.sandbox).console = this.contentWindow.console;
+     }
+   }
+ 
+   get cloneScope() {
+     return this.sandbox;
+   }
+ 
+   execute(script, shouldRun) {
