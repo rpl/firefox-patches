@@ -1,0 +1,41 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457975172 -3600
+#      Mon Mar 14 18:06:12 2016 +0100
+# Node ID ab4581134464bafcdbfcaf419df7a2cd3382a8af
+# Parent  f0c0480732d36153e8839c7f17394d45f679f87d
+Bug 1211665 - ConsoleAPIStorage sets console message event's consoleID for WebExtension pages.
+
+MozReview-Commit-ID: 5v9BWLbgskd
+
+diff --git a/dom/base/ConsoleAPIStorage.js b/dom/base/ConsoleAPIStorage.js
+--- a/dom/base/ConsoleAPIStorage.js
++++ b/dom/base/ConsoleAPIStorage.js
+@@ -121,16 +121,27 @@ ConsoleAPIStorageService.prototype = {
+    *        A JavaScript object you want to store.
+    */
+   recordEvent: function CS_recordEvent(aId, aOuterId, aEvent)
+   {
+     if (!_consoleStorage.has(aId)) {
+       _consoleStorage.set(aId, []);
+     }
+ 
++    // Check if the window is from an Addon (e.g. a WebExtension page) and
++    // if it is then extract the addonId and save it as the "consoleID"
++    // attribute of the event.
++    let msgWindow = Services.wm.getCurrentInnerWindowWithId(aId);
++    if (msgWindow) {
++      let {originAttributes: {addonId}} = msgWindow.document.nodePrincipal;
++      if (addonId) {
++        aEvent.consoleID = "addon/" + addonId;
++      }
++    }
++
+     let storage = _consoleStorage.get(aId);
+     storage.push(aEvent);
+ 
+     // truncate
+     if (storage.length > STORAGE_MAX_EVENTS) {
+       storage.shift();
+     }
+ 
