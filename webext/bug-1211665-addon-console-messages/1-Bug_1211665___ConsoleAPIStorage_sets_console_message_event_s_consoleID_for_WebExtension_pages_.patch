@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457975172 -3600
 #      Mon Mar 14 18:06:12 2016 +0100
-# Node ID 4940b26dce6ce3aa7456c9f3a04309783cfd763a
-# Parent  2044d148312a2097a42803107063a0da096f926d
+# Node ID e26ecb9b1e81b6c40934d5d860ccf8aeca8c54d3
+# Parent  0cc84e26a640b2f8217a1983989cfba69ea9b280
 Bug 1211665 - ConsoleAPIStorage sets console message event's consoleID for WebExtension pages.
 
 MozReview-Commit-ID: 5v9BWLbgskd

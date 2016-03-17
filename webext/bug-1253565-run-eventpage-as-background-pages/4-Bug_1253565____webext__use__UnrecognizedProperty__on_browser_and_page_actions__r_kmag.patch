@@ -1,0 +1,195 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457954805 -3600
+#      Mon Mar 14 12:26:45 2016 +0100
+# Node ID d159c8d14dc28339e00d4bf5e0da622d2ea1afd2
+# Parent  19b8dcfbe7c1bc1a5a06fc66253623b2e9fc1801
+Bug 1253565 - [webext] use 'UnrecognizedProperty' on browser and page actions. r?kmag
+
+MozReview-Commit-ID: 8RfrogKRoP8
+
+diff --git a/browser/components/extensions/schemas/browser_action.json b/browser/components/extensions/schemas/browser_action.json
+--- a/browser/components/extensions/schemas/browser_action.json
++++ b/browser/components/extensions/schemas/browser_action.json
+@@ -6,16 +6,17 @@
+   {
+     "namespace": "manifest",
+     "types": [
+       {
+         "$extend": "WebExtensionManifest",
+         "properties": {
+           "browser_action": {
+             "type": "object",
++            "additionalProperties": { "$ref": "UnrecognizedProperty" },
+             "properties": {
+               "default_title": {
+                 "type": "string",
+                 "optional": true,
+                 "preprocess": "localize"
+               },
+               "default_icon": {
+                 "$ref": "IconPath",
+diff --git a/browser/components/extensions/schemas/page_action.json b/browser/components/extensions/schemas/page_action.json
+--- a/browser/components/extensions/schemas/page_action.json
++++ b/browser/components/extensions/schemas/page_action.json
+@@ -6,16 +6,17 @@
+   {
+     "namespace": "manifest",
+     "types": [
+       {
+         "$extend": "WebExtensionManifest",
+         "properties": {
+           "page_action": {
+             "type": "object",
++            "additionalProperties": { "$ref": "UnrecognizedProperty" },
+             "properties": {
+               "default_title": {
+                 "type": "string",
+                 "optional": true,
+                 "preprocess": "localize"
+               },
+               "default_icon": {
+                 "$ref": "IconPath",
+diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
+--- a/browser/components/extensions/test/browser/browser.ini
++++ b/browser/components/extensions/test/browser/browser.ini
+@@ -13,16 +13,17 @@ support-files =
+   file_language_ja.html
+ 
+ [browser_ext_simple.js]
+ [browser_ext_currentWindow.js]
+ [browser_ext_browserAction_simple.js]
+ [browser_ext_browserAction_pageAction_icon.js]
+ [browser_ext_browserAction_context.js]
+ [browser_ext_browserAction_disabled.js]
++[browser_ext_pageAction_simple.js]
+ [browser_ext_pageAction_context.js]
+ [browser_ext_pageAction_popup.js]
+ [browser_ext_browserAction_popup.js]
+ [browser_ext_popup_api_injection.js]
+ [browser_ext_contextMenus.js]
+ [browser_ext_commands_getAll.js]
+ [browser_ext_commands_onCommand.js]
+ [browser_ext_getViews.js]
+diff --git a/browser/components/extensions/test/browser/browser_ext_browserAction_simple.js b/browser/components/extensions/test/browser/browser_ext_browserAction_simple.js
+--- a/browser/components/extensions/test/browser/browser_ext_browserAction_simple.js
++++ b/browser/components/extensions/test/browser/browser_ext_browserAction_simple.js
+@@ -2,16 +2,17 @@
+ /* vim: set sts=2 sw=2 et tw=80: */
+ "use strict";
+ 
+ add_task(function* () {
+   let extension = ExtensionTestUtils.loadExtension({
+     manifest: {
+       "browser_action": {
+         "default_popup": "popup.html",
++        "unrecognized_property": "with-a-random-value",
+       },
+     },
+ 
+     files: {
+       "popup.html": `
+       <!DOCTYPE html>
+       <html><body>
+       <script src="popup.js"></script>
+@@ -26,21 +27,31 @@ add_task(function* () {
+     background: function() {
+       browser.runtime.onMessage.addListener(msg => {
+         browser.test.assertEq(msg, "from-popup", "correct message received");
+         browser.test.sendMessage("popup");
+       });
+     },
+   });
+ 
++  SimpleTest.waitForExplicitFinish();
++  let waitForConsole = new Promise(resolve => {
++    SimpleTest.monitorConsole(resolve, [{
++      message: /Reading manifest: Error processing browser_action.unrecognized_property: An unexpected property was found/,
++    }]);
++  });
++
+   yield extension.startup();
+ 
+   // Do this a few times to make sure the pop-up is reloaded each time.
+   for (let i = 0; i < 3; i++) {
+     clickBrowserAction(extension);
+ 
+     yield extension.awaitMessage("popup");
+ 
+     closeBrowserAction(extension);
+   }
+ 
+   yield extension.unload();
++
++  SimpleTest.endMonitorConsole();
++  yield waitForConsole;
+ });
+diff --git a/browser/components/extensions/test/browser/browser_ext_browserAction_simple.js b/browser/components/extensions/test/browser/browser_ext_pageAction_simple.js
+copy from browser/components/extensions/test/browser/browser_ext_browserAction_simple.js
+copy to browser/components/extensions/test/browser/browser_ext_pageAction_simple.js
+--- a/browser/components/extensions/test/browser/browser_ext_browserAction_simple.js
++++ b/browser/components/extensions/test/browser/browser_ext_pageAction_simple.js
+@@ -1,17 +1,18 @@
+ /* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+ /* vim: set sts=2 sw=2 et tw=80: */
+ "use strict";
+ 
+ add_task(function* () {
+   let extension = ExtensionTestUtils.loadExtension({
+     manifest: {
+-      "browser_action": {
++      "page_action": {
+         "default_popup": "popup.html",
++        "unrecognized_property": "with-a-random-value",
+       },
+     },
+ 
+     files: {
+       "popup.html": `
+       <!DOCTYPE html>
+       <html><body>
+       <script src="popup.js"></script>
+@@ -23,24 +24,36 @@ add_task(function* () {
+       },
+     },
+ 
+     background: function() {
+       browser.runtime.onMessage.addListener(msg => {
+         browser.test.assertEq(msg, "from-popup", "correct message received");
+         browser.test.sendMessage("popup");
+       });
++      browser.tabs.query({active: true, currentWindow: true}, tabs => {
++        let tabId = tabs[0].id;
++
++        browser.pageAction.show(tabId);
++        browser.test.sendMessage("page-action-shown");
++      });
+     },
+   });
+ 
++  SimpleTest.waitForExplicitFinish();
++  let waitForConsole = new Promise(resolve => {
++    SimpleTest.monitorConsole(resolve, [{
++      message: /Reading manifest: Error processing page_action.unrecognized_property: An unexpected property was found/,
++    }]);
++  });
++
+   yield extension.startup();
++  yield extension.awaitMessage("page-action-shown");
+ 
+-  // Do this a few times to make sure the pop-up is reloaded each time.
+-  for (let i = 0; i < 3; i++) {
+-    clickBrowserAction(extension);
++  clickPageAction(extension);
+ 
+-    yield extension.awaitMessage("popup");
+-
+-    closeBrowserAction(extension);
+-  }
++  yield extension.awaitMessage("popup");
+ 
+   yield extension.unload();
++
++  SimpleTest.endMonitorConsole();
++  yield waitForConsole;
+ });

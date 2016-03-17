@@ -1,0 +1,55 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458119479 -3600
+#      Wed Mar 16 10:11:19 2016 +0100
+# Node ID 9ab3ac704ab6611a4c07b5bde713d8d8023470b7
+# Parent  b102aa5688a116b5870d72003bd6b90a63365138
+Bug TBF - test different ext-runtime optional argument processing (still wrong).
+
+MozReview-Commit-ID: 2panWMhQ9OY
+
+diff --git a/toolkit/components/extensions/ext-runtime.js b/toolkit/components/extensions/ext-runtime.js
+--- a/toolkit/components/extensions/ext-runtime.js
++++ b/toolkit/components/extensions/ext-runtime.js
+@@ -29,29 +29,32 @@ extensions.registerSchemaAPI("runtime", 
+         let recipient = extensionId !== null ? {extensionId} : {extensionId: extension.id};
+ 
+         return context.messenger.connect(Services.cpmm, name, recipient);
+       },
+ 
+       sendMessage: function(...args) {
+         let options; // eslint-disable-line no-unused-vars
+         let extensionId, message, responseCallback;
+-        if (args.length == 1) {
+-          message = args[0];
+-        } else if (args.length == 2) {
+-          [message, responseCallback] = args;
++
++        if (typeof args[0] == "string" && GlobalManager.extensionMap.has(args[0])) {
++          extensionId = args.shift();
++        }
++
++        message = args.shift();
++
++        if (typeof args[0] == "function") {
++          responseCallback = args[0];
++          options = {};
+         } else {
+-          [extensionId, message, options, responseCallback] = args;
++          options = args[0];
++          responseCallback = args[1];
+         }
+         let recipient = {extensionId: extensionId ? extensionId : extension.id};
+ 
+-        if (!GlobalManager.extensionMap.has(recipient.extensionId)) {
+-          return context.wrapPromise(Promise.reject({message: "Invalid extension ID"}),
+-                                     responseCallback);
+-        }
+         return context.messenger.sendMessage(Services.cpmm, message, recipient, responseCallback);
+       },
+ 
+       get lastError() {
+         return context.lastError;
+       },
+ 
+       getManifest() {

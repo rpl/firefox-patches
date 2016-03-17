@@ -1,17 +1,15 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1457639001 -3600
-#      Thu Mar 10 20:43:21 2016 +0100
-# Node ID 72f22fc2cf25ef5e9bd2f1e3d76246eeba08fd99
-# Parent  a48542dd00a1be0cca210374a4cf4fb2cdfa08c6
-Bug TBF - [addon-sdk] test-tabs-common testAttachOnMultipleDocuments
-
-MozReview-Commit-ID: Dxw7GusNOcR
+# Date 1457855811 -3600
+#      Sun Mar 13 08:56:51 2016 +0100
+# Node ID 8e7e371cb3991c0eeeef5494e65496c2f13a95bd
+# Parent  ecc32c0415ee5e267e094041b51bb1672a5b17e3
+FIXUP: revert changes on content/worker destroy
 
 diff --git a/addon-sdk/source/lib/sdk/content/worker.js b/addon-sdk/source/lib/sdk/content/worker.js
 --- a/addon-sdk/source/lib/sdk/content/worker.js
 +++ b/addon-sdk/source/lib/sdk/content/worker.js
-@@ -158,23 +158,22 @@ connect.define(Worker, function(worker, 
+@@ -158,22 +158,23 @@ connect.define(Worker, function(worker, 
  detach.define(Worker, function(worker) {
    let model = modelFor(worker);
    if (!model.attached)
@@ -20,7 +18,7 @@ diff --git a/addon-sdk/source/lib/sdk/content/worker.js b/addon-sdk/source/lib/s
    processes.port.off('sdk/worker/event', worker.receive);
    model.attached = false;
    model.destroyed = true;
--  emit(worker, 'detach');
++  emit(worker, 'detach');
  });
  
  isPrivate.define(Worker, ({ tab }) => isPrivate(tab));
@@ -29,11 +27,11 @@ diff --git a/addon-sdk/source/lib/sdk/content/worker.js b/addon-sdk/source/lib/s
  // detach, the child will respond when it has detached
  destroy.define(Worker, function(worker, reason) {
    let model = modelFor(worker);
--  model.destroyed = true;
--  if (!model.attached)
-+  if (!model.attached || model.destroyed)
+-  if (!model.attached || model.destroyed)
++  model.destroyed = true;
++  if (!model.attached)
      return;
  
-+  model.destroyed = true;
+-  model.destroyed = true;
    worker.send('detach', reason);
  });

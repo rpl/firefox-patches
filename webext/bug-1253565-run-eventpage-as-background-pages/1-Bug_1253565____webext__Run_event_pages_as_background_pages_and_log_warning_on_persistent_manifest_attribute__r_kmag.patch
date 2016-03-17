@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457634484 -3600
 #      Thu Mar 10 19:28:04 2016 +0100
-# Node ID cf251ea68829860989cb79c7bc09d50c3fa601fc
-# Parent  ee0cb75bcbf99f082f6c31ba4e54d88a8b2d9f7b
+# Node ID 568e09611c6adb00ecbfc9dbf8280136e1e84bd4
+# Parent  0cc84e26a640b2f8217a1983989cfba69ea9b280
 Bug 1253565 - [webext] Run event pages as background pages and log warning on persistent manifest attribute. r?kmag
 
 MozReview-Commit-ID: 9QWvRkADsQD
@@ -45,8 +45,8 @@ diff --git a/toolkit/components/extensions/schemas/manifest.json b/toolkit/compo
              "optional": true
            },
  
-           "content_scripts": {
-@@ -252,12 +260,17 @@
+           "options_ui": {
+@@ -279,12 +287,17 @@
              },
              "additionalProperties": false
            },
@@ -67,11 +67,11 @@ diff --git a/toolkit/components/extensions/schemas/manifest.json b/toolkit/compo
 diff --git a/toolkit/components/extensions/test/mochitest/chrome.ini b/toolkit/components/extensions/test/mochitest/chrome.ini
 --- a/toolkit/components/extensions/test/mochitest/chrome.ini
 +++ b/toolkit/components/extensions/test/mochitest/chrome.ini
-@@ -2,8 +2,9 @@
- skip-if = os == 'android'
+@@ -3,8 +3,9 @@ skip-if = os == 'android'
  support-files =
    file_download.html
    file_download.txt
+   interruptible.sjs
  
  [test_chrome_ext_downloads_download.html]
  [test_chrome_ext_downloads_misc.html]

@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1456198754 -3600
 #      Tue Feb 23 04:39:14 2016 +0100
-# Node ID 40ebb5658d516f447f2ff88ab066cc02230b4182
-# Parent  2fa086d51b6a8d94566493b34cbce00a37af5024
+# Node ID d164d6c4a2b7a1d4dbfb137a64f8d6e4f4fcc84b
+# Parent  f0c0480732d36153e8839c7f17394d45f679f87d
 Bug 1190687 - [webext] Add webNavigation.onCreatedNavigationTarget implementation
 
 MozReview-Commit-ID: KYVKkVUSOzR
@@ -156,7 +156,7 @@ diff --git a/browser/base/content/utilityOverlay.js b/browser/base/content/utili
 diff --git a/browser/modules/ContentClick.jsm b/browser/modules/ContentClick.jsm
 --- a/browser/modules/ContentClick.jsm
 +++ b/browser/modules/ContentClick.jsm
-@@ -66,17 +66,18 @@ var ContentClick = {
+@@ -75,12 +75,13 @@ var ContentClick = {
      if (where == "current")
        return;
  
@@ -169,13 +169,8 @@ diff --git a/browser/modules/ContentClick.jsm b/browser/modules/ContentClick.jsm
 +                   noReferrer: json.noReferrer,
 +                   frameOuterWindowID: json.frameOuterWindowID };
      window.openLinkIn(json.href, where, params);
- 
-     // Mark the page as a user followed link.  This is done so that history can
-     // distinguish automatic embed visits from user activated ones.  For example
-     // pages loaded in frames are embed visits and lost with the session, while
-     // visits across frames should be preserved.
-     try {
-       if (!PrivateBrowsingUtils.isWindowPrivate(window))
+   }
+ };
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js

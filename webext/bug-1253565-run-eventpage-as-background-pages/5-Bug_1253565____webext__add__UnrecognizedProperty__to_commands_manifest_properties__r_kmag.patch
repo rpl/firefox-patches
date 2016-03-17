@@ -1,0 +1,97 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1457953426 -3600
+#      Mon Mar 14 12:03:46 2016 +0100
+# Node ID 5b15d39643c9b051839336172ead0c61bea0a690
+# Parent  d159c8d14dc28339e00d4bf5e0da622d2ea1afd2
+Bug 1253565 - [webext] add "UnrecognizedProperty" to commands manifest properties. r?kmag
+
+MozReview-Commit-ID: 9r2MaceQ4Kk
+
+diff --git a/browser/components/extensions/schemas/commands.json b/browser/components/extensions/schemas/commands.json
+--- a/browser/components/extensions/schemas/commands.json
++++ b/browser/components/extensions/schemas/commands.json
+@@ -22,16 +22,17 @@
+       {
+         "$extend": "WebExtensionManifest",
+         "properties": {
+           "commands": {
+             "type": "object",
+             "optional": true,
+             "additionalProperties": {
+               "type": "object",
++              "additionalProperties": { "$ref": "UnrecognizedProperty" },
+               "properties": {
+                 "suggested_key": {
+                   "type": "object",
+                   "optional": true,
+                   "properties": {
+                     "default": {
+                       "$ref": "KeyName",
+                       "optional": true
+@@ -138,9 +139,9 @@
+               }
+             ],
+             "description": "Called to return the registered commands."
+           }
+         ]
+       }
+     ]
+   }
+-]
+\ No newline at end of file
++]
+diff --git a/browser/components/extensions/test/browser/browser_ext_commands_onCommand.js b/browser/components/extensions/test/browser/browser_ext_commands_onCommand.js
+--- a/browser/components/extensions/test/browser/browser_ext_commands_onCommand.js
++++ b/browser/components/extensions/test/browser/browser_ext_commands_onCommand.js
+@@ -16,28 +16,37 @@ add_task(function* () {
+           "suggested_key": {
+             "default": "Alt+Shift+3",
+           },
+         },
+         "toggle-feature-using-alt-shift-comma": {
+           "suggested_key": {
+             "default": "Alt+Shift+Comma",
+           },
++          "unrecognized_property": "with-a-random-value",
+         },
+       },
+     },
+ 
+     background: function() {
+       browser.commands.onCommand.addListener((message) => {
+         browser.test.sendMessage("oncommand", message);
+       });
+       browser.test.sendMessage("ready");
+     },
+   });
+ 
++
++  SimpleTest.waitForExplicitFinish();
++  let waitForConsole = new Promise(resolve => {
++    SimpleTest.monitorConsole(resolve, [{
++      message: /Reading manifest: Error processing commands.*.unrecognized_property: An unexpected property was found/,
++    }]);
++  });
++
+   yield extension.startup();
+   yield extension.awaitMessage("ready");
+ 
+   // Create another window after the extension is loaded.
+   let win2 = yield BrowserTestUtils.openNewBrowserWindow();
+   yield BrowserTestUtils.loadURI(win2.gBrowser.selectedBrowser, "about:config");
+   yield BrowserTestUtils.browserLoaded(win2.gBrowser.selectedBrowser);
+ 
+@@ -66,9 +75,12 @@ add_task(function* () {
+   keyset = win1.document.getElementById(keysetID);
+   is(keyset, null, "Expected keyset to be removed from the window");
+ 
+   keyset = win2.document.getElementById(keysetID);
+   is(keyset, null, "Expected keyset to be removed from the window");
+ 
+   yield BrowserTestUtils.closeWindow(win1);
+   yield BrowserTestUtils.closeWindow(win2);
++
++  SimpleTest.endMonitorConsole();
++  yield waitForConsole;
+ });

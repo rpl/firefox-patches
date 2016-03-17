@@ -1,0 +1,54 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458119429 -3600
+#      Wed Mar 16 10:10:29 2016 +0100
+# Node ID b102aa5688a116b5870d72003bd6b90a63365138
+# Parent  f0c0480732d36153e8839c7f17394d45f679f87d
+Bug TBF - add sendMessage test case with extensionId parameter.
+
+MozReview-Commit-ID: IzfZHO13dwb
+
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_runtime_sendMessage.html b/toolkit/components/extensions/test/mochitest/test_ext_runtime_sendMessage.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_runtime_sendMessage.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_runtime_sendMessage.html
+@@ -74,12 +74,40 @@ add_task(function* tabsSendMessageReply(
+   let extension = ExtensionTestUtils.loadExtension({
+     background: `(${background})()`,
+   });
+ 
+   yield extension.startup();
+   yield extension.awaitFinish("sendMessage");
+   yield extension.unload();
+ });
++
++add_task(function* testSendMessageWithoutCallback() {
++  // TODO: remove this fake addon id test before landing
++  function backgroundFakeAddonId() {
++    chrome.runtime.sendMessage("fake-id", "chrome-runtime-send-message-without-callback");
++    browser.runtime.sendMessage("fake-id", "browser-runtime-send-message-without-callback");
++    browser.test.notifyPass("sendMessageWithoutCallback");
++  }
++
++  function background() {
++    browser.runtime.onMessage.addListener((msg) => {
++      browser.test.assertEq("message-sent", msg, "onMessage received the expected message");
++      browser.test.notifyPass("sendMessageWithoutCallback");
++    });
++
++    let manifest = browser.runtime.getManifest();
++    browser.runtime.sendMessage(manifest.applications.gecko.id, "message-sent");
++  }
++
++  let extension = ExtensionTestUtils.loadExtension({
++    background: `(${background})()`,
++  });
++
++  yield extension.startup();
++  yield extension.awaitFinish("sendMessageWithoutCallback");
++  yield extension.unload();
++});
++
+ </script>
+ 
+ </body>
+ </html>

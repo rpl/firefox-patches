@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457633215 -3600
 #      Thu Mar 10 19:06:55 2016 +0100
-# Node ID 6e52198ebd8f826dfec3cf5a99e27df68407ed0d
-# Parent  cf251ea68829860989cb79c7bc09d50c3fa601fc
+# Node ID e051d6c445ecd47e55cd4da6393f668fc7af5bd1
+# Parent  568e09611c6adb00ecbfc9dbf8280136e1e84bd4
 Bug 1253565 - [webext] reusable 'UnrecognizedProperty' type for manifest schema validation. r?kmag
 
 MozReview-Commit-ID: LLWb07ybvlb
@@ -43,10 +43,10 @@ diff --git a/toolkit/components/extensions/schemas/manifest.json b/toolkit/compo
              "optional": true
            },
  
-           "content_scripts": {
-             "type": "array",
-             "optional": true,
-@@ -136,20 +138,17 @@
+           "options_ui": {
+             "type": "object",
+ 
+@@ -163,20 +165,17 @@
  
            "web_accessible_resources": {
              "type": "array",
@@ -68,7 +68,7 @@ diff --git a/toolkit/components/extensions/schemas/manifest.json b/toolkit/compo
              "type": "string",
              "enum": [
                "alarms",
-@@ -195,16 +194,17 @@
+@@ -222,16 +221,17 @@
              "pattern": "^file:///.*$"
            }
          ]
@@ -86,7 +86,7 @@ diff --git a/toolkit/components/extensions/schemas/manifest.json b/toolkit/compo
              "items": { "$ref": "MatchPattern" }
            },
            "exclude_matches": {
-@@ -262,15 +262,20 @@
+@@ -289,15 +289,20 @@
            },
            {
              "type": "object",
