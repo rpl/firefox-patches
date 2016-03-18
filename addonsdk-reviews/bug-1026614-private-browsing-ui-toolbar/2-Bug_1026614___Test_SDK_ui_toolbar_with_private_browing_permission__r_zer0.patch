@@ -1,0 +1,148 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458272372 -3600
+#      Fri Mar 18 04:39:32 2016 +0100
+# Node ID 202239692f6eb392a8423c5b85e5d614877d66b7
+# Parent  f5fcd3d8f785d36d5449c29c0fc4a88c0479907f
+Bug 1026614 - Test SDK ui-toolbar with private-browing permission. r?zer0
+
+MozReview-Commit-ID: 1O2KqVexzwa
+
+diff --git a/addon-sdk/source/test/addons/jetpack-addon.ini b/addon-sdk/source/test/addons/jetpack-addon.ini
+--- a/addon-sdk/source/test/addons/jetpack-addon.ini
++++ b/addon-sdk/source/test/addons/jetpack-addon.ini
+@@ -26,17 +26,16 @@ skip-if = true
+ [packed.xpi]
+ [page-mod-debugger-post.xpi]
+ [page-mod-debugger-pre.xpi]
+ [page-worker.xpi]
+ [places.xpi]
+ [predefined-id-with-at.xpi]
+ [preferences-branch.xpi]
+ [private-browsing-supported.xpi]
+-skip-if = true
+ [remote.xpi]
+ [require.xpi]
+ [self.xpi]
+ [simple-prefs.xpi]
+ [simple-prefs-l10n.xpi]
+ [simple-prefs-regression.xpi]
+ [standard-id.xpi]
+ [tab-close-on-startup.xpi]
+diff --git a/addon-sdk/source/test/addons/private-browsing-supported/main.js b/addon-sdk/source/test/addons/private-browsing-supported/main.js
+--- a/addon-sdk/source/test/addons/private-browsing-supported/main.js
++++ b/addon-sdk/source/test/addons/private-browsing-supported/main.js
+@@ -16,13 +16,14 @@ merge(module.exports,
+ // Doesn't make sense to test window-utils and windows on fennec,
+ // as there is only one window which is never private. Also ignore
+ // unsupported modules (panel, selection)
+ if (!app.is('Fennec')) {
+   merge(module.exports,
+     require('./test-selection'),
+     require('./test-panel'),
+     require('./test-window-tabs'),
+-    require('./test-windows')
++    require('./test-windows'),
++    require('./test-ui-toolbar')
+   );
+ }
+ 
+ require('sdk/test/runner').runTestsFromModule(module);
+diff --git a/addon-sdk/source/test/addons/private-browsing-supported/sidebar/utils.js b/addon-sdk/source/test/addons/private-browsing-supported/sidebar/utils.js
+--- a/addon-sdk/source/test/addons/private-browsing-supported/sidebar/utils.js
++++ b/addon-sdk/source/test/addons/private-browsing-supported/sidebar/utils.js
+@@ -6,16 +6,17 @@
+ const { Cu } = require('chrome');
+ const { getMostRecentBrowserWindow } = require('sdk/window/utils');
+ const { fromIterator } = require('sdk/util/array');
+ 
+ const BUILTIN_SIDEBAR_MENUITEMS = exports.BUILTIN_SIDEBAR_MENUITEMS = [
+   'menu_socialSidebar',
+   'menu_historySidebar',
+   'menu_bookmarksSidebar',
++  'menu_tabsSidebar',
+ ];
+ 
+ function isSidebarShowing(window) {
+   window = window || getMostRecentBrowserWindow();
+   let sidebar = window.document.getElementById('sidebar-box');
+   return !sidebar.hidden;
+ }
+ exports.isSidebarShowing = isSidebarShowing;
+diff --git a/addon-sdk/source/test/addons/private-browsing-supported/test-sidebar.js b/addon-sdk/source/test/addons/private-browsing-supported/test-sidebar.js
+--- a/addon-sdk/source/test/addons/private-browsing-supported/test-sidebar.js
++++ b/addon-sdk/source/test/addons/private-browsing-supported/test-sidebar.js
+@@ -125,17 +125,18 @@ exports.testDestroyEdgeCaseBugWithPrivat
+         id: testName,
+         title: testName,
+         url:  'data:text/html;charset=utf-8,'+ testName,
+         onShow: function() {
+           assert.pass('onShow works for Sidebar');
+           loader.unload();
+ 
+           for (let mi of getSidebarMenuitems()) {
+-            assert.ok(BUILTIN_SIDEBAR_MENUITEMS.indexOf(mi.getAttribute('id')) >= 0, 'the menuitem is for a built-in sidebar')
++            assert.ok(BUILTIN_SIDEBAR_MENUITEMS.indexOf(mi.getAttribute('id')) >= 0,
++                      `the menuitem is from a built-in sidebar: ${mi && mi.getAttribute('id')}`);
+             assert.ok(!isChecked(mi), 'no sidebar menuitem is checked');
+           }
+           assert.ok(!window.document.getElementById(makeID(testName)), 'sidebar id DNE');
+           assert.equal(isSidebarShowing(window), false, 'the sidebar is not showing');
+ 
+           done();
+         }
+       })
+diff --git a/addon-sdk/source/test/addons/private-browsing-supported/test-ui-toolbar.js b/addon-sdk/source/test/addons/private-browsing-supported/test-ui-toolbar.js
+new file mode 100644
+--- /dev/null
++++ b/addon-sdk/source/test/addons/private-browsing-supported/test-ui-toolbar.js
+@@ -0,0 +1,49 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++'use strict';
++
++const { Toolbar } = require("sdk/ui/toolbar");
++const { getMostRecentBrowserWindow, open } = require("sdk/window/utils");
++const { ready } = require("sdk/window/helpers");
++const { cleanUI } = require('sdk/test/utils');
++
++const wait = (toolbar, event) => {
++  return new Promise((resolve) => {
++    toolbar.once(event, resolve);
++  });
++};
++
++const isAttached = ({id}, window=getMostRecentBrowserWindow()) =>
++        !!window.document.getElementById(id);
++
++exports.testShownInPrivateWindow = function*(assert) {
++  const w = open(null, {features: {toolbar: true, private: true}});
++
++  yield ready(w);
++
++  const t = new Toolbar({title: "foo"});
++
++  yield wait(t, "attach");
++
++  assert.ok(isAttached(t), "toolbar was actually attached");
++
++  t.destroy();
++
++  yield cleanUI();
++};
++
++// If the module doesn't support the app we're being run in, require() will
++// throw.  In that case, remove all tests above from exports, and add one dummy
++// test that passes.
++try {
++  require('sdk/ui/toolbar');
++}
++catch (err) {
++  if (!/^Unsupported Application/.test(err.message))
++    throw err;
++
++  module.exports = {
++    'test Unsupported Application': assert => assert.pass(err.message)
++  }
++}

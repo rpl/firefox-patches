@@ -1,0 +1,104 @@
+# HG changeset patch
+# User Matteo Ferretti <mferretti@mozilla.com>
+# Date 1458247613 14400
+#      Thu Mar 17 16:46:53 2016 -0400
+# Node ID f5fcd3d8f785d36d5449c29c0fc4a88c0479907f
+# Parent  8671dfbbff2dfa2fa6c410f4c0799f4b7c2e7484
+Bug 1026614 - SDK ui/toolbar not working in permanent private browsing; r=rpl
+
+MozReview-Commit-ID: Ap4CTY13P3d
+
+diff --git a/addon-sdk/source/lib/sdk/input/browser.js b/addon-sdk/source/lib/sdk/input/browser.js
+--- a/addon-sdk/source/lib/sdk/input/browser.js
++++ b/addon-sdk/source/lib/sdk/input/browser.js
+@@ -12,17 +12,17 @@ const { Sequence, seq, filter, object, p
+ 
+ 
+ // Create lazy iterators from the regular arrays, although
+ // once https://github.com/mozilla/addon-sdk/pull/1314 lands
+ // `windows` will be transforme to lazy iterators.
+ // When iterated over belowe sequences items will represent
+ // state of windows at the time of iteration.
+ const opened = seq(function*() {
+-  const items = windows("navigator:browser", {includePrivates: true});
++  const items = windows("navigator:browser", {includePrivate: true});
+   for (let item of items) {
+       yield [getOuterId(item), item];
+   }
+ });
+ const interactive = filter(([_, window]) => isInteractive(window), opened);
+ const loaded = filter(([_, window]) => isDocumentLoaded(window), opened);
+ 
+ // Helper function that converts given argument to a delta.
+diff --git a/addon-sdk/source/lib/sdk/ui/toolbar/view.js b/addon-sdk/source/lib/sdk/ui/toolbar/view.js
+--- a/addon-sdk/source/lib/sdk/ui/toolbar/view.js
++++ b/addon-sdk/source/lib/sdk/ui/toolbar/view.js
+@@ -18,16 +18,17 @@ const { OutputPort } = require("../../ou
+ const { Interactive } = require("../../input/browser");
+ const { CustomizationInput } = require("../../input/customizable-ui");
+ const { pairs, map, isEmpty, object,
+         each, keys, values } = require("../../util/sequence");
+ const { curry, flip } = require("../../lang/functional");
+ const { patch, diff } = require("diffpatcher/index");
+ const prefs = require("../../preferences/service");
+ const { getByOuterId } = require("../../window/utils");
++const { ignoreWindow } = require('../../private-browsing/utils');
+ 
+ const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+ const PREF_ROOT = "extensions.sdk-toolbar-collapsed.";
+ 
+ 
+ // There are two output ports one for publishing changes that occured
+ // and the other for change requests. Later is synchronous and is only
+ // consumed here. Note: it needs to be synchronous to avoid race conditions
+@@ -80,17 +81,20 @@ const attributesChanged = mutations => {
+     send(syncoutput, updates);
+   }
+ };
+ 
+ 
+ // Utility function creates `toolbar` with a "close" button and returns
+ // it back. In addition it set's up a listener and observer to communicate
+ // state changes.
+-const addView = curry((options, {document}) => {
++const addView = curry((options, {document, window}) => {
++  if (ignoreWindow(window))
++    return;
++
+   let view = document.createElementNS(XUL_NS, "toolbar");
+   view.setAttribute("id", options.id);
+   view.setAttribute("collapsed", options.collapsed);
+   view.setAttribute("toolbarname", options.title);
+   view.setAttribute("pack", "end");
+   view.setAttribute("customizable", "false");
+   view.setAttribute("style", "padding: 2px 0; max-height: 40px;");
+   view.setAttribute("mode", "icons");
+diff --git a/addon-sdk/source/test/test-ui-toolbar.js b/addon-sdk/source/test/test-ui-toolbar.js
+--- a/addon-sdk/source/test/test-ui-toolbar.js
++++ b/addon-sdk/source/test/test-ui-toolbar.js
+@@ -487,9 +487,25 @@ exports["test button are attached to too
+   assert.equal(actionNode.parentNode.parentNode.id, toolbar.id,
+     "buttons are placed in the correct toolbar");
+ 
+   toolbar.destroy();
+ 
+   yield cleanUI();
+ };
+ 
++exports["test toolbar are not in private windows"] = function*(assert) {
++  const w = open(null, {features: {toolbar: true, private: true}});
++
++  yield ready(w);
++
++  const t = new Toolbar({title: "foo"});
++
++  yield wait(t, "attach");
++
++  assert.ok(!isAttached(t), "toolbar wasn't actually attached");
++
++  t.destroy();
++
++  yield cleanUI();
++}
++
+ require("sdk/test").run(module.exports);
