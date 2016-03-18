@@ -1,0 +1,70 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458328665 -3600
+#      Fri Mar 18 20:17:45 2016 +0100
+# Node ID b55cc7e140b3f9afdbd563525f168cb6f98489d0
+# Parent  8671dfbbff2dfa2fa6c410f4c0799f4b7c2e7484
+Bug 1256282 - [webext] Special handling ExtensionPages running in sub-frames. r?kmag
+
+MozReview-Commit-ID: E1GwT0zfGie
+
+diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
+--- a/toolkit/components/extensions/ExtensionManagement.jsm
++++ b/toolkit/components/extensions/ExtensionManagement.jsm
+@@ -231,27 +231,48 @@ function getAPILevelForWindow(window, ad
+   const {NO_PRIVILEGES, CONTENTSCRIPT_PRIVILEGES, FULL_PRIVILEGES} = API_LEVELS;
+ 
+   // Non WebExtension URLs and WebExtension URLs from a different extension
+   // has no access to APIs.
+   if (!addonId && getAddonIdForWindow(window) != addonId) {
+     return NO_PRIVILEGES;
+   }
+ 
+-  let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
+-        .getInterface(Ci.nsIDocShell);
+-
+-  // WebExtension URLs loaded into sub-frame UI have "content script API level privileges".
+-  // (see Bug 1214658 for rationale)
+-  if (docShell.sameTypeParent) {
++  // Extension pages running in the content process defaults to "content script API level privileges".
++  if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
+     return CONTENTSCRIPT_PRIVILEGES;
+   }
+ 
+-  // Extension pages running in the content process defaults to "content script API level privileges".
+-  if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
++  let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
++                       .getInterface(Ci.nsIDocShell);
++
++  // Handling of ExtensionPages running inside sub-frames.
++  if (docShell.sameTypeParent) {
++    let parentWindow = docShell.sameTypeParent.QueryInterface(Ci.nsIInterfaceRequestor)
++          .getInterface(Ci.nsIDOMWindow);
++
++    // The option page iframe embedded in the about:addons tab should have full API level privileges.
++    // (see Bug 1256282 for rationale)
++    if (parentWindow.document.nodePrincipal.origin == "[System Principal]" &&
++        parentWindow.document.location.href == "about:addons") {
++
++      return FULL_PRIVILEGES;
++    }
++
++    // The addon iframes embedded in a addon page from with the same addonId
++    // should have the same privileges of the sameTypeParent.
++    // (see Bug 1256282 for rationale)
++    let parentSameAddonPrivileges = getAPILevelForWindow(parentWindow, addonId);
++    if (parentSameAddonPrivileges > NO_PRIVILEGES) {
++      return parentSameAddonPrivileges;
++    }
++
++    // In all the other cases, WebExtension URLs loaded into sub-frame UI
++    // will have "content script API level privileges".
++    // (see Bug 1214658 for rationale)
+     return CONTENTSCRIPT_PRIVILEGES;
+   }
+ 
+   // WebExtension URLs loaded into top frames UI could have full API level privileges.
+   return FULL_PRIVILEGES;
+ }
+ 
+ this.ExtensionManagement = {
