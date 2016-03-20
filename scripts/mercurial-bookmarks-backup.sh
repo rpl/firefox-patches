@@ -25,10 +25,11 @@ if test "$2" = "all" ; then
     exit 1
   fi
 
-  echo "Backup of all the bookmarks? (^C to exit)"
-  read
+  all_bookmarks=`hg bookmarks | sed 'y/ \* /   /' | awk '{ print $1 }' | grep -v fx-team`
 
-  local all_bookmarks=`hg bookmarks | awk '{ print $1 }' | grep -v fx-team`
+  echo "Backup of all the bookmarks? (^C to exit)"
+  for bookmark in $all_bookmarks; do echo $bookmark; done
+  read
 
   for bookmark in $all_bookmarks; do
     backup_bookmark $bookmark
