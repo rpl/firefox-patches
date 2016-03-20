@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457639001 -3600
 #      Thu Mar 10 20:43:21 2016 +0100
-# Node ID 72f22fc2cf25ef5e9bd2f1e3d76246eeba08fd99
-# Parent  a48542dd00a1be0cca210374a4cf4fb2cdfa08c6
+# Node ID 744ca34a40d4aa1ab45c0788cb96419abc5bdaa3
+# Parent  9c6149b99e81e61fad34bf5f77a64f25b01483db
 Bug TBF - [addon-sdk] test-tabs-common testAttachOnMultipleDocuments
 
 MozReview-Commit-ID: Dxw7GusNOcR

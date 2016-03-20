@@ -1,6 +1,5 @@
 #!/bin/bash
 DEST_DIR=$1
-BOOKMARKS=`hg bookmarks | awk '{ print $1 }' | grep -v fx-team`
 IS_DIRTY=`hg status -madu | wc -l`
 
 current_bookmark() {
@@ -29,7 +28,9 @@ if test "$2" = "all" ; then
   echo "Backup of all the bookmarks? (^C to exit)"
   read
 
-  for bookmark in $BOOKMARKS; do
+  local all_bookmarks=`hg bookmarks | awk '{ print $1 }' | grep -v fx-team`
+
+  for bookmark in $all_bookmarks; do
     backup_bookmark $bookmark
   done
 

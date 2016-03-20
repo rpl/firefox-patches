@@ -2,9 +2,11 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457855811 -3600
 #      Sun Mar 13 08:56:51 2016 +0100
-# Node ID 8e7e371cb3991c0eeeef5494e65496c2f13a95bd
-# Parent  ecc32c0415ee5e267e094041b51bb1672a5b17e3
+# Node ID 906e3798d90629405dc35cfe70b8f98e6f265a8f
+# Parent  3bc413216cba4990c1d98eb07bc4eee133d7d419
 FIXUP: revert changes on content/worker destroy
+
+MozReview-Commit-ID: 8Gi7y7851eD
 
 diff --git a/addon-sdk/source/lib/sdk/content/worker.js b/addon-sdk/source/lib/sdk/content/worker.js
 --- a/addon-sdk/source/lib/sdk/content/worker.js

@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457555975 -3600
 #      Wed Mar 09 21:39:35 2016 +0100
-# Node ID a48542dd00a1be0cca210374a4cf4fb2cdfa08c6
-# Parent  2044d148312a2097a42803107063a0da096f926d
+# Node ID 9c6149b99e81e61fad34bf5f77a64f25b01483db
+# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
 Bug 1250469 - Remove ObserverService usage in the Add-on SDK Disposable class
 
 MozReview-Commit-ID: 32X9M07FbHO

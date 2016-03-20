@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457975172 -3600
 #      Mon Mar 14 18:06:12 2016 +0100
-# Node ID e26ecb9b1e81b6c40934d5d860ccf8aeca8c54d3
-# Parent  0cc84e26a640b2f8217a1983989cfba69ea9b280
+# Node ID 3b4a31bc8c5717d6c099dcf6df688a722b02cf31
+# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
 Bug 1211665 - ConsoleAPIStorage sets console message event's consoleID for WebExtension pages.
 
 MozReview-Commit-ID: 5v9BWLbgskd
@@ -43,7 +43,7 @@ diff --git a/dom/base/ConsoleAPIStorage.js b/dom/base/ConsoleAPIStorage.js
 diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
 --- a/dom/tests/browser/browser.ini
 +++ b/dom/tests/browser/browser.ini
-@@ -17,16 +17,18 @@ skip-if = buildapp == 'mulet'
+@@ -16,16 +16,18 @@ skip-if = buildapp == 'mulet'
  [browser_test__content.js]
  skip-if = e10s
  [browser_ConsoleAPITests.js]

@@ -2,9 +2,11 @@
 # User Rob Wu <rob@robwu.nl>
 # Date 1457850150 -3600
 #      Sun Mar 13 07:22:30 2016 +0100
-# Node ID 33d99371354705a1ab064df40e38a553f172f01d
-# Parent  2044d148312a2097a42803107063a0da096f926d
+# Node ID a5542905d542862520d1785908857499add4f0d6
+# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
 Bug 1226754 - Enable base64-encoding of long strings
+
+MozReview-Commit-ID: 1RJi8okYbb7
 
 diff --git a/addon-sdk/source/lib/sdk/base64.js b/addon-sdk/source/lib/sdk/base64.js
 --- a/addon-sdk/source/lib/sdk/base64.js

@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1456198754 -3600
 #      Tue Feb 23 04:39:14 2016 +0100
-# Node ID d164d6c4a2b7a1d4dbfb137a64f8d6e4f4fcc84b
-# Parent  f0c0480732d36153e8839c7f17394d45f679f87d
+# Node ID 5c9042157a0676b9049fff5a42d4d7ac2864c2bb
+# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
 Bug 1190687 - [webext] Add webNavigation.onCreatedNavigationTarget implementation
 
 MozReview-Commit-ID: KYVKkVUSOzR

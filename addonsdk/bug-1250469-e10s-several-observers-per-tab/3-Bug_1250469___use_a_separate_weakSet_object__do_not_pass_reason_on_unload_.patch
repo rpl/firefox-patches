@@ -2,9 +2,11 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1457847255 -3600
 #      Sun Mar 13 06:34:15 2016 +0100
-# Node ID ecc32c0415ee5e267e094041b51bb1672a5b17e3
-# Parent  72f22fc2cf25ef5e9bd2f1e3d76246eeba08fd99
+# Node ID 3bc413216cba4990c1d98eb07bc4eee133d7d419
+# Parent  744ca34a40d4aa1ab45c0788cb96419abc5bdaa3
 Bug 1250469 - use a separate weakSet object, do not pass reason on unload.
+
+MozReview-Commit-ID: 4tV3Vv9sQU9
 
 diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/sdk/core/disposable.js
 --- a/addon-sdk/source/lib/sdk/core/disposable.js
