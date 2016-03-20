@@ -1,0 +1,215 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458262399 -3600
+#      Fri Mar 18 01:53:19 2016 +0100
+# Node ID 38f2998319648e1f6ac13d6366c6d652c18f6c14
+# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
+Bug TBF - [webext] implement runtime.onMessageExternal and runtime.onConnectExternal. r?kmag
+
+MozReview-Commit-ID: DpQStoV6s8P
+
+diff --git a/toolkit/components/extensions/ExtensionUtils.jsm b/toolkit/components/extensions/ExtensionUtils.jsm
+--- a/toolkit/components/extensions/ExtensionUtils.jsm
++++ b/toolkit/components/extensions/ExtensionUtils.jsm
+@@ -179,17 +179,17 @@ class BaseContext {
+    * A wrapper around MessageChannel.sendMessage which adds the extension ID
+    * to the recipient object, and ensures replies are not processed after the
+    * context has been unloaded.
+    */
+   sendMessage(target, messageName, data, options = {}) {
+     options.recipient = options.recipient || {};
+     options.sender = options.sender || {};
+ 
+-    options.recipient.extensionId = this.extension.id;
++    options.recipient.extensionId = options.recipient.extensionId || this.extension.id;
+     options.sender.extensionId = this.extension.id;
+     options.sender.contextId = this.contextId;
+ 
+     return MessageChannel.sendMessage(target, messageName, data, options);
+   }
+ 
+   get lastError() {
+     this.checkedLastError = true;
+@@ -849,19 +849,20 @@ Messenger.prototype = {
+         } else {
+           return Promise.reject({message: error.message});
+         }
+       });
+ 
+     return this.context.wrapPromise(promise, responseCallback);
+   },
+ 
+-  onMessage(name) {
++  onMessage(name, isExternal) {
+     return new SingletonEventManager(this.context, name, callback => {
+       let listener = {
++        isExternal,
+         messageFilterPermissive: this.filter,
+ 
+         receiveMessage: ({target, data: message, sender, recipient}) => {
+           if (this.delegate) {
+             this.delegate.getSender(this.context, target, sender);
+           }
+ 
+           let sendResponse;
+@@ -900,29 +901,31 @@ Messenger.prototype = {
+     let portId = nextPortId++;
+     let port = new Port(this.context, messageManager, name, portId, null);
+     let msg = {name, portId};
+     // TODO: Disconnect the port if no response?
+     this._sendMessage(messageManager, "Extension:Connect", msg, recipient);
+     return port.api();
+   },
+ 
+-  onConnect(name) {
++  onConnect(name, isExternal) {
+     return new SingletonEventManager(this.context, name, callback => {
+       let listener = {
++        isExternal,
+         messageFilterPermissive: this.filter,
+ 
+         receiveMessage: ({target, data: message, sender, recipient}) => {
+           let {name, portId} = message;
+           let mm = getMessageManager(target);
+           if (this.delegate) {
+             this.delegate.getSender(this.context, target, sender);
+           }
+           let port = new Port(this.context, mm, name, portId, sender);
+           runSafeSyncWithoutClone(callback, port.api());
++
+           return true;
+         },
+       };
+ 
+       MessageChannel.addListener(this.messageManagers, "Extension:Connect", listener);
+       return () => {
+         MessageChannel.removeListener(this.messageManagers, "Extension:Connect", listener);
+       };
+diff --git a/toolkit/components/extensions/MessageChannel.jsm b/toolkit/components/extensions/MessageChannel.jsm
+--- a/toolkit/components/extensions/MessageChannel.jsm
++++ b/toolkit/components/extensions/MessageChannel.jsm
+@@ -149,36 +149,56 @@ class FilteringMessageManager {
+     this.handlers = new Map();
+   }
+ 
+   /**
+    * Receives a message from our message manager, maps it to a handler, and
+    * passes the result to our message callback.
+    */
+   receiveMessage({data, target}) {
+-    let handlers = Array.from(this.getHandlers(data.messageName, data.recipient));
++    let handlers = Array.from(this.getHandlers(data.messageName, data));
+ 
+     data.target = target;
+     this.callback(handlers, data);
+   }
+ 
+   /**
+    * Iterates over all handlers for the given message name. If `recipient`
+    * is provided, only iterates over handlers whose filters match it.
+    *
+    * @param {string|number} messageName
+    *     The message for which to return handlers.
+    * @param {object} recipient
+    *     The recipient data on which to filter handlers.
+    */
+-  * getHandlers(messageName, recipient) {
++  * getHandlers(messageName, {sender, recipient}) {
+     let handlers = this.handlers.get(messageName) || new Set();
+     for (let handler of handlers) {
+-      if (MessageChannel.matchesFilter(handler.messageFilterStrict || {}, recipient) &&
+-          MessageChannel.matchesFilter(handler.messageFilterPermissive || {}, recipient, false)) {
++      let matchStrict = MessageChannel.matchesFilter(handler.messageFilterStrict || {},
++                                                     recipient);
++      let matchPermissive = MessageChannel.matchesFilter(handler.messageFilterPermissive || {},
++                                                         recipient, false);
++      if (matchStrict && matchPermissive) {
++        // Special filtering related to cross-addons messages and port connection:
++        if (messageName == "Extension:Message" || messageName == "Extension:Connect") {
++          if (!handler.isExternal &&
++              (sender.extensionId !== recipient.extensionId)) {
++            // Skip the message if is a cross-addons message and
++            // the handler do not want to receive any external message.
++            continue;
++          }
++
++          if (handler.isExternal &&
++              (sender.extensionId === recipient.extensionId)) {
++            // Skip the message if is not a cross-addons message and
++            // the handler want to receive only external messages.
++            continue;
++          }
++        }
++
+         yield handler;
+       }
+     }
+   }
+ 
+   /**
+    * Registers a handler for the given message.
+    *
+diff --git a/toolkit/components/extensions/ext-runtime.js b/toolkit/components/extensions/ext-runtime.js
+--- a/toolkit/components/extensions/ext-runtime.js
++++ b/toolkit/components/extensions/ext-runtime.js
+@@ -16,18 +16,20 @@ extensions.registerSchemaAPI("runtime", 
+         return () => {
+           extension.onStartup = null;
+         };
+       }).api(),
+ 
+       onInstalled: ignoreEvent(context, "runtime.onInstalled"),
+ 
+       onMessage: context.messenger.onMessage("runtime.onMessage"),
++      onConnect: context.messenger.onConnect("runtime.onConnect"),
+ 
+-      onConnect: context.messenger.onConnect("runtime.onConnect"),
++      onMessageExternal: context.messenger.onMessage("runtime.onMessageExternal", true),
++      onConnectExternal: context.messenger.onConnect("runtime.onConnectExternal", true),
+ 
+       connect: function(extensionId, connectInfo) {
+         let name = connectInfo !== null && connectInfo.name || "";
+         let recipient = extensionId !== null ? {extensionId} : {extensionId: extension.id};
+ 
+         return context.messenger.connect(Services.cpmm, name, recipient);
+       },
+ 
+diff --git a/toolkit/components/extensions/schemas/runtime.json b/toolkit/components/extensions/schemas/runtime.json
+--- a/toolkit/components/extensions/schemas/runtime.json
++++ b/toolkit/components/extensions/schemas/runtime.json
+@@ -461,17 +461,16 @@
+         "type": "function",
+         "description": "Fired when a connection is made from either an extension process or a content script.",
+         "parameters": [
+           {"$ref": "Port", "name": "port"}
+         ]
+       },
+       {
+         "name": "onConnectExternal",
+-        "unsupported": true,
+         "type": "function",
+         "description": "Fired when a connection is made from another extension.",
+         "parameters": [
+           {"$ref": "Port", "name": "port"}
+         ]
+       },
+       {
+         "name": "onMessage",
+@@ -485,17 +484,16 @@
+         "returns": {
+           "type": "boolean",
+           "optional": true,
+           "description": "Return true from the event listener if you wish to call <code>sendResponse</code> after the event listener returns."
+         }
+       },
+       {
+         "name": "onMessageExternal",
+-        "unsupported": true,
+         "type": "function",
+         "description": "Fired when a message is sent from another extension/app. Cannot be used in a content script.",
+         "parameters": [
+           {"name": "message", "type": "any", "optional": true, "description": "The message sent by the calling script."},
+           {"name": "sender", "$ref": "MessageSender" },
+           {"name": "sendResponse", "type": "function", "description": "Function to call (at most once) when you have a response. The argument should be any JSON-ifiable object. If you have more than one <code>onMessage</code> listener in the same document, then only one may send a response. This function becomes invalid when the event listener returns, unless you return true from the event listener to indicate you wish to send a response asynchronously (this will keep the message channel open to the other end until <code>sendResponse</code> is called)." }
+         ],
+         "returns": {
