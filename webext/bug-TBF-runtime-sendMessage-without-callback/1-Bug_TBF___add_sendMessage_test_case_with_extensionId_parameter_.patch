@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1458119429 -3600
 #      Wed Mar 16 10:10:29 2016 +0100
-# Node ID b102aa5688a116b5870d72003bd6b90a63365138
-# Parent  f0c0480732d36153e8839c7f17394d45f679f87d
+# Node ID f3f58142e1e369ce8dc0e81b0063ecf8fd497c03
+# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
 Bug TBF - add sendMessage test case with extensionId parameter.
 
 MozReview-Commit-ID: IzfZHO13dwb
