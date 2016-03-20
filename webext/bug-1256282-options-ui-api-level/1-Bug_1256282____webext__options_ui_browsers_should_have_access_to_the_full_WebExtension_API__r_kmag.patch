@@ -1,0 +1,103 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458414490 -3600
+#      Sat Mar 19 20:08:10 2016 +0100
+# Node ID 903c79663aa98ec7b651e073749a27c19030ca7d
+# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
+Bug 1256282 - [webext] options_ui browsers should have access to the full WebExtension API. r?kmag
+
+MozReview-Commit-ID: E1GwT0zfGie
+
+diff --git a/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js b/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js
+--- a/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js
++++ b/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js
+@@ -92,19 +92,27 @@ add_task(function* test_inline_options()
+         return browser.runtime.openOptionsPage();
+       }).then(() => {
+         return browser.tabs.query({currentWindow: true, active: true});
+       }).then(([tab]) => {
+         browser.test.assertEq(optionsTab, tab.id, "Tab is the same as the previous options tab");
+         browser.test.assertEq("about:addons", tab.url, "Tab contains AddonManager");
+ 
+         browser.test.log("Ping options page.");
+-        return new Promise(resolve => browser.tabs.sendMessage(optionsTab, "ping", resolve));
+-      }).then(() => {
+-        browser.test.log("Got pong.");
++        return new Promise((resolve, reject) => {
++          browser.runtime.sendMessage("ping", (msg) => {
++            if (browser.runtime.lastError) {
++              reject(browser.runtime.lastError);
++            } else {
++              resolve(msg);
++            }
++          });
++        });
++      }).then((pong) => {
++        browser.test.assertEq("pong", pong, "Got pong.");
+ 
+         browser.test.log("Remove options tab.");
+         return browser.tabs.remove(optionsTab);
+       }).then(() => {
+         browser.test.log("Open options page again. Expect fresh load.");
+         return Promise.all([
+           browser.runtime.openOptionsPage(),
+           awaitOptions(),
+diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
+--- a/toolkit/components/extensions/ExtensionManagement.jsm
++++ b/toolkit/components/extensions/ExtensionManagement.jsm
+@@ -227,31 +227,46 @@ const API_LEVELS = Object.freeze({
+ 
+ // Finds the API Level ("FULL_PRIVILEGES", "CONTENTSCRIPT_PRIVILEGES", "NO_PRIVILEGES")
+ // with a given a window object.
+ function getAPILevelForWindow(window, addonId) {
+   const {NO_PRIVILEGES, CONTENTSCRIPT_PRIVILEGES, FULL_PRIVILEGES} = API_LEVELS;
+ 
+   // Non WebExtension URLs and WebExtension URLs from a different extension
+   // has no access to APIs.
+-  if (!addonId && getAddonIdForWindow(window) != addonId) {
++  if (!addonId || getAddonIdForWindow(window) != addonId) {
+     return NO_PRIVILEGES;
+   }
+ 
+-  let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
+-        .getInterface(Ci.nsIDocShell);
+-
+-  // WebExtension URLs loaded into sub-frame UI have "content script API level privileges".
+-  // (see Bug 1214658 for rationale)
+-  if (docShell.sameTypeParent) {
++  // Extension pages running in the content process always defaults to
++  // "content script API level privileges".
++  if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
+     return CONTENTSCRIPT_PRIVILEGES;
+   }
+ 
+-  // Extension pages running in the content process defaults to "content script API level privileges".
+-  if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
++  let docShell = window.QueryInterface(Ci.nsIInterfaceRequestor)
++                       .getInterface(Ci.nsIDocShell);
++
++  // Handling of ExtensionPages running inside sub-frames.
++  if (docShell.sameTypeParent) {
++    let parentWindow = docShell.sameTypeParent.QueryInterface(Ci.nsIInterfaceRequestor)
++                               .getInterface(Ci.nsIDOMWindow);
++
++    // The option page iframe embedded in the about:addons tab should have
++    // full API level privileges. (see Bug 1256282 for rationale)
++    let parentDocument = parentWindow.document;
++    let parentIsSystemPrincipal = Services.scriptSecurityManager
++                                          .isSystemPrincipal(parentDocument.nodePrincipal);
++    if (parentDocument.location.href == "about:addons" && parentIsSystemPrincipal) {
++      return FULL_PRIVILEGES;
++    }
++
++    // In all the other cases, WebExtension URLs loaded into sub-frame UI
++    // will have "content script API level privileges".
++    // (see Bug 1214658 for rationale)
+     return CONTENTSCRIPT_PRIVILEGES;
+   }
+ 
+   // WebExtension URLs loaded into top frames UI could have full API level privileges.
+   return FULL_PRIVILEGES;
+ }
+ 
+ this.ExtensionManagement = {
