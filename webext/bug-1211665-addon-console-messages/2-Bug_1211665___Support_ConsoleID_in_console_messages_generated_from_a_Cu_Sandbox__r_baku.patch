@@ -1,0 +1,46 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458672712 -3600
+#      Tue Mar 22 19:51:52 2016 +0100
+# Node ID 33c21b958b54cae3280dade65efb5159e8fce123
+# Parent  47e7f9c3e9f7311e01f0575127ce638fca1c3832
+Bug 1211665 - Support ConsoleID in console messages generated from a Cu.Sandbox. r?baku
+
+- get the addonId from the current JS global, if any
+- tag addon Console API messages with a custom consoleID ("addon/ID"),
+  which is how the Addon Console RDP Actor recognize the messages that have to be
+  collected and shown in the Addon Console Panel
+
+MozReview-Commit-ID: 96A5lQ8t5QD
+
+diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
+--- a/dom/base/Console.cpp
++++ b/dom/base/Console.cpp
+@@ -871,16 +871,27 @@ Console::Observe(nsISupports* aSubject, 
+   }
+ 
+   return NS_OK;
+ }
+ 
+ JSObject*
+ Console::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
+ {
++  // Customize the consoleID if the current global has an addonId.
++  if (JSObject* global = JS::CurrentGlobalOrNull(aCx)) {
++    if (JSAddonId* id = JS::AddonIdOfObject(global)) {
++      JSFlatString* flat = JS_ASSERT_STRING_IS_FLAT(JS::StringOfAddonId(id));
++      nsString consoleId;
++      AssignJSFlatString(consoleId, flat);
++      mConsoleID.Insert(MOZ_UTF16("addon/"), 0);
++      mConsoleID.Append(consoleId);
++    }
++  }
++
+   return ConsoleBinding::Wrap(aCx, this, aGivenProto);
+ }
+ 
+ #define METHOD(name, string)                                          \
+   void                                                                \
+   Console::name(JSContext* aCx, const Sequence<JS::Value>& aData)     \
+   {                                                                   \
+     Method(aCx, Method##name, NS_LITERAL_STRING(string), aData);      \
