@@ -1,0 +1,207 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458746799 -3600
+#      Wed Mar 23 16:26:39 2016 +0100
+# Node ID 1b680fb56196ded9a6d197ef3c4d6a465b914cab
+# Parent  3c814292b79f0be88e11a2d30986743f2ffa8cdd
+TMP - test ConsoleID on event generated from a Cu.Sandbox
+
+MozReview-Commit-ID: IoYHv14S6L0
+
+diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
+--- a/dom/base/Console.cpp
++++ b/dom/base/Console.cpp
+@@ -783,16 +783,17 @@ NS_INTERFACE_MAP_END
+ Console::Console(nsPIDOMWindowInner* aWindow)
+   : mWindow(aWindow)
+ #ifdef DEBUG
+   , mOwningThread(PR_GetCurrentThread())
+ #endif
+   , mOuterID(0)
+   , mInnerID(0)
+ {
++  printf("**** CANARY: CREATE CONSOLE\n");
+   if (mWindow) {
+     MOZ_ASSERT(mWindow->IsInnerWindow());
+     mInnerID = mWindow->WindowID();
+ 
+     // Without outerwindow any console message coming from this object will not
+     // shown in the devtools webconsole. But this should be fine because
+     // probably we are shutting down, or the window is CCed/GCed.
+     nsPIDOMWindowOuter* outerWindow = mWindow->GetOuterWindow();
+@@ -871,19 +872,20 @@ Console::Observe(nsISupports* aSubject, 
+   }
+ 
+   return NS_OK;
+ }
+ 
+ JSObject*
+ Console::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
+ {
+-  // Customize the consoleID if the current global has an addonId.
+   if (JSObject* global = JS::CurrentGlobalOrNull(aCx)) {
++    printf("**** CANARY: wrap object global\n");
+     if (JSAddonId* id = JS::AddonIdOfObject(global)) {
++      printf("**** CANARY: wrap object addonId\n");
+       JSFlatString* flat = JS_ASSERT_STRING_IS_FLAT(JS::StringOfAddonId(id));
+       nsString consoleId;
+       AssignJSFlatString(consoleId, flat);
+       mConsoleID.Insert(MOZ_UTF16("addon/"), 0);
+       mConsoleID.Append(consoleId);
+     }
+   }
+ 
+diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
+--- a/dom/tests/browser/browser.ini
++++ b/dom/tests/browser/browser.ini
+@@ -2,27 +2,29 @@
+ support-files =
+   browser_frame_elements.html
+   page_privatestorageevent.html
+   position.html
+   test-console-api.html
+   test_bug1004814.html
+   worker_bug1004814.js
+   geo_leak_test.html
++  content_script.js
+ 
+ [browser_test_toolbars_visibility.js]
+ support-files =
+   test_new_window_from_content_child.html
+ [browser_bug1008941_dismissGeolocationHanger.js]
+ skip-if = buildapp == 'mulet'
+ [browser_test__content.js]
+ skip-if = e10s
+ [browser_ConsoleAPITests.js]
+ skip-if = e10s
+ [browser_ConsoleAPI_ConsoleID.js]
++[browser_ConsoleAPI_ConsoleID_CuSandbox.js]
+ [browser_ConsoleStorageAPITests.js]
+ skip-if = e10s
+ [browser_ConsoleStoragePBTest_perwindowpb.js]
+ skip-if = e10s
+ [browser_autofocus_background.js]
+ skip-if= buildapp == 'mulet'
+ [browser_autofocus_preference.js]
+ [browser_bug1238427.js]
+diff --git a/dom/tests/browser/browser_ConsoleAPI_ConsoleID_CuSandbox.js b/dom/tests/browser/browser_ConsoleAPI_ConsoleID_CuSandbox.js
+new file mode 100644
+--- /dev/null
++++ b/dom/tests/browser/browser_ConsoleAPI_ConsoleID_CuSandbox.js
+@@ -0,0 +1,88 @@
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++const ConsoleAPIStorage = Cc["@mozilla.org/consoleAPI-storage;1"]
++      .getService(Ci.nsIConsoleAPIStorage);
++
++const FAKE_ADDON_ID = "test-webext-addon@mozilla.org";
++const EXPECTED_CONSOLE_ID = `addon/${FAKE_ADDON_ID}`;
++const EXPECTED_CONSOLE_MESSAGE_CONTENT = "fake-webext-addon-test-log-message";
++const ConsoleObserver = {
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
++
++  init() {
++    Services.obs.addObserver(this, "console-api-log-event", false);
++  },
++
++  uninit() {
++    Services.obs.removeObserver(this, "console-api-log-event", false);
++  },
++
++  observe(aSubject, aTopic, aData) {
++    if (aTopic == "console-api-log-event") {
++      let consoleAPIMessage = aSubject.wrappedJSObject;
++
++      is(consoleAPIMessage.arguments[0], EXPECTED_CONSOLE_MESSAGE_CONTENT,
++         "the consoleAPIMessage contains the expected message");
++      is(consoleAPIMessage.consoleID, EXPECTED_CONSOLE_ID,
++         "the consoleAPImessage contains the expected consoleID");
++
++      let cachedMessages = ConsoleAPIStorage.getEvents();
++
++      is(cachedMessages.length, 1, "found one console api messsage as expected");
++      is(cachedMessages[0].consoleID, EXPECTED_CONSOLE_ID,
++         "the cached consoleAPImessage contains the expected consoleID");
++
++      finish();
++    }
++  }
++};
++
++function test()
++{
++  ConsoleObserver.init();
++
++  waitForExplicitFinish();
++
++  let chromeWebNav = Services.appShell.createWindowlessBrowser(true);
++  let interfaceRequestor = chromeWebNav.QueryInterface(Ci.nsIInterfaceRequestor);
++  let docShell = interfaceRequestor.getInterface(Ci.nsIDocShell);
++  let nullprincipal = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
++  docShell.createAboutBlankContentViewer(nullprincipal);
++  let contentWindow = docShell.contentViewer.DOMDocument.defaultView;
++
++  let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
++  let uuid = uuidGenerator.generateUUID().number;
++  uuid = uuid.slice(1, -1); // Strip { and } off the UUID.
++  let baseURI = Services.io.newURI("about:blank", null, null);
++  let originAttributed = {addonId: FAKE_ADDON_ID};
++  let extensionPrincipal = Services.scriptSecurityManager
++        .createCodebasePrincipal(baseURI, originAttributed);
++
++  let sandbox = Cu.Sandbox([contentWindow.document.nodePrincipal, extensionPrincipal], {
++    sandboxPrototype: contentWindow,
++    wantXrays: true,
++    metadata: {
++      addonID: FAKE_ADDON_ID,
++    }
++  });
++
++  info("fake webextension docShell created");
++
++  registerCleanupFunction(function() {
++    Cu.nukeSandbox(sandbox);
++    ConsoleObserver.uninit();
++    chromeWebNav.close();
++    chromeWebNav = null;
++  });
++
++  Cu.evalInSandbox(`console.log("${EXPECTED_CONSOLE_MESSAGE_CONTENT}")`, sandbox, "latest");
++  // Services.scriptloader.
++  //   loadSubScriptWithOptions("chrome://mochitests/content/browser/dom/tests/browser/content_script.js", {
++  //     target: sandbox,
++  //     charset: "UTF-8",
++  //     async: false,
++  //   });
++
++  info("fake webextension page logged a console api message");
++}
+diff --git a/dom/tests/browser/content_script.js b/dom/tests/browser/content_script.js
+new file mode 100644
+--- /dev/null
++++ b/dom/tests/browser/content_script.js
+@@ -0,0 +1,1 @@
++console.log("fake-webext-addon-test-log-message");
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -314,16 +314,18 @@ class ExtensionContext extends BaseConte
+       // This is an iframe with content script API enabled and its principal should be the
+       // contentWindow itself. (we create a sandbox with the contentWindow as principal and with X-rays disabled
+       // because it enables us to create the APIs object in this sandbox object and then copying it
+       // into the iframe's window, see Bug 1214658 for rationale)
+       this.sandbox = Cu.Sandbox(contentWindow, {
+         sandboxPrototype: contentWindow,
+         wantXrays: false,
+         isWebExtensionContentScript: true,
++        // NOTE: doesn't seem to be useful because the console object is from the extension iframe
++        // and already has the correct consoleID
+         addonId: this.extensionId,
+       });
+     } else {
+       this.sandbox = Cu.Sandbox(prin, {
+         sandboxPrototype: contentWindow,
+         wantXrays: true,
+         isWebExtensionContentScript: true,
+         wantGlobalProperties: ["XMLHttpRequest"],

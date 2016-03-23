@@ -1,0 +1,110 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458691366 -3600
+#      Wed Mar 23 01:02:46 2016 +0100
+# Node ID 3c814292b79f0be88e11a2d30986743f2ffa8cdd
+# Parent  43db29b0a05f3562829cc958631593b32ad6c914
+Bug 1211665 - Test ConsoleID on ConsoleAPI object. r?baku
+
+MozReview-Commit-ID: 5ziOrz2Cjy9
+
+diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
+--- a/dom/tests/browser/browser.ini
++++ b/dom/tests/browser/browser.ini
+@@ -12,16 +12,17 @@ support-files =
+ support-files =
+   test_new_window_from_content_child.html
+ [browser_bug1008941_dismissGeolocationHanger.js]
+ skip-if = buildapp == 'mulet'
+ [browser_test__content.js]
+ skip-if = e10s
+ [browser_ConsoleAPITests.js]
+ skip-if = e10s
++[browser_ConsoleAPI_ConsoleID.js]
+ [browser_ConsoleStorageAPITests.js]
+ skip-if = e10s
+ [browser_ConsoleStoragePBTest_perwindowpb.js]
+ skip-if = e10s
+ [browser_autofocus_background.js]
+ skip-if= buildapp == 'mulet'
+ [browser_autofocus_preference.js]
+ [browser_bug1238427.js]
+diff --git a/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js b/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js
+new file mode 100644
+--- /dev/null
++++ b/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js
+@@ -0,0 +1,74 @@
++/* Any copyright is dedicated to the Public Domain.
++   http://creativecommons.org/publicdomain/zero/1.0/ */
++
++const ConsoleAPIStorage = Cc["@mozilla.org/consoleAPI-storage;1"]
++      .getService(Ci.nsIConsoleAPIStorage);
++
++const FAKE_ADDON_ID = "test-webext-addon@mozilla.org";
++const EXPECTED_CONSOLE_ID = `addon/${FAKE_ADDON_ID}`;
++const EXPECTED_CONSOLE_MESSAGE_CONTENT = "fake-webext-addon-test-log-message";
++const ConsoleObserver = {
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
++
++  init() {
++    Services.obs.addObserver(this, "console-api-log-event", false);
++  },
++
++  uninit() {
++    Services.obs.removeObserver(this, "console-api-log-event", false);
++  },
++
++  observe(aSubject, aTopic, aData) {
++    if (aTopic == "console-api-log-event") {
++      let consoleAPIMessage = aSubject.wrappedJSObject;
++
++      is(consoleAPIMessage.arguments[0], EXPECTED_CONSOLE_MESSAGE_CONTENT,
++         "the consoleAPIMessage contains the expected message");
++      is(consoleAPIMessage.consoleID, EXPECTED_CONSOLE_ID,
++         "the consoleAPImessage contains the expected consoleID");
++
++      let cachedMessages = ConsoleAPIStorage.getEvents();
++
++      is(cachedMessages.length, 1, "found one console api messsage as expected");
++      is(cachedMessages[0].consoleID, EXPECTED_CONSOLE_ID,
++         "the cached consoleAPImessage contains the expected consoleID");
++
++      finish();
++    }
++  }
++};
++
++function test()
++{
++  ConsoleObserver.init();
++
++  waitForExplicitFinish();
++
++  let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
++  let uuid = uuidGenerator.generateUUID().number;
++  uuid = uuid.slice(1, -1); // Strip { and } off the UUID.
++  let baseURI = Services.io.newURI("about:blank", null, null);
++  let originAttributed = {addonId: FAKE_ADDON_ID};
++  let principal = Services.scriptSecurityManager
++        .createCodebasePrincipal(baseURI, originAttributed);
++
++  dump(`CANARY origin: ${principal.origin}\n`);
++
++  let chromeWebNav = Services.appShell.createWindowlessBrowser(true);
++  let interfaceRequestor = chromeWebNav.QueryInterface(Ci.nsIInterfaceRequestor);
++  let docShell = interfaceRequestor.getInterface(Ci.nsIDocShell);
++  docShell.createAboutBlankContentViewer(principal);
++
++  info("fake webextension docShell created");
++
++  registerCleanupFunction(function() {
++    ConsoleObserver.uninit();
++    chromeWebNav.close();
++    chromeWebNav = null;
++  });
++
++  let window = docShell.contentViewer.DOMDocument.defaultView;
++  window.location = `javascript:console.log("${EXPECTED_CONSOLE_MESSAGE_CONTENT}")`;
++
++  info("fake webextension page logged a console api message");
++}
