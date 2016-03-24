@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-# Date 1458691366 -3600
-#      Wed Mar 23 01:02:46 2016 +0100
-# Node ID 8c88dc608dd2a75d572b257a25f02f8ddfbe83fd
+# Date 1458838206 -3600
+#      Thu Mar 24 17:50:06 2016 +0100
+# Node ID 004033690c4ad972b28c4d08872603d1f63a0496
 # Parent  3dc5292ed66afbca801c33bff49c86154b3b3c24
 Bug 1211665 - Log messages generated from WebExtensions pages should contains a ConsoleID. r?baku
 
@@ -16,7 +16,30 @@ MozReview-Commit-ID: 5v9BWLbgskd
 diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 --- a/dom/base/Console.cpp
 +++ b/dom/base/Console.cpp
-@@ -219,16 +219,18 @@ public:
+@@ -135,16 +135,22 @@ public:
+     MOZ_ASSERT(mIDType == eUnknown);
+ 
+     mOuterIDString = aOuterID;
+     mInnerIDString = aInnerID;
+     mIDType = eString;
+   }
+ 
+   void
++  SetOriginAttributes(const JS::Value& aOriginAttributes)
++  {
++    mOriginAttributes = aOriginAttributes;
++  }
++
++  void
+   CleanupJSObjects()
+   {
+     AssertIsOnOwningThread();
+     mCopiedArguments.Clear();
+ 
+     if (mConsole) {
+       mConsole->UnregisterConsoleCallData(this);
+       mConsole = nullptr;
+@@ -219,16 +225,18 @@ public:
    } mIDType;
  
    uint64_t mOuterIDNumber;
@@ -25,7 +48,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    uint64_t mInnerIDNumber;
    nsString mInnerIDString;
  
-+  nsString mConsoleID;
++  JS::Value mOriginAttributes;
 +
    nsString mMethodString;
  
@@ -35,55 +58,115 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    // 2)  mReifiedStack is initialized if we're created in a worker.
    // 3)  mStack is set (possibly to null if there is no JS on the stack) if
    //     we're created on main thread.
-@@ -792,16 +794,30 @@ Console::Console(nsPIDOMWindowInner* aWi
+@@ -549,38 +557,58 @@ private:
+   RunConsole(JSContext* aCx, nsPIDOMWindowOuter* aOuterWindow,
+              nsPIDOMWindowInner* aInnerWindow) override
+   {
+     AssertIsOnMainThread();
+     MOZ_ASSERT(mCallData->mCopiedArguments.IsEmpty());
  
-     // Without outerwindow any console message coming from this object will not
-     // shown in the devtools webconsole. But this should be fine because
-     // probably we are shutting down, or the window is CCed/GCed.
-     nsPIDOMWindowOuter* outerWindow = mWindow->GetOuterWindow();
-     if (outerWindow) {
-       mOuterID = outerWindow->WindowID();
-     }
+     // The windows have to run in parallel.
+     MOZ_ASSERT(!!aOuterWindow == !!aInnerWindow);
++    nsIPrincipal* principal;
++    JS::RootedValue mOriginAttributes(aCx);
+ 
+     if (aOuterWindow) {
++      // Customize the consoleID if the script object principal has
++      // an addonId.
++      nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(aInnerWindow);
++      if (sop) {
++        principal = sop->GetPrincipal();
++        if (principal) {
++          BasePrincipal::Cast(principal)->GetOriginAttributes(aCx, &mOriginAttributes);
++          mCallData->SetOriginAttributes(mOriginAttributes);
++        }
++      }
 +
-+    // Customize the consoleID if the script object principal has
-+    // an addonId.
-+    nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
-+    if (sop) {
-+      nsIPrincipal* principal = sop->GetPrincipal();
+       mCallData->SetIDs(aOuterWindow->WindowID(), aInnerWindow->WindowID());
+     } else {
+       ConsoleStackEntry frame;
+       if (mCallData->mTopStackFrame) {
+         frame = *mCallData->mTopStackFrame;
+       }
+ 
+       nsString id = frame.mFilename;
+       nsString innerID;
++
+       if (mWorkerPrivate->IsSharedWorker()) {
+         innerID = NS_LITERAL_STRING("SharedWorker");
+       } else if (mWorkerPrivate->IsServiceWorker()) {
+         innerID = NS_LITERAL_STRING("ServiceWorker");
+         // Use scope as ID so the webconsole can decide if the message should
+         // show up per tab
+         id.AssignWithConversion(mWorkerPrivate->WorkerName());
+       } else {
+         innerID = NS_LITERAL_STRING("Worker");
+       }
+ 
++      principal = mWorkerPrivate->GetPrincipal();
 +      if (principal) {
-+        PrincipalOriginAttributes poa = BasePrincipal::Cast(principal)->OriginAttributesRef();
-+        if (!poa.mAddonId.IsEmpty()) {
-+          mConsoleID.Insert(MOZ_UTF16("addon/"), 0);
-+          mConsoleID.Append(poa.mAddonId);
++        BasePrincipal::Cast(principal)->GetOriginAttributes(aCx, &mOriginAttributes);
++        mCallData->SetOriginAttributes(mOriginAttributes);
++      }
++
+       mCallData->SetIDs(id, innerID);
+     }
+ 
+     // Now we could have the correct window (if we are not window-less).
+     mClonedData.mParent = aInnerWindow;
+ 
+     ProcessCallData(aCx);
+ 
+@@ -1259,16 +1287,30 @@ Console::Method(JSContext* aCx, MethodNa
+ 
+     callData->mCountValue = IncreaseCounter(aCx, frame, aData,
+                                             callData->mCountLabel);
+   }
+ 
+   JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
+ 
+   if (NS_IsMainThread()) {
++    if (mWindow) {
++      nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
++      if (sop) {
++        nsIPrincipal* principal = sop->GetPrincipal();
++
++        if (principal) {
++          JS::RootedValue mOriginAttributes(aCx);
++          BasePrincipal::Cast(principal)->GetOriginAttributes(aCx, &mOriginAttributes);
++
++          callData->SetOriginAttributes(mOriginAttributes);
 +        }
 +      }
 +    }
-   }
- 
-   if (NS_IsMainThread()) {
-     nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
-     if (obs) {
-       obs->AddObserver(this, "inner-window-destroyed", true);
-     }
-   }
-@@ -1338,16 +1354,17 @@ Console::ProcessCallData(ConsoleCallData
++
+     callData->SetIDs(mOuterID, mInnerID);
+     ProcessCallData(callData, global, aData);
      return;
    }
-   JSContext* cx = jsapi.cx();
-   ClearException ce(cx);
-   RootedDictionary<ConsoleEvent> event(cx);
  
-   event.mID.Construct();
-   event.mInnerID.Construct();
-+  event.mConsoleID = mConsoleID;
+   RefPtr<ConsoleCallDataRunnable> runnable =
+     new ConsoleCallDataRunnable(this, callData);
+   runnable->Dispatch(global);
+@@ -1370,16 +1412,18 @@ Console::ProcessCallData(ConsoleCallData
+   }
  
-   MOZ_ASSERT(aData->mIDType != ConsoleCallData::eUnknown);
-   if (aData->mIDType == ConsoleCallData::eString) {
-     event.mID.Value().SetAsString() = aData->mOuterIDString;
-     event.mInnerID.Value().SetAsString() = aData->mInnerIDString;
-   } else {
-     MOZ_ASSERT(aData->mIDType == ConsoleCallData::eNumber);
-     event.mID.Value().SetAsUnsignedLongLong() = aData->mOuterIDNumber;
+   event.mLineNumber = frame.mLineNumber;
+   event.mColumnNumber = frame.mColumnNumber;
+   event.mFunctionName = frame.mFunctionName;
+   event.mTimeStamp = aData->mTimeStamp;
+   event.mPrivate = aData->mPrivate;
+ 
++  event.mOriginAttributes = aData->mOriginAttributes;
++
+   switch (aData->mMethodName) {
+     case MethodLog:
+     case MethodInfo:
+     case MethodWarn:
+     case MethodError:
+     case MethodException:
+     case MethodDebug:
+     case MethodAssert:
 diff --git a/dom/base/Console.h b/dom/base/Console.h
 --- a/dom/base/Console.h
 +++ b/dom/base/Console.h
@@ -96,7 +179,7 @@ diff --git a/dom/base/Console.h b/dom/base/Console.h
  
    uint64_t mOuterID;
    uint64_t mInnerID;
-+  nsString mConsoleID;
++  JS::Value mOriginAttributes;
  
    friend class ConsoleCallData;
    friend class ConsoleRunnable;
@@ -130,7 +213,7 @@ diff --git a/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js b/dom/tests/brows
 new file mode 100644
 --- /dev/null
 +++ b/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,76 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -157,14 +240,18 @@ new file mode 100644
 +
 +      is(consoleAPIMessage.arguments[0], EXPECTED_CONSOLE_MESSAGE_CONTENT,
 +         "the consoleAPIMessage contains the expected message");
-+      is(consoleAPIMessage.consoleID, EXPECTED_CONSOLE_ID,
-+         "the consoleAPImessage contains the expected consoleID");
++
++      ok(consoleAPIMessage.originAttributes, "the consoleAPImessage contains originattributes");
++      is(consoleAPIMessage.originAttributes.addonId, FAKE_ADDON_ID,
++         "the consoleAPImessage's originAttributes contains the expected addonId");
 +
 +      let cachedMessages = ConsoleAPIStorage.getEvents();
 +
 +      is(cachedMessages.length, 1, "found one console api messsage as expected");
-+      is(cachedMessages[0].consoleID, EXPECTED_CONSOLE_ID,
-+         "the cached consoleAPImessage contains the expected consoleID");
++
++      ok(cachedMessages[0].originAttributes, "the consoleAPImessage contains originattributes");
++      is(cachedMessages[0].originAttributes.addonId, FAKE_ADDON_ID,
++         "the consoleAPImessage's originAttributes contains the expected addonId");
 +
 +      finish();
 +    }
@@ -199,7 +286,7 @@ new file mode 100644
 +  });
 +
 +  let window = docShell.contentViewer.DOMDocument.defaultView;
-+  window.location = `javascript:console.log("${EXPECTED_CONSOLE_MESSAGE_CONTENT}")`;
++  window.location = `javascript:console.log("${EXPECTED_CONSOLE_MESSAGE_CONTENT}");`;
 +
 +  info("fake webextension page logged a console api message");
 +}
@@ -215,7 +302,7 @@ diff --git a/dom/webidl/Console.webidl b/dom/webidl/Console.webidl
  dictionary ConsoleEvent {
    (unsigned long long or DOMString) ID;
    (unsigned long long or DOMString) innerID;
-+  DOMString consoleID = "";
++  any originAttributes = null;
    DOMString level = "";
    DOMString filename = "";
    unsigned long lineNumber = 0;

@@ -1,0 +1,120 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1458839004 -3600
+#      Thu Mar 24 18:03:24 2016 +0100
+# Node ID 1b61634cdf0a72335651bc3e5376a464dd1ee23c
+# Parent  004033690c4ad972b28c4d08872603d1f63a0496
+Bug 1211665 - Filter add-ons console messages based on ConsoleID or originAttributes.addonId.
+
+MozReview-Commit-ID: 2yEWhX6shkx
+
+diff --git a/devtools/server/actors/addon.js b/devtools/server/actors/addon.js
+--- a/devtools/server/actors/addon.js
++++ b/devtools/server/actors/addon.js
+@@ -311,17 +311,17 @@ update(AddonConsoleActor.prototype, {
+     let startedListeners = [];
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "ConsoleAPI":
+           if (!this.consoleAPIListener) {
+             this.consoleAPIListener =
+-              new ConsoleAPIListener(null, this, "addon/" + this.addon.id);
++              new ConsoleAPIListener(null, this, { addonId: this.addon.id });
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+       }
+     }
+     return {
+       startedListeners: startedListeners,
+diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/utils.js
+--- a/devtools/shared/webconsole/utils.js
++++ b/devtools/shared/webconsole/utils.js
+@@ -789,23 +789,24 @@ ConsoleServiceListener.prototype =
+  * @param nsIDOMWindow window
+  *        Optional - the window object for which we are created. This is used
+  *        for filtering out messages that belong to other windows.
+  * @param object owner
+  *        The owner object must have the following methods:
+  *        - onConsoleAPICall(). This method is invoked with one argument, the
+  *        Console API message that comes from the observer service, whenever
+  *        a relevant console API call is received.
+- * @param string consoleID
+- *        Options - The consoleID that this listener should listen to
++ * @param object filteringOptions
++ *        Options - The filteringOptions that this listener should listen to
++          (e.g. { addonId })
+  */
+-function ConsoleAPIListener(window, owner, consoleID) {
++function ConsoleAPIListener(window, owner, {addonId}) {
+   this.window = window;
+   this.owner = owner;
+-  this.consoleID = consoleID;
++  this.addonId = addonId;
+ }
+ exports.ConsoleAPIListener = ConsoleAPIListener;
+ 
+ ConsoleAPIListener.prototype =
+ {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   /**
+@@ -820,20 +821,20 @@ ConsoleAPIListener.prototype =
+    * console API call object that comes from the observer service.
+    *
+    * @type object
+    * @see WebConsoleActor
+    */
+   owner: null,
+ 
+   /**
+-   * The consoleID that we listen for. If not null then only messages from this
++   * The addonId that we listen for. If not null then only messages from this
+    * console will be returned.
+    */
+-  consoleID: null,
++  addonId: null,
+ 
+   /**
+    * Initialize the window.console API observer.
+    */
+   init: function() {
+     // Note that the observer is process-wide. We will filter the messages as
+     // needed, see CAL_observe().
+     Services.obs.addObserver(this, "console-api-log-event", false);
+@@ -891,18 +892,30 @@ ConsoleAPIListener.prototype =
+     if (this.window && !workerType) {
+       let msgWindow = Services.wm.getCurrentInnerWindowWithId(message.innerID);
+       if (!msgWindow || !isWindowIncluded(this.window, msgWindow)) {
+         // Not the same window!
+         return false;
+       }
+     }
+ 
+-    if (this.consoleID && message.consoleID !== this.consoleID) {
+-      return false;
++    if (this.addonId) {
++      // Filtering based on the old-style consoleID property used by
++      // the legacy Console JSM module.
++      if (message.consoleID &&
++          message.consoleID !== `addon/${this.addonId}`) {
++        return false;
++      }
++
++      // Filtering based on the originAttributes used by
++      // the Console API object.
++      if (message.originAttributes &&
++          message.originAttributes.addonId !== this.addonId) {
++        return false;
++      }
+     }
+ 
+     return true;
+   },
+ 
+   /**
+    * Get the cached messages for the current inner window and its (i)frames.
+    *
