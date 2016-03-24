@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1458414490 -3600
-#      Sat Mar 19 20:08:10 2016 +0100
-# Node ID 41d43f521c6da02b202c0d5b9c75d0eb83e3a6fb
-# Parent  189d3e93d615c6d79cb12fb5a05bdd5139a14e52
+# Date 1458845244 -3600
+#      Thu Mar 24 19:47:24 2016 +0100
+# Node ID 38330bafd60f1c809e42a948e7aa8ed5830990bb
+# Parent  5a437d55565701acfa66934ebcbefb4212c458a4
 Bug 1256282 - [webext] options_ui browsers should have access to the full WebExtension API. r?kmag
 
 MozReview-Commit-ID: E1GwT0zfGie
@@ -11,7 +11,7 @@ MozReview-Commit-ID: E1GwT0zfGie
 diff --git a/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js b/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js
 --- a/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js
 +++ b/browser/components/extensions/test/browser/browser_ext_runtime_openOptionsPage.js
-@@ -92,19 +92,27 @@ add_task(function* test_inline_options()
+@@ -92,19 +92,19 @@ add_task(function* test_inline_options()
          return browser.runtime.openOptionsPage();
        }).then(() => {
          return browser.tabs.query({currentWindow: true, active: true});
@@ -23,15 +23,7 @@ diff --git a/browser/components/extensions/test/browser/browser_ext_runtime_open
 -        return new Promise(resolve => browser.tabs.sendMessage(optionsTab, "ping", resolve));
 -      }).then(() => {
 -        browser.test.log("Got pong.");
-+        return new Promise((resolve, reject) => {
-+          browser.runtime.sendMessage("ping", (msg) => {
-+            if (browser.runtime.lastError) {
-+              reject(browser.runtime.lastError);
-+            } else {
-+              resolve(msg);
-+            }
-+          });
-+        });
++        return browser.runtime.sendMessage("ping");
 +      }).then((pong) => {
 +        browser.test.assertEq("pong", pong, "Got pong.");
  
