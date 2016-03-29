@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1458839004 -3600
-#      Thu Mar 24 18:03:24 2016 +0100
-# Node ID 3c3ece80a61c790dbea57c17b8f89f532cadfcbe
+# Date 1459266039 -7200
+#      Tue Mar 29 17:40:39 2016 +0200
+# Node ID d305d4545ae9b597ddbf31dec0381b1050018373
 # Parent  3e0c4e0d538c0a1879ba8890394b0bda7a06b4b9
 Bug 1211665 - Filter add-ons console messages based on ConsoleID or originAttributes.addonId.
 
@@ -30,10 +30,32 @@ diff --git a/devtools/server/actors/addon.js b/devtools/server/actors/addon.js
      }
      return {
        startedListeners: startedListeners,
+diff --git a/devtools/shared/tests/unit/test_consoleID.js b/devtools/shared/tests/unit/test_consoleID.js
+--- a/devtools/shared/tests/unit/test_consoleID.js
++++ b/devtools/shared/tests/unit/test_consoleID.js
+@@ -62,17 +62,17 @@ function run_test() {
+   console.log("Hello from default console");
+   console1.warn("Warning from foo");
+   console2.error("Error from bar");
+   do_check_eq(seenMessages, 3);
+   do_check_eq(seenTypes, 7);
+ 
+   listener.destroy();
+ 
+-  listener = new ConsoleAPIListener(null, callback, "foo");
++  listener = new ConsoleAPIListener(null, callback, {consoleID: "foo"});
+   listener.init();
+   messages = listener.getCachedMessages();
+ 
+   seenTypes = 0;
+   seenMessages = 0;
+   messages.forEach(callback.onConsoleAPICall);
+   do_check_eq(seenMessages, 2);
+   do_check_eq(seenTypes, 1);
 diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/utils.js
 --- a/devtools/shared/webconsole/utils.js
 +++ b/devtools/shared/webconsole/utils.js
-@@ -789,23 +789,24 @@ ConsoleServiceListener.prototype =
+@@ -789,22 +789,24 @@ ConsoleServiceListener.prototype =
   * @param nsIDOMWindow window
   *        Optional - the window object for which we are created. This is used
   *        for filtering out messages that belong to other windows.
@@ -46,14 +68,14 @@ diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/ut
 - *        Options - The consoleID that this listener should listen to
 + * @param object filteringOptions
 + *        Options - The filteringOptions that this listener should listen to
-+          (e.g. { addonId })
++          (e.g. { addonId: "..." } or { consoleID: "..." }).
   */
 -function ConsoleAPIListener(window, owner, consoleID) {
-+function ConsoleAPIListener(window, owner, {addonId}) {
++function ConsoleAPIListener(window, owner, {addonId, consoleID} = {}) {
    this.window = window;
    this.owner = owner;
--  this.consoleID = consoleID;
 +  this.addonId = addonId;
+   this.consoleID = consoleID;
  }
  exports.ConsoleAPIListener = ConsoleAPIListener;
  
@@ -61,8 +83,7 @@ diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/ut
  {
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
  
-   /**
-@@ -820,20 +821,20 @@ ConsoleAPIListener.prototype =
+@@ -820,20 +822,20 @@ ConsoleAPIListener.prototype =
     * console API call object that comes from the observer service.
     *
     * @type object
@@ -85,7 +106,7 @@ diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/ut
      // Note that the observer is process-wide. We will filter the messages as
      // needed, see CAL_observe().
      Services.obs.addObserver(this, "console-api-log-event", false);
-@@ -891,18 +892,30 @@ ConsoleAPIListener.prototype =
+@@ -891,18 +893,41 @@ ConsoleAPIListener.prototype =
      if (this.window && !workerType) {
        let msgWindow = Services.wm.getCurrentInnerWindowWithId(message.innerID);
        if (!msgWindow || !isWindowIncluded(this.window, msgWindow)) {
@@ -96,11 +117,22 @@ diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/ut
  
 -    if (this.consoleID && message.consoleID !== this.consoleID) {
 -      return false;
-+    if (this.addonId) {
++    if (this.consoleID) {
 +      // Filtering based on the old-style consoleID property used by
 +      // the legacy Console JSM module.
-+      if (message.consoleID &&
-+          message.consoleID !== `addon/${this.addonId}`) {
++      if (message.consoleID !== this.consoleID) {
++        return false;
++      }
++    }
++
++    if (this.addonId) {
++      if (!message.consoleID && !message.originAttributes) {
++        return false;
++      }
++
++      // Filtering based on the old-style consoleID property used by
++      // the legacy Console JSM module.
++      if (message.consoleID && message.consoleID !== `addon/${this.addonId}`) {
 +        return false;
 +      }
 +
