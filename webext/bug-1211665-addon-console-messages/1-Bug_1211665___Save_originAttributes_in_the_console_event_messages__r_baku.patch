@@ -1,15 +1,15 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-# Date 1458838206 -3600
-#      Thu Mar 24 17:50:06 2016 +0100
-# Node ID 004033690c4ad972b28c4d08872603d1f63a0496
+# Date 1459263637 -7200
+#      Tue Mar 29 17:00:37 2016 +0200
+# Node ID 3e0c4e0d538c0a1879ba8890394b0bda7a06b4b9
 # Parent  3dc5292ed66afbca801c33bff49c86154b3b3c24
-Bug 1211665 - Log messages generated from WebExtensions pages should contains a ConsoleID. r?baku
+Bug 1211665 - Save originAttributes in the console event messages. r?baku
 
-- get the addonId from the Principal origin attributes, if any
-- tag addon Console API messages with a custom consoleID ("addon/ID"),
-  which is how the Addon Console RDP Actor recognize the messages that have to be
-  collected and shown in the Addon Console Panel
+Save the originAttributes of the current principal into the console events,
+so that we can filter the console messages by originAttributes (e.g.
+WebExtensions console events can be filtered using the addonId that the
+ExtensionPages' originAttributes contain.
 
 MozReview-Commit-ID: 5v9BWLbgskd
 
@@ -25,7 +25,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    }
  
    void
-+  SetOriginAttributes(const JS::Value& aOriginAttributes)
++  SetOriginAttributes(const PrincipalOriginAttributes& aOriginAttributes)
 +  {
 +    mOriginAttributes = aOriginAttributes;
 +  }
@@ -48,7 +48,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    uint64_t mInnerIDNumber;
    nsString mInnerIDString;
  
-+  JS::Value mOriginAttributes;
++  PrincipalOriginAttributes mOriginAttributes;
 +
    nsString mMethodString;
  
@@ -58,7 +58,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    // 2)  mReifiedStack is initialized if we're created in a worker.
    // 3)  mStack is set (possibly to null if there is no JS on the stack) if
    //     we're created on main thread.
-@@ -549,38 +557,58 @@ private:
+@@ -549,38 +557,57 @@ private:
    RunConsole(JSContext* aCx, nsPIDOMWindowOuter* aOuterWindow,
               nsPIDOMWindowInner* aInnerWindow) override
    {
@@ -68,17 +68,15 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
      // The windows have to run in parallel.
      MOZ_ASSERT(!!aOuterWindow == !!aInnerWindow);
 +    nsIPrincipal* principal;
-+    JS::RootedValue mOriginAttributes(aCx);
  
      if (aOuterWindow) {
-+      // Customize the consoleID if the script object principal has
-+      // an addonId.
++      // Save the principal's OriginAttributes in the console event data
++      // so that we will be able to filter messages by origin attributes.
 +      nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(aInnerWindow);
 +      if (sop) {
 +        principal = sop->GetPrincipal();
 +        if (principal) {
-+          BasePrincipal::Cast(principal)->GetOriginAttributes(aCx, &mOriginAttributes);
-+          mCallData->SetOriginAttributes(mOriginAttributes);
++          mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
 +        }
 +      }
 +
@@ -103,10 +101,11 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
          innerID = NS_LITERAL_STRING("Worker");
        }
  
++      // Save the principal's OriginAttributes in the console event data
++      // so that we will be able to filter messages by origin attributes.
 +      principal = mWorkerPrivate->GetPrincipal();
 +      if (principal) {
-+        BasePrincipal::Cast(principal)->GetOriginAttributes(aCx, &mOriginAttributes);
-+        mCallData->SetOriginAttributes(mOriginAttributes);
++        mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
 +      }
 +
        mCallData->SetIDs(id, innerID);
@@ -117,7 +116,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
  
      ProcessCallData(aCx);
  
-@@ -1259,16 +1287,30 @@ Console::Method(JSContext* aCx, MethodNa
+@@ -1259,16 +1286,29 @@ Console::Method(JSContext* aCx, MethodNa
  
      callData->mCountValue = IncreaseCounter(aCx, frame, aData,
                                              callData->mCountLabel);
@@ -127,15 +126,14 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
  
    if (NS_IsMainThread()) {
 +    if (mWindow) {
++      // Save the principal's OriginAttributes in the console event data
++      // so that we will be able to filter messages by origin attributes.
 +      nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
 +      if (sop) {
 +        nsIPrincipal* principal = sop->GetPrincipal();
 +
 +        if (principal) {
-+          JS::RootedValue mOriginAttributes(aCx);
-+          BasePrincipal::Cast(principal)->GetOriginAttributes(aCx, &mOriginAttributes);
-+
-+          callData->SetOriginAttributes(mOriginAttributes);
++          callData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
 +        }
 +      }
 +    }
@@ -148,7 +146,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    RefPtr<ConsoleCallDataRunnable> runnable =
      new ConsoleCallDataRunnable(this, callData);
    runnable->Dispatch(global);
-@@ -1370,16 +1412,18 @@ Console::ProcessCallData(ConsoleCallData
+@@ -1370,16 +1410,23 @@ Console::ProcessCallData(ConsoleCallData
    }
  
    event.mLineNumber = frame.mLineNumber;
@@ -157,7 +155,12 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    event.mTimeStamp = aData->mTimeStamp;
    event.mPrivate = aData->mPrivate;
  
-+  event.mOriginAttributes = aData->mOriginAttributes;
++  // Save the principal's OriginAttributes in the console event data
++  // so that we will be able to filter messages by origin attributes.
++  JS::Rooted<JS::Value> mOriginVal(cx);
++  if (ToJSValue(cx, aData->mOriginAttributes, &mOriginVal)) {
++    event.mOriginAttributes = mOriginVal;
++  }
 +
    switch (aData->mMethodName) {
      case MethodLog:
@@ -167,27 +170,6 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
      case MethodException:
      case MethodDebug:
      case MethodAssert:
-diff --git a/dom/base/Console.h b/dom/base/Console.h
---- a/dom/base/Console.h
-+++ b/dom/base/Console.h
-@@ -305,16 +305,17 @@ private:
-   nsTArray<ConsoleCallData*> mConsoleCallDataArray;
- 
- #ifdef DEBUG
-   PRThread* mOwningThread;
- #endif
- 
-   uint64_t mOuterID;
-   uint64_t mInnerID;
-+  JS::Value mOriginAttributes;
- 
-   friend class ConsoleCallData;
-   friend class ConsoleRunnable;
-   friend class ConsoleCallDataRunnable;
-   friend class ConsoleProfileRunnable;
- };
- 
- } // namespace dom
 diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
 --- a/dom/tests/browser/browser.ini
 +++ b/dom/tests/browser/browser.ini
@@ -200,7 +182,7 @@ diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
  skip-if = e10s
  [browser_ConsoleAPITests.js]
  skip-if = e10s
-+[browser_ConsoleAPI_ConsoleID.js]
++[browser_ConsoleAPI_originAttributes.js]
  [browser_ConsoleStorageAPITests.js]
  skip-if = e10s
  [browser_ConsoleStoragePBTest_perwindowpb.js]
@@ -209,10 +191,10 @@ diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
  skip-if= buildapp == 'mulet'
  [browser_autofocus_preference.js]
  [browser_bug1238427.js]
-diff --git a/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js b/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js
+diff --git a/dom/tests/browser/browser_ConsoleAPI_originAttributes.js b/dom/tests/browser/browser_ConsoleAPI_originAttributes.js
 new file mode 100644
 --- /dev/null
-+++ b/dom/tests/browser/browser_ConsoleAPI_ConsoleID.js
++++ b/dom/tests/browser/browser_ConsoleAPI_originAttributes.js
 @@ -0,0 +1,76 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
