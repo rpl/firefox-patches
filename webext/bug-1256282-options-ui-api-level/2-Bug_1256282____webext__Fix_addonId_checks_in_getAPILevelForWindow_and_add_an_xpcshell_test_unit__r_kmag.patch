@@ -1,0 +1,103 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1459444211 -7200
+#      Thu Mar 31 19:10:11 2016 +0200
+# Node ID 0aba70b215389d23561b240b5fd5e1a1bffba137
+# Parent  93511ffda06a0fa5e6ff760dabe8b9ea2014a6a2
+Bug 1256282 - [webext] Fix addonId checks in getAPILevelForWindow and add an xpcshell test unit. r?kmag
+
+MozReview-Commit-ID: HVoUAMOKqTZ
+
+diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
+--- a/toolkit/components/extensions/ExtensionManagement.jsm
++++ b/toolkit/components/extensions/ExtensionManagement.jsm
+@@ -227,17 +227,17 @@ const API_LEVELS = Object.freeze({
+ 
+ // Finds the API Level ("FULL_PRIVILEGES", "CONTENTSCRIPT_PRIVILEGES", "NO_PRIVILEGES")
+ // with a given a window object.
+ function getAPILevelForWindow(window, addonId) {
+   const {NO_PRIVILEGES, CONTENTSCRIPT_PRIVILEGES, FULL_PRIVILEGES} = API_LEVELS;
+ 
+   // Non WebExtension URLs and WebExtension URLs from a different extension
+   // has no access to APIs.
+-  if (!addonId && getAddonIdForWindow(window) != addonId) {
++  if (!addonId || getAddonIdForWindow(window) != addonId) {
+     return NO_PRIVILEGES;
+   }
+ 
+   // Extension pages running in the content process always defaults to
+   // "content script API level privileges".
+   if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
+     return CONTENTSCRIPT_PRIVILEGES;
+   }
+diff --git a/toolkit/components/extensions/test/xpcshell/test_getAPILevelForWindow.js b/toolkit/components/extensions/test/xpcshell/test_getAPILevelForWindow.js
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/xpcshell/test_getAPILevelForWindow.js
+@@ -0,0 +1,52 @@
++"use strict";
++
++Cu.import("resource://gre/modules/ExtensionManagement.jsm");
++Cu.import("resource://gre/modules/Services.jsm");
++
++function createWindowWithAddonId(addonId) {
++  let baseURI = Services.io.newURI("about:blank", null, null);
++  let originAttributes = {addonId};
++  let principal = Services.scriptSecurityManager
++                           .createCodebasePrincipal(baseURI, originAttributes);
++  let chromeNav = Services.appShell.createWindowlessBrowser(true);
++  let interfaceRequestor = chromeNav.QueryInterface(Ci.nsIInterfaceRequestor);
++  let docShell = interfaceRequestor.getInterface(Ci.nsIDocShell);
++  docShell.createAboutBlankContentViewer(principal);
++
++  return docShell.contentViewer.DOMDocument.defaultView;
++}
++
++add_task(function* test_eventpages() {
++  const {getAPILevelForWindow, getAddonIdForWindow} = ExtensionManagement;
++  const {NO_PRIVILEGES, FULL_PRIVILEGES} = ExtensionManagement.API_LEVELS;
++
++  let apiLevel;
++
++  let fakeAddonIdWindow = createWindowWithAddonId("fake_id");
++  equal(getAddonIdForWindow(fakeAddonIdWindow),
++     "fake_id", "the window has the expected addonId");
++
++  apiLevel = getAPILevelForWindow(fakeAddonIdWindow, "fake_id");
++  equal(apiLevel, FULL_PRIVILEGES,
++        "apiLevel for the window with the right addonId should be FULL_PRIVILEGES");
++
++  apiLevel = getAPILevelForWindow(fakeAddonIdWindow, "different_fake_id");
++  equal(apiLevel, NO_PRIVILEGES,
++        "apiLevel for the window with a different addonId should be NO_PRIVILEGES");
++
++  fakeAddonIdWindow.close();
++
++  let emptyAddonIdWindow = createWindowWithAddonId("");
++  equal(getAddonIdForWindow(emptyAddonIdWindow),
++     "", "the window has the expected addonId");
++
++  apiLevel = getAPILevelForWindow(emptyAddonIdWindow, "");
++  equal(apiLevel, NO_PRIVILEGES,
++        "apiLevel for empty addonId should be NO_PRIVILEGES");
++
++  apiLevel = getAPILevelForWindow(emptyAddonIdWindow, "different_fake_id");
++  equal(apiLevel, NO_PRIVILEGES,
++        "apiLevel for an 'empty addonId' window should be always NO_PRIVILEGES");
++
++  emptyAddonIdWindow.close();
++});
+diff --git a/toolkit/components/extensions/test/xpcshell/xpcshell.ini b/toolkit/components/extensions/test/xpcshell/xpcshell.ini
+--- a/toolkit/components/extensions/test/xpcshell/xpcshell.ini
++++ b/toolkit/components/extensions/test/xpcshell/xpcshell.ini
+@@ -2,8 +2,9 @@
+ head = head.js
+ tail =
+ firefox-appdir = browser
+ skip-if = toolkit == 'android' || toolkit == 'gonk'
+ 
+ [test_locale_data.js]
+ [test_locale_converter.js]
+ [test_ext_schemas.js]
++[test_getAPILevelForWindow.js]
+\ No newline at end of file
