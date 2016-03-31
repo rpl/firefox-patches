@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459266039 -7200
 #      Tue Mar 29 17:40:39 2016 +0200
-# Node ID d305d4545ae9b597ddbf31dec0381b1050018373
-# Parent  3e0c4e0d538c0a1879ba8890394b0bda7a06b4b9
+# Node ID b634ef3b6691ebca82ba54124bfe9d56c8388077
+# Parent  3c16220cb1bb82288d2a7ecb56084e2dbc224cab
 Bug 1211665 - Filter add-ons console messages based on ConsoleID or originAttributes.addonId.
 
 MozReview-Commit-ID: 2yEWhX6shkx

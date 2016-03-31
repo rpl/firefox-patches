@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-# Date 1459263637 -7200
-#      Tue Mar 29 17:00:37 2016 +0200
-# Node ID 3e0c4e0d538c0a1879ba8890394b0bda7a06b4b9
-# Parent  3dc5292ed66afbca801c33bff49c86154b3b3c24
+# Date 1459373355 -7200
+#      Wed Mar 30 23:29:15 2016 +0200
+# Node ID 3c16220cb1bb82288d2a7ecb56084e2dbc224cab
+# Parent  e14db462d31d566570e3bece66d5380f7b1ad400
 Bug 1211665 - Save originAttributes in the console event messages. r?baku
 
 Save the originAttributes of the current principal into the console events,
@@ -16,7 +16,8 @@ MozReview-Commit-ID: 5v9BWLbgskd
 diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 --- a/dom/base/Console.cpp
 +++ b/dom/base/Console.cpp
-@@ -135,16 +135,22 @@ public:
+@@ -144,16 +144,22 @@ public:
+   {
      MOZ_ASSERT(mIDType == eUnknown);
  
      mOuterIDString = aOuterID;
@@ -24,22 +25,21 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
      mIDType = eString;
    }
  
-   void
++  void
 +  SetOriginAttributes(const PrincipalOriginAttributes& aOriginAttributes)
 +  {
 +    mOriginAttributes = aOriginAttributes;
 +  }
 +
-+  void
-   CleanupJSObjects()
+   bool
+   PopulateArgumentsSequence(Sequence<JS::Value>& aSequence) const
    {
      AssertIsOnOwningThread();
-     mCopiedArguments.Clear();
  
-     if (mConsole) {
-       mConsole->UnregisterConsoleCallData(this);
-       mConsole = nullptr;
-@@ -219,16 +225,18 @@ public:
+     for (uint32_t i = 0; i < mCopiedArguments.Length(); ++i) {
+       if (NS_WARN_IF(!aSequence.AppendElement(mCopiedArguments[i],
+                                               fallible))) {
+@@ -236,16 +242,18 @@ public:
    } mIDType;
  
    uint64_t mOuterIDNumber;
@@ -58,28 +58,28 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    // 2)  mReifiedStack is initialized if we're created in a worker.
    // 3)  mStack is set (possibly to null if there is no JS on the stack) if
    //     we're created on main thread.
-@@ -549,38 +557,57 @@ private:
-   RunConsole(JSContext* aCx, nsPIDOMWindowOuter* aOuterWindow,
+@@ -608,16 +616,29 @@ private:
               nsPIDOMWindowInner* aInnerWindow) override
    {
      AssertIsOnMainThread();
-     MOZ_ASSERT(mCallData->mCopiedArguments.IsEmpty());
  
      // The windows have to run in parallel.
      MOZ_ASSERT(!!aOuterWindow == !!aInnerWindow);
-+    nsIPrincipal* principal;
  
      if (aOuterWindow) {
 +      // Save the principal's OriginAttributes in the console event data
 +      // so that we will be able to filter messages by origin attributes.
 +      nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(aInnerWindow);
-+      if (sop) {
-+        principal = sop->GetPrincipal();
-+        if (principal) {
-+          mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
-+        }
++      if (NS_WARN_IF(!sop)) {
++        return;
 +      }
 +
++      nsCOMPtr<nsIPrincipal> principal = sop->GetPrincipal();
++      if (NS_WARN_IF(!principal)) {
++        return;
++      }
++
++      mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
        mCallData->SetIDs(aOuterWindow->WindowID(), aInnerWindow->WindowID());
      } else {
        ConsoleStackEntry frame;
@@ -88,11 +88,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
        }
  
        nsString id = frame.mFilename;
-       nsString innerID;
-+
-       if (mWorkerPrivate->IsSharedWorker()) {
-         innerID = NS_LITERAL_STRING("SharedWorker");
-       } else if (mWorkerPrivate->IsServiceWorker()) {
+@@ -628,16 +649,24 @@ private:
          innerID = NS_LITERAL_STRING("ServiceWorker");
          // Use scope as ID so the webconsole can decide if the message should
          // show up per tab
@@ -103,11 +99,12 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
  
 +      // Save the principal's OriginAttributes in the console event data
 +      // so that we will be able to filter messages by origin attributes.
-+      principal = mWorkerPrivate->GetPrincipal();
-+      if (principal) {
-+        mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
++      nsCOMPtr<nsIPrincipal> principal = mWorkerPrivate->GetPrincipal();
++      if (NS_WARN_IF(!principal)) {
++        return;
 +      }
 +
++      mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
        mCallData->SetIDs(id, innerID);
      }
  
@@ -116,60 +113,61 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
  
      ProcessCallData(aCx);
  
-@@ -1259,16 +1286,29 @@ Console::Method(JSContext* aCx, MethodNa
+@@ -1239,16 +1268,30 @@ Console::Method(JSContext* aCx, MethodNa
+   ClearException ce(aCx);
  
-     callData->mCountValue = IncreaseCounter(aCx, frame, aData,
-                                             callData->mCountLabel);
-   }
- 
-   JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
- 
-   if (NS_IsMainThread()) {
-+    if (mWindow) {
-+      // Save the principal's OriginAttributes in the console event data
-+      // so that we will be able to filter messages by origin attributes.
-+      nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
-+      if (sop) {
-+        nsIPrincipal* principal = sop->GetPrincipal();
-+
-+        if (principal) {
-+          callData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
-+        }
-+      }
-+    }
-+
-     callData->SetIDs(mOuterID, mInnerID);
-     ProcessCallData(callData, global, aData);
+   if (NS_WARN_IF(!callData->Initialize(aCx, aMethodName, aMethodString,
+                                        aData, this))) {
      return;
    }
  
-   RefPtr<ConsoleCallDataRunnable> runnable =
-     new ConsoleCallDataRunnable(this, callData);
-   runnable->Dispatch(global);
-@@ -1370,16 +1410,23 @@ Console::ProcessCallData(ConsoleCallData
+   if (mWindow) {
++    // Save the principal's OriginAttributes in the console event data
++    // so that we will be able to filter messages by origin attributes.
++    nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
++    if (NS_WARN_IF(!sop)) {
++      return;
++    }
++
++    nsCOMPtr<nsIPrincipal> principal = sop->GetPrincipal();
++    if (NS_WARN_IF(!principal)) {
++      return;
++    }
++
++    callData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
++
+     nsCOMPtr<nsIWebNavigation> webNav = do_GetInterface(mWindow);
+     if (!webNav) {
+       return;
+     }
+ 
+     nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(webNav);
+     MOZ_ASSERT(loadContext);
+ 
+@@ -1500,16 +1543,23 @@ Console::PopulateConsoleNotificationInTh
+   ConsoleStackEntry frame;
+   if (aData->mTopStackFrame) {
+     frame = *aData->mTopStackFrame;
    }
  
-   event.mLineNumber = frame.mLineNumber;
-   event.mColumnNumber = frame.mColumnNumber;
-   event.mFunctionName = frame.mFunctionName;
-   event.mTimeStamp = aData->mTimeStamp;
-   event.mPrivate = aData->mPrivate;
+   ClearException ce(aCx);
+   RootedDictionary<ConsoleEvent> event(aCx);
  
 +  // Save the principal's OriginAttributes in the console event data
 +  // so that we will be able to filter messages by origin attributes.
-+  JS::Rooted<JS::Value> mOriginVal(cx);
-+  if (ToJSValue(cx, aData->mOriginAttributes, &mOriginVal)) {
-+    event.mOriginAttributes = mOriginVal;
++  JS::Rooted<JS::Value> originAttributesValue(aCx);
++  if (ToJSValue(aCx, aData->mOriginAttributes, &originAttributesValue)) {
++    event.mOriginAttributes = originAttributesValue;
 +  }
 +
-   switch (aData->mMethodName) {
-     case MethodLog:
-     case MethodInfo:
-     case MethodWarn:
-     case MethodError:
-     case MethodException:
-     case MethodDebug:
-     case MethodAssert:
+   event.mID.Construct();
+   event.mInnerID.Construct();
+ 
+   if (aData->mIDType == ConsoleCallData::eString) {
+     event.mID.Value().SetAsString() = aData->mOuterIDString;
+     event.mInnerID.Value().SetAsString() = aData->mInnerIDString;
+   } else if (aData->mIDType == ConsoleCallData::eNumber) {
+     event.mID.Value().SetAsUnsignedLongLong() = aData->mOuterIDNumber;
 diff --git a/dom/tests/browser/browser.ini b/dom/tests/browser/browser.ini
 --- a/dom/tests/browser/browser.ini
 +++ b/dom/tests/browser/browser.ini
@@ -195,7 +193,7 @@ diff --git a/dom/tests/browser/browser_ConsoleAPI_originAttributes.js b/dom/test
 new file mode 100644
 --- /dev/null
 +++ b/dom/tests/browser/browser_ConsoleAPI_originAttributes.js
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,80 @@
 +/* Any copyright is dedicated to the Public Domain.
 +   http://creativecommons.org/publicdomain/zero/1.0/ */
 +
@@ -262,13 +260,17 @@ new file mode 100644
 +  info("fake webextension docShell created");
 +
 +  registerCleanupFunction(function() {
++    if (chromeWebNav) {
++      chromeWebNav.close();
++      chromeWebNav = null;
++    }
 +    ConsoleObserver.uninit();
-+    chromeWebNav.close();
-+    chromeWebNav = null;
 +  });
 +
 +  let window = docShell.contentViewer.DOMDocument.defaultView;
-+  window.location = `javascript:console.log("${EXPECTED_CONSOLE_MESSAGE_CONTENT}");`;
++  window.eval(`console.log("${EXPECTED_CONSOLE_MESSAGE_CONTENT}");`);
++  chromeWebNav.close();
++  chromeWebNav = null;
 +
 +  info("fake webextension page logged a console api message");
 +}
