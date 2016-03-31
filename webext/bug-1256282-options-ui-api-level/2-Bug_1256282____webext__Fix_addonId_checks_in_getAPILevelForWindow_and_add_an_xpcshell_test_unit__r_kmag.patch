@@ -2,7 +2,7 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459444211 -7200
 #      Thu Mar 31 19:10:11 2016 +0200
-# Node ID 0aba70b215389d23561b240b5fd5e1a1bffba137
+# Node ID 2c36d453fcf9f53f2eb0514f0bec1495dd30c315
 # Parent  93511ffda06a0fa5e6ff760dabe8b9ea2014a6a2
 Bug 1256282 - [webext] Fix addonId checks in getAPILevelForWindow and add an xpcshell test unit. r?kmag
 
@@ -44,7 +44,7 @@ new file mode 100644
 +  let baseURI = Services.io.newURI("about:blank", null, null);
 +  let originAttributes = {addonId};
 +  let principal = Services.scriptSecurityManager
-+                           .createCodebasePrincipal(baseURI, originAttributes);
++                          .createCodebasePrincipal(baseURI, originAttributes);
 +  let chromeNav = Services.appShell.createWindowlessBrowser(true);
 +  let interfaceRequestor = chromeNav.QueryInterface(Ci.nsIInterfaceRequestor);
 +  let docShell = interfaceRequestor.getInterface(Ci.nsIDocShell);
