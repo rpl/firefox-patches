@@ -1,0 +1,1 @@
+MOZCONFIG=../mozconfig-artifacts ./mach $@

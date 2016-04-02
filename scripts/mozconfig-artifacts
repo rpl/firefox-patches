@@ -1,0 +1,6 @@
+# Automatically download and use compiled C++ components:
+ac_add_options --enable-artifact-builds
+#export MOZ_ARTIFACT_BUILDS_TYPE=debug
+
+# Write build artifacts to:
+mk_add_options MOZ_OBJDIR=./objdir-frontend
