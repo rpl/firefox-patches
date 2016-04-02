@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Luca Greco <luca.greco@alcacoop.it>
-# Date 1459373355 -7200
-#      Wed Mar 30 23:29:15 2016 +0200
-# Node ID 3c16220cb1bb82288d2a7ecb56084e2dbc224cab
+# Date 1459511740 -7200
+#      Fri Apr 01 13:55:40 2016 +0200
+# Node ID 2ca1d48a4570e6478a2cdaa8eeb3ea0e84786bff
 # Parent  e14db462d31d566570e3bece66d5380f7b1ad400
-Bug 1211665 - Save originAttributes in the console event messages. r?baku
+Bug 1211665 - Save originAttributes in the console event messages. r=baku
 
 Save the originAttributes of the current principal into the console events,
 so that we can filter the console messages by originAttributes (e.g.
@@ -58,8 +58,7 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
    // 2)  mReifiedStack is initialized if we're created in a worker.
    // 3)  mStack is set (possibly to null if there is no JS on the stack) if
    //     we're created on main thread.
-@@ -608,16 +616,29 @@ private:
-              nsPIDOMWindowInner* aInnerWindow) override
+@@ -609,16 +617,30 @@ private:
    {
      AssertIsOnMainThread();
  
@@ -67,6 +66,8 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
      MOZ_ASSERT(!!aOuterWindow == !!aInnerWindow);
  
      if (aOuterWindow) {
+       mCallData->SetIDs(aOuterWindow->WindowID(), aInnerWindow->WindowID());
++
 +      // Save the principal's OriginAttributes in the console event data
 +      // so that we will be able to filter messages by origin attributes.
 +      nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(aInnerWindow);
@@ -80,7 +81,6 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 +      }
 +
 +      mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
-       mCallData->SetIDs(aOuterWindow->WindowID(), aInnerWindow->WindowID());
      } else {
        ConsoleStackEntry frame;
        if (mCallData->mTopStackFrame) {
@@ -88,8 +88,8 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
        }
  
        nsString id = frame.mFilename;
-@@ -628,16 +649,24 @@ private:
-         innerID = NS_LITERAL_STRING("ServiceWorker");
+       nsString innerID;
+@@ -629,16 +651,25 @@ private:
          // Use scope as ID so the webconsole can decide if the message should
          // show up per tab
          id.AssignWithConversion(mWorkerPrivate->WorkerName());
@@ -97,6 +97,8 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
          innerID = NS_LITERAL_STRING("Worker");
        }
  
+       mCallData->SetIDs(id, innerID);
++
 +      // Save the principal's OriginAttributes in the console event data
 +      // so that we will be able to filter messages by origin attributes.
 +      nsCOMPtr<nsIPrincipal> principal = mWorkerPrivate->GetPrincipal();
@@ -105,7 +107,6 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 +      }
 +
 +      mCallData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
-       mCallData->SetIDs(id, innerID);
      }
  
      // Now we could have the correct window (if we are not window-less).
@@ -113,15 +114,17 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
  
      ProcessCallData(aCx);
  
-@@ -1239,16 +1268,30 @@ Console::Method(JSContext* aCx, MethodNa
-   ClearException ce(aCx);
+     mClonedData.mParent = nullptr;
+@@ -1248,16 +1279,30 @@ Console::Method(JSContext* aCx, MethodNa
+     if (!webNav) {
+       return;
+     }
  
-   if (NS_WARN_IF(!callData->Initialize(aCx, aMethodName, aMethodString,
-                                        aData, this))) {
-     return;
-   }
+     nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(webNav);
+     MOZ_ASSERT(loadContext);
  
-   if (mWindow) {
+     loadContext->GetUsePrivateBrowsing(&callData->mPrivate);
++
 +    // Save the principal's OriginAttributes in the console event data
 +    // so that we will be able to filter messages by origin attributes.
 +    nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(mWindow);
@@ -135,16 +138,15 @@ diff --git a/dom/base/Console.cpp b/dom/base/Console.cpp
 +    }
 +
 +    callData->SetOriginAttributes(BasePrincipal::Cast(principal)->OriginAttributesRef());
-+
-     nsCOMPtr<nsIWebNavigation> webNav = do_GetInterface(mWindow);
-     if (!webNav) {
-       return;
-     }
+   }
  
-     nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(webNav);
-     MOZ_ASSERT(loadContext);
+   uint32_t maxDepth = ShouldIncludeStackTrace(aMethodName) ?
+                       DEFAULT_MAX_STACKTRACE_DEPTH : 1;
+   nsCOMPtr<nsIStackFrame> stack = CreateStack(aCx, maxDepth);
  
-@@ -1500,16 +1543,23 @@ Console::PopulateConsoleNotificationInTh
+   if (stack) {
+     callData->mTopStackFrame.emplace();
+@@ -1500,16 +1545,23 @@ Console::PopulateConsoleNotificationInTh
    ConsoleStackEntry frame;
    if (aData->mTopStackFrame) {
      frame = *aData->mTopStackFrame;
