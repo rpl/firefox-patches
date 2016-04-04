@@ -1,0 +1,306 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1459533966 -7200
+#      Fri Apr 01 20:06:06 2016 +0200
+# Node ID b5b793c770ce02be5e6d546571f6013eb71bb05e
+# Parent  e14db462d31d566570e3bece66d5380f7b1ad400
+TMP: detect sandbox globals on devtools first open
+
+MozReview-Commit-ID: 79sIr7qWk2u
+
+diff --git a/devtools/server/actors/utils/TabSources.js b/devtools/server/actors/utils/TabSources.js
+--- a/devtools/server/actors/utils/TabSources.js
++++ b/devtools/server/actors/utils/TabSources.js
+@@ -283,16 +283,18 @@ TabSources.prototype = {
+     // displayURL property if it's an eval source. We only want to
+     // consider real URLs, otherwise if there is a URL but it's
+     // invalid the code below will not set the content type, and we
+     // will later try to fetch the contents of the URL to figure out
+     // the content type, but it's a made up URL for eval sources.
+     let url = isEvalSource(aSource) ? null : aSource.url;
+     let spec = { source: aSource };
+ 
++    dump(`**** CANARY: createNonSourceMappedActor - ${url} - ${Error().stack}\n`);
++
+     // XXX bug 915433: We can't rely on Debugger.Source.prototype.text
+     // if the source is an HTML-embedded <script> tag. Since we don't
+     // have an API implemented to detect whether this is the case, we
+     // need to be conservative and only treat valid js files as real
+     // sources. Otherwise, use the `originalUrl` property to treat it
+     // as an HTML source that manages multiple inline sources.
+ 
+     // Assume the source is inline if the element that introduced it is not a
+@@ -306,16 +308,19 @@ TabSources.prototype = {
+     } else {
+       if (url) {
+         // There are a few special URLs that we know are JavaScript:
+         // inline `javascript:` and code coming from the console
+         if (url.indexOf("Scratchpad/") === 0 ||
+             url.indexOf("javascript:") === 0 ||
+             url === "debugger eval code") {
+           spec.contentType = "text/javascript";
++        } else if (url.indexOf("(addon ") === 0) {
++          spec.contentType = "text/javascript";
++          spec.introductionType = "eval";
+         } else {
+           try {
+             let pathname = new URL(url).pathname;
+             let filename = pathname.slice(pathname.lastIndexOf("/") + 1);
+             let index = filename.lastIndexOf(".");
+             let extension = index >= 0 ? filename.slice(index + 1) : "";
+             if (extension === "xml") {
+               // XUL inline scripts may not correctly have the
+diff --git a/devtools/server/actors/webbrowser.js b/devtools/server/actors/webbrowser.js
+--- a/devtools/server/actors/webbrowser.js
++++ b/devtools/server/actors/webbrowser.js
+@@ -30,16 +30,17 @@ loader.lazyRequireGetter(this, "ProcessA
+ loader.lazyImporter(this, "AddonManager", "resource://gre/modules/AddonManager.jsm");
+ 
+ // Assumptions on events module:
+ // events needs to be dispatched synchronously,
+ // by calling the listeners in the order or registration.
+ loader.lazyRequireGetter(this, "events", "sdk/event/core");
+ 
+ loader.lazyRequireGetter(this, "StyleSheetActor", "devtools/server/actors/stylesheets", true);
++loader.lazyRequireGetter(this, "getContentGlobals", "devtools/server/content-globals", true);
+ 
+ function getWindowID(window) {
+   return window.QueryInterface(Ci.nsIInterfaceRequestor)
+                .getInterface(Ci.nsIDOMWindowUtils)
+                .currentInnerWindowID;
+ }
+ 
+ function getDocShellChromeEventHandler(docShell) {
+@@ -713,18 +714,21 @@ function TabActor(aConnection)
+   this._sources = null;
+ 
+   // Map of DOM stylesheets to StyleSheetActors
+   this._styleSheetActors = new Map();
+ 
+   this._shouldAddNewGlobalAsDebuggee = this._shouldAddNewGlobalAsDebuggee.bind(this);
+ 
+   this.makeDebugger = makeDebugger.bind(null, {
+-    findDebuggees: () => this.windows,
+-    shouldAddNewGlobalAsDebuggee: this._shouldAddNewGlobalAsDebuggee
++    findDebuggees: () => {
++      // add the registered content script globals to the available debuggees.
++      return [].concat(this.windows, this.contentGlobals);
++    },
++    shouldAddNewGlobalAsDebuggee: this._shouldAddNewGlobalAsDebuggee,
+   });
+ 
+   // Flag eventually overloaded by sub classes in order to watch new docshells
+   // Used on b2g to catch activity frames and in chrome to list all frames
+   this.listenForNewDocShells = Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT;
+ 
+   this.traits = {
+     reconfigure: true,
+@@ -801,16 +805,27 @@ TabActor.prototype = {
+       return this.docShell
+         .QueryInterface(Ci.nsIInterfaceRequestor)
+         .getInterface(Ci.nsIDOMWindow);
+     }
+     return null;
+   },
+ 
+   /**
++   * Getter for the existent contentGlobals for the innerWindowId of the tab content's DOM window.
++   */
++  get contentGlobals() {
++    if (this.window) {
++      return getContentGlobals({"inner-window-id": getWindowID(this.window)});
++    }
++
++    return [];
++  },
++
++  /**
+    * Getter for the list of all content DOM windows in this tabActor
+    * @return {Array}
+    */
+   get windows() {
+     return this.docShells.map(docShell => {
+       return docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                      .getInterface(Ci.nsIDOMWindow);
+     });
+@@ -891,16 +906,26 @@ TabActor.prototype = {
+     // currentURI.
+     return null;
+   },
+ 
+   get sources() {
+     if (!this._sources) {
+       assert(this.threadActor, "threadActor should exist when creating sources.");
+       this._sources = new TabSources(this.threadActor);
++
++      // add the sources of the registered content scripts.
++      this.contentGlobals.forEach(global => {
++        this.threadActor.dbg
++            .findScripts({global})
++            .forEach(({ source }) => {
++              dump(`*** CANARY SOURCES: ${source.introductionType}\n`);
++              this._sources.createSourceActors(source);
++            });
++      });
+     }
+     return this._sources;
+   },
+ 
+   /**
+    * This is called by BrowserTabList.getList for existing tab actors prior to
+    * calling |form| below.  It can be used to do any async work that may be
+    * needed to assemble the form.
+@@ -1044,16 +1069,21 @@ TabActor.prototype = {
+       this._originalWindow = this.window;
+ 
+       // Ensure replying to attach() request first
+       // before notifying about new docshells.
+       DevToolsUtils.executeSoon(() => this._watchDocshells());
+     }
+ 
+     this._attached = true;
++
++    // NOTE: add the debuggee here to intercept any registered content script sources.
++    if (this.contentGlobals.length) {
++      this.threadActor.dbg.addDebuggees();
++    }
+   },
+ 
+   _watchDocshells: function BTA_watchDocshells() {
+     // In child processes, we watch all docshells living in the process.
+     if (this.listenForNewDocShells) {
+       Services.obs.addObserver(this, "webnavigation-create", false);
+     }
+     Services.obs.addObserver(this, "webnavigation-destroy", false);
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -35,16 +35,20 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+                                   "resource://gre/modules/PromiseUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "MessageChannel",
+                                   "resource://gre/modules/MessageChannel.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "WebNavigationFrames",
+                                   "resource://gre/modules/WebNavigationFrames.jsm");
+ 
++const {devtools} = Cu.import("resource://devtools/shared/Loader.jsm", {});
++const {addContentGlobal, removeContentGlobal} = devtools.require("devtools/server/content-globals");
++
++
+ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ var {
+   runSafeSyncWithoutClone,
+   BaseContext,
+   LocaleData,
+   Messenger,
+   injectAPI,
+   flushJarCache,
+@@ -238,17 +242,17 @@ Script.prototype = {
+         } catch (e) {
+           Cu.reportError(e);
+           this.deferred.reject(e);
+         }
+       }
+ 
+       if (this.options.jsCode) {
+         try {
+-          result = Cu.evalInSandbox(this.options.jsCode, sandbox, "latest");
++          result = Cu.evalInSandbox(this.options.jsCode, sandbox, "latest", `(addon ${extension.id} tabs.execute)`);
+         } catch (e) {
+           Cu.reportError(e);
+           this.deferred.reject(e);
+         }
+       }
+ 
+       this.deferred.resolve(result);
+     }
+@@ -302,38 +306,61 @@ class ExtensionContext extends BaseConte
+ 
+     if (ssm.isSystemPrincipal(contentPrincipal)) {
+       // Make sure we don't hand out the system principal by accident.
+       prin = Cc["@mozilla.org/nullprincipal;1"].createInstance(Ci.nsIPrincipal);
+     } else {
+       prin = [contentPrincipal, extensionPrincipal];
+     }
+ 
++    // sandbox metadata needed to be recognized and supported in
++    // the Developer Tools of the tab where the content script is running.
++    let innerWindowID = windowId(contentWindow);
++    let metadata = {
++      WebExtensionContentScript: true,
++      'inner-window-id': innerWindowID,
++    };
++
+     if (isExtensionPage) {
+       if (ExtensionManagement.getAddonIdForWindow(this.contentWindow) != extensionId) {
+         throw new Error("Invalid target window for this extension context");
+       }
+       // This is an iframe with content script API enabled and its principal should be the
+       // contentWindow itself. (we create a sandbox with the contentWindow as principal and with X-rays disabled
+       // because it enables us to create the APIs object in this sandbox object and then copying it
+       // into the iframe's window, see Bug 1214658 for rationale)
+       this.sandbox = Cu.Sandbox(contentWindow, {
+         sandboxPrototype: contentWindow,
+         wantXrays: false,
+         isWebExtensionContentScript: true,
++        metadata,
+       });
+     } else {
+       this.sandbox = Cu.Sandbox(prin, {
+         sandboxPrototype: contentWindow,
+         wantXrays: true,
+         isWebExtensionContentScript: true,
+         wantGlobalProperties: ["XMLHttpRequest"],
++        metadata,
+       });
+     }
+ 
++    try {
++      // add the content global to the devtools tracked globals
++      this.devtoolsGlobalDetails = {
++        global: this.sandbox,
++        "inner-window-id": innerWindowID,
++      };
++
++      addContentGlobal(this.devtoolsGlobalDetails);
++      dump(`**** CANARY: added sandbox to global for windowID: ${innerWindowID}.\n`);
++    } catch (e) {
++      Cu.reportError(`Exception on devtools addContentGlobal: ${e} - ${e.stack}.`);
++    }
++
+     let delegate = {
+       getSender(context, target, sender) {
+         // Nothing to do here.
+       },
+     };
+ 
+     let url = contentWindow.location.href;
+     // The |sender| parameter is passed directly to the extension.
+@@ -392,16 +419,26 @@ class ExtensionContext extends BaseConte
+ 
+     // Overwrite the content script APIs with an empty object if the APIs objects are still
+     // defined in the content window (See Bug 1214658 for rationale).
+     if (this.isExtensionPage && !Cu.isDeadWrapper(this.contentWindow) &&
+         Cu.waiveXrays(this.contentWindow).browser === this.chromeObj) {
+       Cu.createObjectIn(this.contentWindow, {defineAs: "browser"});
+       Cu.createObjectIn(this.contentWindow, {defineAs: "chrome"});
+     }
++
++    if (this.devtoolsGlobalDetails) {
++      try {
++        removeContentGlobal(this.devtoolsGlobalDetails);
++        this.devtoolsGlobalDetails = null;
++      } catch (e) {
++        Cu.reportError(`Exception on devtools removeContentGlobal: ${e} - ${e.stack}.`);
++      }
++    }
++
+     Cu.nukeSandbox(this.sandbox);
+     this.sandbox = null;
+   }
+ }
+ 
+ function windowId(window) {
+   return window.QueryInterface(Ci.nsIInterfaceRequestor)
+                .getInterface(Ci.nsIDOMWindowUtils)
