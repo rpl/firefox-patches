@@ -2,7 +2,7 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459511797 -7200
 #      Fri Apr 01 13:56:37 2016 +0200
-# Node ID 2131dc3d019ea870f528b1daae6540b37f63e1d0
+# Node ID 3c57b020699f87c9a0f53f5e43274db8694b5e13
 # Parent  e14db462d31d566570e3bece66d5380f7b1ad400
 Bug 1167246 - Fix SDK native-options module on Android.
 
@@ -137,7 +137,7 @@ diff --git a/addon-sdk/source/lib/sdk/preferences/native-options.js b/addon-sdk/
 +      let menupopup = document.createElementNS(XUL_NS, 'menupopup');
        for (let { value, label } of options) {
 -        let menuitem = document.createElement('menuitem');
-+        let menuitem = document.createElement(XUL_NS, 'menuitem');
++        let menuitem = document.createElementNS(XUL_NS, 'menuitem');
          menuitem.setAttribute('value', value);
          menuitem.setAttribute('label', label);
          menupopup.appendChild(menuitem);
