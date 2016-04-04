@@ -2,7 +2,7 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459511797 -7200
 #      Fri Apr 01 13:56:37 2016 +0200
-# Node ID 3c57b020699f87c9a0f53f5e43274db8694b5e13
+# Node ID 8da867d8011c563db8dd3520eafa7412b2be7ddd
 # Parent  e14db462d31d566570e3bece66d5380f7b1ad400
 Bug 1167246 - Fix SDK native-options module on Android.
 
@@ -11,12 +11,16 @@ MozReview-Commit-ID: CrIgkXlllWV
 diff --git a/addon-sdk/source/lib/sdk/preferences/native-options.js b/addon-sdk/source/lib/sdk/preferences/native-options.js
 --- a/addon-sdk/source/lib/sdk/preferences/native-options.js
 +++ b/addon-sdk/source/lib/sdk/preferences/native-options.js
-@@ -9,45 +9,63 @@ module.metadata = {
+@@ -6,48 +6,67 @@
+ module.metadata = {
+   "stability": "unstable"
+ };
  
  const { Cc, Ci, Cu } = require('chrome');
  const { on } = require('../system/events');
  const { id, preferencesBranch } = require('../self');
  const { localizeInlineOptions } = require('../l10n/prefs');
++const { Services } = require("resource://gre/modules/Services.jsm");
  const { AddonManager } = Cu.import("resource://gre/modules/AddonManager.jsm");
  const { defer } = require("sdk/core/promise");
  
@@ -84,7 +88,7 @@ diff --git a/addon-sdk/source/lib/sdk/preferences/native-options.js b/addon-sdk/
  exports.enable = enable;
  
  // centralized sanity checks
-@@ -105,64 +123,66 @@ function setDefaults(preferences, prefer
+@@ -105,64 +124,67 @@ function setDefaults(preferences, prefer
          branch.setComplexValue(name, Ci.nsISupportsString, str);
          break;
      }
@@ -122,8 +126,11 @@ diff --git a/addon-sdk/source/lib/sdk/preferences/native-options.js b/addon-sdk/
        button.setAttribute('pref-name', name);
        button.setAttribute('data-jetpack-id', id);
        button.setAttribute('label', label);
-       button.setAttribute('oncommand', "Services.obs.notifyObservers(null, '" +
-                                         id + "-cmdPressed', '" + name + "');");
+-      button.setAttribute('oncommand', "Services.obs.notifyObservers(null, '" +
+-                                        id + "-cmdPressed', '" + name + "');");
++      button.addEventListener('command', function() {
++        Services.obs.notifyObservers(null, `${id}-cmdPressed`, name);
++      }, true);
        setting.appendChild(button);
      }
      else if (type === 'boolint') {
