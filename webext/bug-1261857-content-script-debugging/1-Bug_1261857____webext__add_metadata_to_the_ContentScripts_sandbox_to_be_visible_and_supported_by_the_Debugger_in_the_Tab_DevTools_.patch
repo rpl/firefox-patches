@@ -1,0 +1,86 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1459783049 -7200
+#      Mon Apr 04 17:17:29 2016 +0200
+# Node ID 5817ebeaf7178318381a1b0fadb50141eb719d0b
+# Parent  e14db462d31d566570e3bece66d5380f7b1ad400
+Bug 1261857 - [webext] add metadata to the ContentScripts sandbox to be visible and supported by the Debugger in the Tab DevTools.
+
+MozReview-Commit-ID: BtGqvAkRJZx
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -54,16 +54,22 @@ var {
+ 
+ function isWhenBeforeOrSame(when1, when2) {
+   let table = {"document_start": 0,
+                "document_end": 1,
+                "document_idle": 2};
+   return table[when1] <= table[when2];
+ }
+ 
++function windowId(window) {
++  return window.QueryInterface(Ci.nsIInterfaceRequestor)
++    .getInterface(Ci.nsIDOMWindowUtils)
++    .currentInnerWindowID;
++}
++
+ // This is the fairly simple API that we inject into content
+ // scripts.
+ var api = context => {
+   return {
+     runtime: {
+       connect: function(extensionId, connectInfo) {
+         if (!connectInfo) {
+           connectInfo = extensionId;
+@@ -316,17 +322,26 @@ class ExtensionContext extends BaseConte
+       // because it enables us to create the APIs object in this sandbox object and then copying it
+       // into the iframe's window, see Bug 1214658 for rationale)
+       this.sandbox = Cu.Sandbox(contentWindow, {
+         sandboxPrototype: contentWindow,
+         wantXrays: false,
+         isWebExtensionContentScript: true,
+       });
+     } else {
++      // sandbox metadata is needed to be recognized and supported in
++      // the Developer Tools of the tab where the content script is running.
++      let innerWindowID = windowId(contentWindow);
++      let metadata = {
++        WebExtensionContentScript: true,
++        'inner-window-id': innerWindowID,
++      };
++
+       this.sandbox = Cu.Sandbox(prin, {
++        metadata,
+         sandboxPrototype: contentWindow,
+         wantXrays: true,
+         isWebExtensionContentScript: true,
+         wantGlobalProperties: ["XMLHttpRequest"],
+       });
+     }
+ 
+     let delegate = {
+@@ -397,22 +412,16 @@ class ExtensionContext extends BaseConte
+       Cu.createObjectIn(this.contentWindow, {defineAs: "browser"});
+       Cu.createObjectIn(this.contentWindow, {defineAs: "chrome"});
+     }
+     Cu.nukeSandbox(this.sandbox);
+     this.sandbox = null;
+   }
+ }
+ 
+-function windowId(window) {
+-  return window.QueryInterface(Ci.nsIInterfaceRequestor)
+-               .getInterface(Ci.nsIDOMWindowUtils)
+-               .currentInnerWindowID;
+-}
+-
+ // Responsible for creating ExtensionContexts and injecting content
+ // scripts into them when new documents are created.
+ DocumentManager = {
+   extensionCount: 0,
+ 
+   // Map[windowId -> Map[extensionId -> ExtensionContext]]
+   contentScriptWindows: new Map(),
+ 
