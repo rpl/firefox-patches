@@ -1,0 +1,558 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1459953221 -7200
+#      Wed Apr 06 16:33:41 2016 +0200
+# Node ID 2146dd3db18f9fa7b1166d061d34d8b4a9079fec
+# Parent  20df8310f734ecc938f1ad53e27759253ae14040
+Bug 1256652 - Implement basic webNAvigation transitionType and transitionQualifiers.
+
+MozReview-Commit-ID: 3Sa6JMV6hhq
+
+diff --git a/browser/components/places/PlacesUIUtils.jsm b/browser/components/places/PlacesUIUtils.jsm
+--- a/browser/components/places/PlacesUIUtils.jsm
++++ b/browser/components/places/PlacesUIUtils.jsm
+@@ -512,37 +512,40 @@ this.PlacesUIUtils = {
+    * By calling this before visiting an URL, the visit will be associated to a
+    * TRANSITION_TYPED transition (if there is no a referrer).
+    * This is used when visiting pages from the history menu, history sidebar,
+    * url bar, url autocomplete results, and history searches from the places
+    * organizer.  If this is not called visits will be marked as
+    * TRANSITION_LINK.
+    */
+   markPageAsTyped: function PUIU_markPageAsTyped(aURL) {
++    Services.obs.notifyObservers(null, "early-mark-visit", "typed");
+     PlacesUtils.history.markPageAsTyped(this.createFixedURI(aURL));
+   },
+ 
+   /**
+    * By calling this before visiting an URL, the visit will be associated to a
+    * TRANSITION_BOOKMARK transition.
+    * This is used when visiting pages from the bookmarks menu,
+    * personal toolbar, and bookmarks from within the places organizer.
+    * If this is not called visits will be marked as TRANSITION_LINK.
+    */
+   markPageAsFollowedBookmark: function PUIU_markPageAsFollowedBookmark(aURL) {
++    Services.obs.notifyObservers(null, "early-mark-visit", "bookmark");
+     PlacesUtils.history.markPageAsFollowedBookmark(this.createFixedURI(aURL));
+   },
+ 
+   /**
+    * By calling this before visiting an URL, any visit in frames will be
+    * associated to a TRANSITION_FRAMED_LINK transition.
+    * This is actually used to distinguish user-initiated visits in frames
+    * so automatic visits can be correctly ignored.
+    */
+   markPageAsFollowedLink: function PUIU_markPageAsFollowedLink(aURL) {
++    Services.obs.notifyObservers(null, "early-mark-visit", "link");
+     PlacesUtils.history.markPageAsFollowedLink(this.createFixedURI(aURL));
+   },
+ 
+   /**
+    * Allows opening of javascript/data URI only if the given node is
+    * bookmarked (see bug 224521).
+    * @param aURINode
+    *        a URI node
+diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
+--- a/toolkit/components/extensions/ext-webNavigation.js
++++ b/toolkit/components/extensions/ext-webNavigation.js
+@@ -41,16 +41,84 @@ function WebNavigationEventManager(conte
+ 
+       // Fills in tabId typically.
+       let result = {};
+       extensions.emit("fill-browser-data", data.browser, data2, result);
+       if (result.cancel) {
+         return;
+       }
+ 
++      if (eventName == "onHistoryStateUpdated" || eventName == "onCommitted") {
++        let transitionData = data.transitionData || {};
++        let tabTransitionData = data.tabTransitionData || {};
++
++        data2.transitionType = null;
++        data2.transitionQualifiers = [];
++
++        if (transitionData.server_redirect) {
++          data2.transitionQualifiers.push("server_redirect");
++        }
++
++        if (transitionData.client_redirect) {
++          data2.transitionQualifiers.push("client_redirect");
++        }
++
++        if (transitionData.forward_back) {
++          data2.transitionQualifiers.push("forward_back");
++        }
++
++        if (transitionData.reload) {
++          data2.transitionType = "reload";
++        }
++
++        if (transitionData.form_submit) {
++          data2.transitionType = "form_submit";
++        }
++
++        // Get additional TabTransitionData if the event is related to the top-level frame.
++        if (data2.frameId == 0 && data2.parentFrameId == -1) {
++
++          if (tabTransitionData.from_address_bar) {
++            data2.transitionQualifiers.push("from_address_bar");
++          }
++
++          if (tabTransitionData.typed) {
++            data2.transitionType = "typed";
++          }
++
++          if (tabTransitionData.bookmark) {
++            data2.transitionType = "auto_bookmark";
++          }
++
++          if (tabTransitionData.keyword) {
++            data2.transitionType = "keyword";
++          }
++
++          if (tabTransitionData.generated) {
++            data2.transitionType = "generated";
++          }
++
++          // if transitionType is not yet defined, it is set to link as default.
++          if (!data2.transitionType) {
++            data2.transitionType = "link";
++          }
++        } else {
++          let {tabTransitionData} = data;
++
++          // iframe transitions defaults to auto_subframe, manual_subframe will be choosen only
++          // in case of recent user interactions.
++          data2.transitionType = tabTransitionData.link ? "manual_subframe" : "auto_subframe";
++        }
++      }
++
++      if (eventName == "onCompleted" || eventName == "onErrorOccurred") {
++        // drop any cached transition data for the tab.
++        WebNavigation.clearTabTransitionData(data.browser);
++      }
++
+       runSafe(context, callback, data2);
+     };
+ 
+     WebNavigation[eventName].addListener(listener);
+     return () => {
+       WebNavigation[eventName].removeListener(listener);
+     };
+   };
+diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
+--- a/toolkit/modules/addons/WebNavigation.jsm
++++ b/toolkit/modules/addons/WebNavigation.jsm
+@@ -84,49 +84,52 @@ var Manager = {
+     let stateFlags = data.stateFlags;
+     if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW) {
+       let url = data.requestURL;
+       if (stateFlags & Ci.nsIWebProgressListener.STATE_START) {
+         this.fire("onBeforeNavigate", browser, data, {url});
+       } else if (stateFlags & Ci.nsIWebProgressListener.STATE_STOP) {
+         if (Components.isSuccessCode(data.status)) {
+           this.fire("onCompleted", browser, data, {url});
+-        } else {
++        } else if (url !== "about:blank") {
+           let error = `Error code ${data.status}`;
+           this.fire("onErrorOccurred", browser, data, {error, url});
+         }
+       }
+     }
+   },
+ 
+   onLocationChange(browser, data) {
+     let url = data.location;
+ 
++    let tabTransitionData = WebNavigation.getTabTransitionData(browser) || {};
++
+     if (data.isReferenceFragmentUpdated) {
+       this.fire("onReferenceFragmentUpdated", browser, data, {url});
+     } else if (data.isHistoryStateUpdated) {
+-      this.fire("onHistoryStateUpdated", browser, data, {url});
++      this.fire("onHistoryStateUpdated", browser, data, {url, tabTransitionData});
+     } else {
+-      this.fire("onCommitted", browser, data, {url});
++      this.fire("onCommitted", browser, data, {url, tabTransitionData});
+     }
+   },
+ 
+   onLoad(browser, data) {
+     this.fire("onDOMContentLoaded", browser, data, {url: data.url});
+   },
+ 
+   fire(type, browser, data, extra) {
+     let listeners = this.listeners.get(type);
+     if (!listeners) {
+       return;
+     }
+ 
+     let details = {
+       browser,
+       windowId: data.windowId,
++      transitionData: data.transitionData,
+     };
+ 
+     if (data.parentWindowId) {
+       details.parentWindowId = data.parentWindowId;
+     }
+ 
+     for (let prop in extra) {
+       details[prop] = extra[prop];
+@@ -144,16 +147,134 @@ const EVENTS = [
+   "onDOMContentLoaded",
+   "onCompleted",
+   "onErrorOccurred",
+   "onReferenceFragmentUpdated",
+   "onHistoryStateUpdated",
+   // "onCreatedNavigationTarget",
+ ];
+ 
+-var WebNavigation = {};
++const RECENT_DATA_THRESHOLD = 15 * 1000000;
++const lastTransitionByTab = new WeakMap();
++const recentTransitionByTab = new WeakMap();
++
++XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
++                                  "resource:///modules/RecentWindow.jsm");
++
++var WebNavigation = {
++  setTransitionData(transitionData) {
++    let window = RecentWindow.getMostRecentBrowserWindow();
++    if (window && window.gBrowser && window.gBrowser.selectedTab &&
++        window.gBrowser.selectedTab.linkedBrowser) {
++      let browser = window.gBrowser.selectedTab.linkedBrowser;
++      let prevData = lastTransitionByTab.get(browser) || {};
++      let newData = Object.assign({time: Date.now()}, prevData, transitionData);
++      dump(`*** CANARY: setTransitionData - ${JSON.stringify(newData)}\n`);
++      lastTransitionByTab.set(browser, newData);
++      recentTransitionByTab.set(browser, newData);
++    }
++  },
++  getTabTransitionData(tab) {
++    let data = lastTransitionByTab.get(tab);
++    lastTransitionByTab.delete(tab);
++    recentTransitionByTab.delete(tab);
++    return data;
++  },
++  getRecentTransitionData(tab) {
++    let data = recentTransitionByTab.get(tab);
++    recentTransitionByTab.delete(tab);
++    if (data && (data.time - Date.now()) > RECENT_DATA_THRESHOLD) {
++      return null;
++    }
++
++    return data;
++  },
++};
+ 
+ for (let event of EVENTS) {
+   WebNavigation[event] = {
+     addListener: Manager.addListener.bind(Manager, event),
+     removeListener: Manager.removeListener.bind(Manager, event),
+   };
+ }
++
++var NavHistoryListener = {
++  init() {
++    Services.obs.addObserver(this, "early-mark-visit", false);
++  },
++
++  uninit() {
++    Services.obs.removeObserver(this, "early-mark-visit", false);
++  },
++
++  observe: function observe(aSubject, aTopic, aData) {
++    dump(`*** CANARY: early-mark-visit\n`);
++    let tabTransitionData = {};
++
++    switch (aData) {
++      case "typed":
++        tabTransitionData.typed = true;
++        break;
++      case "bookmark":
++        tabTransitionData.bookmark = true;
++        break;
++      case "link":
++        tabTransitionData.link = true;
++        break;
++    }
++
++    WebNavigation.setTransitionData(tabTransitionData);
++  },
++};
++
++NavHistoryListener.init();
++
++Services.obs.addObserver((subject, topic, data) => {
++  if (subject && subject instanceof Ci.nsIAutoCompleteInput) {
++    // We are only interested in urlbar autocompletion events
++    if (subject.id !== "urlbar") {
++      return;
++    }
++
++    let controller = subject.popup.view.QueryInterface(Ci.nsIAutoCompleteController);
++    let idx = subject.popup.selectedIndex;
++    let value = controller.getValueAt(idx);
++    let action = subject._parseActionUrl(value);
++    let actionType;
++    if (action) {
++      actionType =
++        action.type == "searchengine" && action.params.searchSuggestion ?
++        "searchsuggestion" :
++        action.type;
++    }
++
++    if (idx == -1) {
++      actionType = "typed";
++    }
++
++    if (!actionType) {
++      let styles = new Set(controller.getStyleAt(idx).split(/\s+/));
++      let style = ["bookmark"].find(s => styles.has(s));
++      actionType = style || "typed";
++    }
++
++    let tabTransistionData = {
++      from_address_bar: true,
++    };
++
++    switch (actionType) {
++      case "bookmark":
++        tabTransistionData.bookmark = true;
++        break;
++      case "typed":
++        tabTransistionData.typed = true;
++        break;
++      case "keyword":
++        tabTransistionData.keyword = true;
++        break;
++      case "searchengine":
++        tabTransistionData.generated = true;
++        break;
++    }
++
++    WebNavigation.setTransitionData(tabTransistionData);
++  }
++}, "autocomplete-did-enter-text", false);
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -18,68 +18,118 @@ function loadListener(event) {
+   sendAsyncMessage("Extension:DOMContentLoaded", {windowId, parentWindowId, url});
+ }
+ 
+ addEventListener("DOMContentLoaded", loadListener);
+ addMessageListener("Extension:DisableWebNavigation", () => {
+   removeEventListener("DOMContentLoaded", loadListener);
+ });
+ 
++var FormSubmitListener = {
++  QueryInterface : XPCOMUtils.generateQI([Ci.nsIObserver,
++                                          Ci.nsIFormSubmitObserver,
++                                          Ci.nsISupportsWeakReference]),
++  init() {
++    this.formSubmitWindows = new WeakSet();
++    Services.obs.addObserver(FormSubmitListener, "earlyformsubmit", false);
++  },
++
++  uninit() {
++    Services.obs.removeObserver(FormSubmitListener, "earlyformsubmit", false);
++    this.formSubmitWindows = new WeakSet();
++  },
++
++  notify: function(form, window, actionURI) {
++    try {
++      this.formSubmitWindows.add(window);
++    } catch (e) {
++      Cu.reportError("Error in FormSubmitListener.notify");
++    }
++  },
++
++  hasAndForget: function(window) {
++    let has = this.formSubmitWindows.has(window);
++    this.formSubmitWindows.delete(window);
++    return has;
++  },
++};
++
+ var WebProgressListener = {
+   init: function() {
+     // This WeakMap (DOMWindow -> nsIURI) keeps track of the pathname and hash
+     // of the previous location for all the existent docShells.
+     this.previousURIMap = new WeakMap();
+ 
+     // Populate the above previousURIMap by iterating over the docShells tree.
+     for (let currentDocShell of WebNavigationFrames.iterateDocShellTree(docShell)) {
+       let win = currentDocShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                                .getInterface(Ci.nsIDOMWindow);
+       let {currentURI} = currentDocShell.QueryInterface(Ci.nsIWebNavigation);
+ 
+       this.previousURIMap.set(win, currentURI);
+     }
+ 
++    // This WeakSet of DOMWindows keeps track of the attempted refresh.
++    this.refreshAttemptedDOMWindows = new WeakSet();
++
+     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIWebProgress);
+     webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_WINDOW |
++                                          Ci.nsIWebProgress.NOTIFY_REFRESH |
+                                           Ci.nsIWebProgress.NOTIFY_LOCATION);
+   },
+ 
+   uninit() {
+     if (!docShell) {
+       return;
+     }
+     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIWebProgress);
+     webProgress.removeProgressListener(this);
+   },
+ 
+   onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
++    dump(`**** CANARY onStateChange: ${webProgress.DOMWindowID}\n`);
++
++    let {originalURI, URI: locationURI} = request.QueryInterface(Ci.nsIChannel);
++
++    if (locationURI.schemeIs("wyciwyg")) {
++      return;
++    }
++
++    let requestURL = locationURI.spec;
++
++    if (originalURI.schemeIs("about") ||
++        originalURI.schemeIs("moz-extensions")) {
++      requestURL = originalURI.spec;
++    }
++
+     let data = {
+-      requestURL: request.QueryInterface(Ci.nsIChannel).URI.spec,
+       windowId: webProgress.DOMWindowID,
+       parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
++      requestURL,
+       status,
+       stateFlags,
+     };
+ 
+     sendAsyncMessage("Extension:StateChange", data);
+ 
+-    if (webProgress.DOMWindow.top != webProgress.DOMWindow) {
+-      let webNav = webProgress.QueryInterface(Ci.nsIWebNavigation);
+-      if (!webNav.canGoBack) {
+-        // For some reason we don't fire onLocationChange for the
+-        // initial navigation of a sub-frame. So we need to simulate
+-        // it here.
+-        this.onLocationChange(webProgress, request, request.QueryInterface(Ci.nsIChannel).URI, 0);
+-      }
++    if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT) {
++      this.processStateDocument({webProgress, request, locationURI, flags: 0, isSimulated: true});
+     }
+   },
+ 
++  onRefreshAttempted: function onRefreshAttempted(webProgress, URI, delay, sameURI) {
++    dump(`**** CANARY onRefreshAttempted: ${webProgress.DOMWindowID}\n`);
++
++    this.refreshAttemptedDOMWindows.add(webProgress.DOMWindow);
++
++    return true;
++  },
++
+   onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
+     let {DOMWindow, loadType} = webProgress;
+ 
+     // Get the previous URI loaded in the DOMWindow.
+     let previousURI = this.previousURIMap.get(DOMWindow);
+ 
+     // Update the URI in the map with the new locationURI.
+     this.previousURIMap.set(DOMWindow, locationURI);
+@@ -103,35 +153,87 @@ var WebProgressListener = {
+         isReferenceFragmentUpdated = true;
+       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE) {
+         isHistoryStateUpdated = true;
+       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
+         isHistoryStateUpdated = true;
+       }
+     }
+ 
++    let transitionData = {};
++
++    if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
++      transitionData.forward_back = true;
++    }
++
++    if (isHistoryStateUpdated || isReferenceFragmentUpdated) {
++      let data = {
++        transitionData,
++        isHistoryStateUpdated, isReferenceFragmentUpdated,
++        location: locationURI ? locationURI.spec : "",
++        windowId: webProgress.DOMWindowID,
++        parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
++      };
++
++      sendAsyncMessage("Extension:LocationChange", data);
++    }
++  },
++
++  processStateDocument({webProgress, request, locationURI, flags, isSimulated}) {
++    dump(`**** CANARY processStateDocument: ${webProgress.DOMWindowID}\n`);
++
++    let {DOMWindow, loadType} = webProgress;
++
++    let transitionData = {};
++
++    if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
++      transitionData.forward_back = true;
++    }
++
++    if (loadType & Ci.nsIDocShell.LOAD_CMD_RELOAD) {
++      transitionData.reload = true;
++    }
++
++    if (request instanceof Ci.nsIChannel) {
++      if (request.loadInfo.redirectChain.length) {
++        transitionData.server_redirect = true;
++      }
++    }
++
++    if (this.refreshAttemptedDOMWindows.has(webProgress.DOMWindow)) {
++      this.refreshAttemptedDOMWindows.delete(webProgress.DOMWindow);
++      transitionData.client_redirect = true;
++    }
++
++    if (FormSubmitListener.hasAndForget(DOMWindow)) {
++      transitionData.form_submit = true;
++    }
++
+     let data = {
+-      isHistoryStateUpdated, isReferenceFragmentUpdated,
++      transitionData,
+       location: locationURI ? locationURI.spec : "",
+       windowId: webProgress.DOMWindowID,
+       parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+     };
+ 
+     sendAsyncMessage("Extension:LocationChange", data);
+   },
+ 
+-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsIWebProgressListener2, Ci.nsISupportsWeakReference]),
+ };
+ 
+ var disabled = false;
+ WebProgressListener.init();
++FormSubmitListener.init();
+ addEventListener("unload", () => {
+   if (!disabled) {
+     disabled = true;
+     WebProgressListener.uninit();
++    FormSubmitListener.uninit();
+   }
+ });
+ addMessageListener("Extension:DisableWebNavigation", () => {
+   if (!disabled) {
+     disabled = true;
+     WebProgressListener.uninit();
++    FormSubmitListener.uninit();
+   }
+ });
