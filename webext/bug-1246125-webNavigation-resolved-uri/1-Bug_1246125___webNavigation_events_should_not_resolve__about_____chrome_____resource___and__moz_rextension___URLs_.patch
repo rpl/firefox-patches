@@ -1,0 +1,159 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1459980263 -7200
+#      Thu Apr 07 00:04:23 2016 +0200
+# Node ID d15b58980c50fba4a6b95c1b173b813fccd15a7d
+# Parent  419922c1f15f5f3edeb516e9922928e1d6b02910
+Bug 1246125 - webNavigation events should not resolve 'about:', 'chrome:', 'resource:' and 'moz-rextension:' URLs.
+
+diff --git a/toolkit/components/extensions/test/mochitest/chrome.ini b/toolkit/components/extensions/test/mochitest/chrome.ini
+--- a/toolkit/components/extensions/test/mochitest/chrome.ini
++++ b/toolkit/components/extensions/test/mochitest/chrome.ini
+@@ -6,8 +6,10 @@ support-files =
+   file_sample.html
+ 
+ [test_chrome_ext_downloads_download.html]
+ [test_chrome_ext_downloads_misc.html]
+ [test_chrome_ext_downloads_search.html]
+ [test_chrome_ext_eventpage_warning.html]
+ [test_chrome_ext_contentscript_unrecognizedprop_warning.html]
+ skip-if = (os == 'android') # browser.tabs is undefined. Bug 1258975 on android.
++[test_chrome_ext_webnavigation_resolved_urls.html]
++skip-if = (os == 'android') # browser.tabs is undefined. Bug 1258975 on android.
+\ No newline at end of file
+diff --git a/toolkit/components/extensions/test/mochitest/test_chrome_ext_webnavigation_resolved_urls.html b/toolkit/components/extensions/test/mochitest/test_chrome_ext_webnavigation_resolved_urls.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_chrome_ext_webnavigation_resolved_urls.html
+@@ -0,0 +1,83 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for simple WebExtension</title>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SpawnTask.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" href="chrome://mochikit/contents/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++add_task(function* webnav_unresolved_uri_on_expected_URI_scheme() {
++  function backgroundScript() {
++    let checkURLs;
++    let eventIdx = 0;
++
++    browser.webNavigation.onCompleted.addListener((msg) => {
++      if (eventIdx < checkURLs.length) {
++        browser.test.assertEq(checkURLs[eventIdx++], msg.url, "Got the expected URL");
++        browser.tabs.remove(msg.tabId).then(() => {
++          browser.test.sendMessage("next");
++        });
++      }
++    });
++
++    browser.test.onMessage.addListener((name, urls) => {
++      if (name == "checkURLs") {
++        checkURLs = urls;
++      }
++    });
++
++    browser.test.sendMessage("ready", browser.runtime.getURL("/tab.html"));
++  }
++
++  let extensionData = {
++    manifest: {
++      permissions: [
++        "webNavigation",
++      ],
++    },
++    background: "(" + backgroundScript.toString() + ")()",
++    files: {
++      "tab.html": `<!DOCTYPE html>
++      <html>
++        <head>
++         <meta charset="utf-8">
++        </head>
++      </html>
++      `,
++    },
++  };
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++
++  yield extension.startup();
++
++  let checkURLs = [
++    "resource://gre/modules/Services.jsm",
++    "chrome://mochikit/content/tests/SimpleTest/SimpleTest.js",
++    "about:mozilla",
++  ];
++
++  let tabURL = yield extension.awaitMessage("ready");
++  checkURLs.push(tabURL);
++
++  extension.sendMessage("checkURLs", checkURLs);
++
++  for (let url of checkURLs) {
++    window.open(url);
++    yield extension.awaitMessage("next");
++  }
++
++  yield extension.unload();
++});
++
++</script>
++
++</body>
++</html>
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -49,33 +49,42 @@ var WebProgressListener = {
+       return;
+     }
+     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIWebProgress);
+     webProgress.removeProgressListener(this);
+   },
+ 
+   onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
++    let {originalURI, URI: locationURI} = request.QueryInterface(Ci.nsIChannel);
++
++    if (originalURI.schemeIs("about") ||
++        originalURI.schemeIs("chrome") ||
++        originalURI.schemeIs("resource") ||
++        originalURI.schemeIs("moz-extension")) {
++      locationURI = originalURI;
++    }
++
+     let data = {
+-      requestURL: request.QueryInterface(Ci.nsIChannel).URI.spec,
++      requestURL: locationURI.spec,
+       windowId: webProgress.DOMWindowID,
+       parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+       status,
+       stateFlags,
+     };
+ 
+     sendAsyncMessage("Extension:StateChange", data);
+ 
+     if (webProgress.DOMWindow.top != webProgress.DOMWindow) {
+       let webNav = webProgress.QueryInterface(Ci.nsIWebNavigation);
+       if (!webNav.canGoBack) {
+         // For some reason we don't fire onLocationChange for the
+         // initial navigation of a sub-frame. So we need to simulate
+         // it here.
+-        this.onLocationChange(webProgress, request, request.QueryInterface(Ci.nsIChannel).URI, 0);
++        this.onLocationChange(webProgress, request, locationURI, 0);
+       }
+     }
+   },
+ 
+   onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
+     let {DOMWindow, loadType} = webProgress;
+ 
+     // Get the previous URI loaded in the DOMWindow.
