@@ -1,0 +1,181 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1460130011 -7200
+#      Fri Apr 08 17:40:11 2016 +0200
+# Node ID 9bd2e39270ab91c0b99df46c25945e19f21a1a6d
+# Parent  be8fd1fc126f922544f1e9ba39c25f679ebdbbf5
+Bug 1256652 - [webext] Add webNavigation form_submit transitions implementation and test case.
+
+MozReview-Commit-ID: GiMnQpCpHHm
+
+diff --git a/toolkit/components/extensions/test/mochitest/file_WebNavigation_page1.html b/toolkit/components/extensions/test/mochitest/file_WebNavigation_page1.html
+--- a/toolkit/components/extensions/test/mochitest/file_WebNavigation_page1.html
++++ b/toolkit/components/extensions/test/mochitest/file_WebNavigation_page1.html
+@@ -1,9 +1,12 @@
+ <!DOCTYPE HTML>
+ 
+ <html>
+ <body>
+ 
+ <iframe src="file_WebNavigation_page2.html" width="200" height="200"></iframe>
+ 
++<form>
++</form>
++
+ </body>
+ </html>
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+@@ -163,16 +163,33 @@ add_task(function* webnav_transitions_pr
+ 
+   if (found) {
+     is(found.details.transitionType, "auto_subframe",
+        "Got the expected 'auto_subframe' transitionType in the OnCommitted event");
+     ok(Array.isArray(found.details.transitionQualifiers),
+        "transitionQualifiers found in the OnCommitted events");
+   }
+ 
++  // transitionType: form_submit
++  received = [];
++  yield loadAndWait(win, "onCompleted", URL, () => {
++    win.document.querySelector("form").submit();
++  });
++
++  found = received.find((data) => (data.event == "onCommitted" && data.url == URL));
++
++  ok(found, "Got the onCommitted event");
++
++  if (found) {
++    is(found.details.transitionType, "form_submit",
++       "Got the expected 'form_submit' transitionType in the OnCommitted event");
++    ok(Array.isArray(found.details.transitionQualifiers),
++       "transitionQualifiers found in the OnCommitted events");
++  }
++
+   // transitionQualifier: server_redirect
+   received = [];
+   yield loadAndWait(win, "onCompleted", REDIRECTED, () => { win.location = REDIRECT; });
+ 
+   found = received.find((data) => (data.event == "onCommitted" && data.url == REDIRECTED));
+ 
+   ok(found, "Got the onCommitted event");
+ 
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -18,16 +18,45 @@ function loadListener(event) {
+   sendAsyncMessage("Extension:DOMContentLoaded", {windowId, parentWindowId, url});
+ }
+ 
+ addEventListener("DOMContentLoaded", loadListener);
+ addMessageListener("Extension:DisableWebNavigation", () => {
+   removeEventListener("DOMContentLoaded", loadListener);
+ });
+ 
++var FormSubmitListener = {
++  QueryInterface : XPCOMUtils.generateQI([Ci.nsIObserver,
++                                          Ci.nsIFormSubmitObserver,
++                                          Ci.nsISupportsWeakReference]),
++  init() {
++    this.formSubmitWindows = new WeakSet();
++    Services.obs.addObserver(FormSubmitListener, "earlyformsubmit", false);
++  },
++
++  uninit() {
++    Services.obs.removeObserver(FormSubmitListener, "earlyformsubmit", false);
++    this.formSubmitWindows = new WeakSet();
++  },
++
++  notify: function(form, window, actionURI) {
++    try {
++      this.formSubmitWindows.add(window);
++    } catch (e) {
++      Cu.reportError("Error in FormSubmitListener.notify");
++    }
++  },
++
++  hasAndForget: function(window) {
++    let has = this.formSubmitWindows.has(window);
++    this.formSubmitWindows.delete(window);
++    return has;
++  },
++};
++
+ var WebProgressListener = {
+   init: function() {
+     // This WeakMap (DOMWindow -> nsIURI) keeps track of the pathname and hash
+     // of the previous location for all the existent docShells.
+     this.previousURIMap = new WeakMap();
+ 
+     // Populate the above previousURIMap by iterating over the docShells tree.
+     for (let currentDocShell of WebNavigationFrames.iterateDocShellTree(docShell)) {
+@@ -103,58 +132,66 @@ var WebProgressListener = {
+         isReferenceFragmentUpdated = true;
+       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE) {
+         isHistoryStateUpdated = true;
+       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
+         isHistoryStateUpdated = true;
+       }
+     }
+ 
+-    let frameTransitionData = this.getFrameTransitionData({loadType, request});
++    let frameTransitionData = this.getFrameTransitionData({loadType, request, DOMWindow});
+ 
+     let data = {
+       frameTransitionData,
+       isHistoryStateUpdated, isReferenceFragmentUpdated,
+       location: locationURI ? locationURI.spec : "",
+       windowId: webProgress.DOMWindowID,
+       parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+     };
+ 
+     sendAsyncMessage("Extension:LocationChange", data);
+   },
+ 
+-  getFrameTransitionData({loadType, request}) {
++  getFrameTransitionData({loadType, request, DOMWindow}) {
+     let frameTransitionData = {};
+ 
+     if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
+       frameTransitionData.forward_back = true;
+     }
+ 
+     if (loadType & Ci.nsIDocShell.LOAD_CMD_RELOAD) {
+       frameTransitionData.reload = true;
+     }
+ 
+     if (request instanceof Ci.nsIChannel) {
+       if (request.loadInfo.redirectChain.length) {
+         frameTransitionData.server_redirect = true;
+       }
+     }
+ 
++    if (FormSubmitListener.hasAndForget(DOMWindow)) {
++      frameTransitionData.form_submit = true;
++    }
++
++
+     return frameTransitionData;
+   },
+ 
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
+ };
+ 
+ var disabled = false;
+ WebProgressListener.init();
++FormSubmitListener.init();
+ addEventListener("unload", () => {
+   if (!disabled) {
+     disabled = true;
+     WebProgressListener.uninit();
++    FormSubmitListener.uninit();
+   }
+ });
+ addMessageListener("Extension:DisableWebNavigation", () => {
+   if (!disabled) {
+     disabled = true;
+     WebProgressListener.uninit();
++    FormSubmitListener.uninit();
+   }
+ });
