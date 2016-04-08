@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1459769734 -7200
-#      Mon Apr 04 13:35:34 2016 +0200
-# Node ID abca99cd1bfc49730e9ea8dfa97fbe9d492afcf9
-# Parent  e14db462d31d566570e3bece66d5380f7b1ad400
+# Date 1460124048 -7200
+#      Fri Apr 08 16:00:48 2016 +0200
+# Node ID e264453093b25749e282c6faaf7df9b8751b64a0
+# Parent  5ae810198a9c8c7f4e75cd0881bfc8d1295cbc8d
 Bug 1256282 - [webext] options_ui browsers should have access to the full WebExtension API. r?kmag
 
 MozReview-Commit-ID: E1GwT0zfGie
@@ -11,7 +11,7 @@ MozReview-Commit-ID: E1GwT0zfGie
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -62,8 +62,9 @@ tags = fullscreen
+@@ -63,8 +63,9 @@ tags = fullscreen
  [browser_ext_windows_size.js]
  skip-if = os == 'mac' # Fails when windows are randomly opened in fullscreen mode
  [browser_ext_windows_update.js]
@@ -26,20 +26,22 @@ diff --git a/browser/components/extensions/test/browser/browser_ext_optionsPage_
 new file mode 100644
 --- /dev/null
 +++ b/browser/components/extensions/test/browser/browser_ext_optionsPage_privileges.js
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,63 @@
 +/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set sts=2 sw=2 et tw=80: */
 +"use strict";
 +
 +add_task(function* test_tab_options_privileges() {
 +  function backgroundScript() {
-+    browser.runtime.onMessage.addListener(tabId => {
-+      browser.tabs.remove(tabId).then(() => {
-+        browser.test.notifyPass("options-ui-privileges");
-+      }).catch(error => {
-+        browser.test.log(`Error: ${error} :: ${error.stack}`);
-+        browser.test.notifyFail("options-ui-privileges");
-+      });
++    browser.runtime.onMessage.addListener(({msgName, tabId}) => {
++      if (msgName == "removeTabId") {
++        browser.tabs.remove(tabId).then(() => {
++          browser.test.notifyPass("options-ui-privileges");
++        }).catch(error => {
++          browser.test.log(`Error: ${error} :: ${error.stack}`);
++          browser.test.notifyFail("options-ui-privileges");
++        });
++      }
 +    });
 +    browser.runtime.openOptionsPage();
 +  }
@@ -49,7 +51,7 @@ new file mode 100644
 +      browser.test.assertEq("http://example.com/", tabs[0].url, "Got the expect tab");
 +      return browser.tabs.getCurrent();
 +    }).then(tab => {
-+      browser.runtime.sendMessage(tab.id);
++      browser.runtime.sendMessage({msgName: "removeTabId", tabId: tab.id});
 +    }).catch(error => {
 +      browser.test.log(`Error: ${error} :: ${error.stack}`);
 +      browser.test.notifyFail("options-ui-privileges");

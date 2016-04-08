@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459770377 -7200
 #      Mon Apr 04 13:46:17 2016 +0200
-# Node ID 87d573d61292d5e11bd6bbb1c53bcd7ec2383887
-# Parent  abca99cd1bfc49730e9ea8dfa97fbe9d492afcf9
+# Node ID 2eb4dcb85833f962e1e1731111794ffa7d11be32
+# Parent  e264453093b25749e282c6faaf7df9b8751b64a0
 Bug 1256282 - [webext] Fix addonId checks in getAPILevelForWindow and add an xpcshell test unit. r?kmag
 
 MozReview-Commit-ID: HVoUAMOKqTZ
