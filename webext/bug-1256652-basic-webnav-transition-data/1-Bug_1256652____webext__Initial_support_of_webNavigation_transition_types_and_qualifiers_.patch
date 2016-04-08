@@ -1,0 +1,355 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1460067793 -7200
+#      Fri Apr 08 00:23:13 2016 +0200
+# Node ID ec1106c7473f67abef3b939b7f0d206d5ec0751c
+# Parent  579cca4926ab4ad5c6a4d96799aa69c8fd2aaf35
+Bug 1256652 - [webext] Initial support of webNavigation transition types and qualifiers.
+
+MozReview-Commit-ID: Bx3oG2fuWuv
+
+diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
+--- a/toolkit/components/extensions/ext-webNavigation.js
++++ b/toolkit/components/extensions/ext-webNavigation.js
+@@ -13,16 +13,94 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ 
+ Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+ var {
+   SingletonEventManager,
+   ignoreEvent,
+   runSafe,
+ } = ExtensionUtils;
+ 
++const defaultTransitionTypes = {
++  topFrame: "link",
++  subFrame: "auto_subframe",
++};
++
++const frameTransitions = {
++  anyFrame: {
++    qualifiers: ["server_redirect", "client_redirect", "forward_back"],
++  },
++  topFrame: {
++    types: ["reload", "form_submit"],
++  },
++};
++
++const tabTransitions = {
++  topFrame: {
++    qualifiers: ["from_address_bar"],
++    types: ["auto_bookmark", "typed", "keyword", "generated", "link"],
++  },
++  subFrame: {
++    types: ["manual_subframe"],
++  },
++};
++
++function isTopLevelFrame({frameId, parentFrameId}) {
++  return frameId == 0 && parentFrameId == -1;
++}
++
++function fillTransitionProperties(eventName, src, dst) {
++  if (eventName == "onCommitted" || eventName == "onHistoryStateUpdated") {
++    let frameTransitionData = src.frameTransitionData || {};
++    let tabTransitionData = src.tabTransitionData || {};
++
++    let transitionType, transitionQualifiers = [];
++
++    // Fill transition properties for any frame.
++    for (let qualifier of frameTransitions.anyFrame.qualifiers) {
++      if (frameTransitionData[qualifier]) {
++        transitionQualifiers.push(qualifier);
++      }
++    }
++
++    if (isTopLevelFrame(dst)) {
++      for (let type of frameTransitions.topFrame.types) {
++        if (frameTransitionData[type]) {
++          transitionType = type;
++        }
++      }
++
++      for (let qualifier of tabTransitions.topFrame.qualifiers) {
++        if (tabTransitionData[qualifier]) {
++          transitionQualifiers.push(qualifier);
++        }
++      }
++
++      for (let type of tabTransitions.topFrame.types) {
++        if (tabTransitionData[type]) {
++          transitionType = type;
++        }
++      }
++
++      // If transitionType is not defined, defaults it to "link".
++      if (!transitionType) {
++        transitionType = defaultTransitionTypes.topFrame;
++      }
++    } else {
++      // If sub-frame transitionType defaults it to "auto_subframe",
++      // "manual_subframe" is set only in case of a recent user interaction.
++      transitionType = tabTransitionData.link ?
++        "manual_subframe" : defaultTransitionTypes.subFrame;
++    }
++
++    // Fill the transition properties in the webNavigation event object.
++    dst.transitionType = transitionType;
++    dst.transitionQualifiers = transitionQualifiers;
++  }
++}
++
+ // Similar to WebRequestEventManager but for WebNavigation.
+ function WebNavigationEventManager(context, eventName) {
+   let name = `webNavigation.${eventName}`;
+   let register = callback => {
+     let listener = data => {
+       if (!data.browser) {
+         return;
+       }
+@@ -41,16 +119,18 @@ function WebNavigationEventManager(conte
+ 
+       // Fills in tabId typically.
+       let result = {};
+       extensions.emit("fill-browser-data", data.browser, data2, result);
+       if (result.cancel) {
+         return;
+       }
+ 
++      fillTransitionProperties(eventName, data, data2);
++
+       runSafe(context, callback, data2);
+     };
+ 
+     WebNavigation[eventName].addListener(listener);
+     return () => {
+       WebNavigation[eventName].removeListener(listener);
+     };
+   };
+diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
+--- a/toolkit/modules/addons/WebNavigation.jsm
++++ b/toolkit/modules/addons/WebNavigation.jsm
+@@ -8,40 +8,138 @@ const EXPORTED_SYMBOLS = ["WebNavigation
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "RecentWindow",
++                                  "resource:///modules/RecentWindow.jsm");
++
+ // TODO:
+ // Transition types and qualifiers
+-// onReferenceFragmentUpdated also triggers for pushState
+-// getFrames, getAllFrames
+-// onCreatedNavigationTarget, onHistoryStateUpdated
++// onCreatedNavigationTarget
++
++const RECENT_DATA_THRESHOLD = 5 * 1000000;
+ 
+ var Manager = {
+   listeners: new Map(),
+ 
+   init() {
++    // Collect recent tab transition data in a WeakMap:
++    //   browser -> tabTransitionData
++    this.recentTabTransitionData = new WeakMap();
++
++    Services.obs.addObserver(this, "autocomplete-did-enter-text", true);
++
+     Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
+     Services.mm.addMessageListener("Extension:StateChange", this);
+     Services.mm.addMessageListener("Extension:LocationChange", this);
+     Services.mm.loadFrameScript("resource://gre/modules/WebNavigationContent.js", true);
+   },
+ 
+   uninit() {
++    Services.obs.removeObserver(this, "autocomplete-did-enter-text", true);
++
++    // Reset the WeakMap of the recent tab transition data.
++    this.recentTabTransitionData = new WeakMap();
++
+     Services.mm.removeMessageListener("Extension:StateChange", this);
+     Services.mm.removeMessageListener("Extension:LocationChange", this);
+     Services.mm.removeMessageListener("Extension:DOMContentLoaded", this);
+     Services.mm.removeDelayedFrameScript("resource://gre/modules/WebNavigationContent.js");
+     Services.mm.broadcastAsyncMessage("Extension:DisableWebNavigation");
+   },
+ 
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]),
++
++  observe: function(subject, topic, data) {
++    if (topic == "autocomplete-did-enter-text") {
++      this.onURLBarAutoCompletion(subject, topic, data);
++    }
++  },
++
++  onURLBarAutoCompletion(subject, topic, data) {
++    if (subject && subject instanceof Ci.nsIAutoCompleteInput) {
++      // We are only interested in urlbar autocompletion events
++      if (subject.id !== "urlbar") {
++        return;
++      }
++
++      let controller = subject.popup.view.QueryInterface(Ci.nsIAutoCompleteController);
++      let idx = subject.popup.selectedIndex;
++      let value = controller.getValueAt(idx);
++      let action = subject._parseActionUrl(value);
++      let actionType;
++      if (action) {
++        actionType =
++          action.type == "searchengine" && action.params.searchSuggestion ?
++          "searchsuggestion" : action.type;
++      }
++
++      if (idx == -1) {
++        actionType = "typed";
++      }
++
++      if (!actionType) {
++        let styles = new Set(controller.getStyleAt(idx).split(/\s+/));
++        let style = ["bookmark"].find(s => styles.has(s));
++        actionType = style || "typed";
++      }
++
++      let tabTransistionData = {
++        from_address_bar: true,
++      };
++
++      switch (actionType) {
++        case "bookmark":
++          tabTransistionData.auto_bookmark = true;
++          break;
++        case "typed":
++          tabTransistionData.typed = true;
++          break;
++        case "keyword":
++          tabTransistionData.keyword = true;
++          break;
++        case "searchengine":
++          tabTransistionData.generated = true;
++          break;
++      }
++
++      this.pushRecentTabTransitionData(tabTransistionData);
++    }
++  },
++
++  pushRecentTabTransitionData(tabTransitionData) {
++    let window = RecentWindow.getMostRecentBrowserWindow();
++    if (window && window.gBrowser && window.gBrowser.selectedTab &&
++        window.gBrowser.selectedTab.linkedBrowser) {
++      let browser = window.gBrowser.selectedTab.linkedBrowser;
++      let prevData = this.popRecentTabTransitionData(browser);
++      let newData = Object.assign(
++        {time: Date.now()},
++        prevData,
++        tabTransitionData
++      );
++      this.recentTabTransitionData.set(browser, newData);
++    }
++  },
++
++  popRecentTabTransitionData(browser) {
++    let data = this.recentTabTransitionData.get(browser);
++    this.recentTabTransitionData.delete(browser);
++    if (data && (data.time - Date.now()) > RECENT_DATA_THRESHOLD) {
++      return {};
++    }
++
++    return data || {};
++  },
++
+   addListener(type, listener) {
+     if (this.listeners.size == 0) {
+       this.init();
+     }
+ 
+     if (!this.listeners.has(type)) {
+       this.listeners.set(type, new Set());
+     }
+@@ -94,23 +192,27 @@ var Manager = {
+           this.fire("onErrorOccurred", browser, data, {error, url});
+         }
+       }
+     }
+   },
+ 
+   onLocationChange(browser, data) {
+     let url = data.location;
++    let {frameTransitionData} = data;
++    let tabTransitionData = this.popRecentTabTransitionData(browser);
+ 
+     if (data.isReferenceFragmentUpdated) {
+       this.fire("onReferenceFragmentUpdated", browser, data, {url});
+     } else if (data.isHistoryStateUpdated) {
+-      this.fire("onHistoryStateUpdated", browser, data, {url});
++      this.fire("onHistoryStateUpdated", browser, data,
++                {url, frameTransitionData, tabTransitionData});
+     } else {
+-      this.fire("onCommitted", browser, data, {url});
++      this.fire("onCommitted", browser, data,
++                {url, frameTransitionData, tabTransitionData});
+     }
+   },
+ 
+   onLoad(browser, data) {
+     this.fire("onDOMContentLoaded", browser, data, {url: data.url});
+   },
+ 
+   fire(type, browser, data, extra) {
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -103,26 +103,49 @@ var WebProgressListener = {
+         isReferenceFragmentUpdated = true;
+       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE) {
+         isHistoryStateUpdated = true;
+       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
+         isHistoryStateUpdated = true;
+       }
+     }
+ 
++    let frameTransitionData = this.getFrameTransitionData({loadType, request});
++
+     let data = {
++      frameTransitionData,
+       isHistoryStateUpdated, isReferenceFragmentUpdated,
+       location: locationURI ? locationURI.spec : "",
+       windowId: webProgress.DOMWindowID,
+       parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+     };
+ 
+     sendAsyncMessage("Extension:LocationChange", data);
+   },
+ 
++  getFrameTransitionData({loadType, request}) {
++    let frameTransitionData = {};
++
++    if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
++      frameTransitionData.forward_back = true;
++    }
++
++    if (loadType & Ci.nsIDocShell.LOAD_CMD_RELOAD) {
++      frameTransitionData.reload = true;
++    }
++
++    if (request instanceof Ci.nsIChannel) {
++      if (request.loadInfo.redirectChain.length) {
++        frameTransitionData.server_redirect = true;
++      }
++    }
++
++    return frameTransitionData;
++  },
++
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
+ };
+ 
+ var disabled = false;
+ WebProgressListener.init();
+ addEventListener("unload", () => {
+   if (!disabled) {
+     disabled = true;
