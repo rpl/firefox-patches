@@ -2,16 +2,36 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1460116852 -7200
 #      Fri Apr 08 14:00:52 2016 +0200
-# Node ID 75d4590ec660caae48ed83f835ef97c011f0c72e
+# Node ID 3e2af3f6afbb84eb13b650a7ecbb35070383714d
 # Parent  5ae810198a9c8c7f4e75cd0881bfc8d1295cbc8d
-Bug 1263140 - fix notified button name in SDK native-options module. r?mossop
+Bug 1263140 - fix notified button name in SDK native-options module. r=mossop
 
 MozReview-Commit-ID: DS6hX5SemJA
 
 diff --git a/addon-sdk/source/lib/sdk/preferences/native-options.js b/addon-sdk/source/lib/sdk/preferences/native-options.js
 --- a/addon-sdk/source/lib/sdk/preferences/native-options.js
 +++ b/addon-sdk/source/lib/sdk/preferences/native-options.js
-@@ -146,22 +146,26 @@ function injectOptions({ preferences, pr
+@@ -128,34 +128,37 @@ function setDefaults(preferences, prefer
+ }
+ exports.setDefaults = setDefaults;
+ 
+ // dynamically injects inline options into about:addons page at runtime
+ // NOTE: on Firefox Desktop the about:addons page is a xul page document,
+ // on Firefox for Android the about:addons page is an xhtml page, to support both
+ // the XUL xml namespace have to be enforced.
+ function injectOptions({ preferences, preferencesBranch, document, parent, id }) {
+-  for (let { name, type, hidden, title, description, label, options, on, off } of preferences) {
++  preferences.forEach(({name, type, hidden, title, description, label, options, on, off}) => {
+     if (hidden) {
+-      continue;
++      return;
+     }
+ 
+     let setting = document.createElementNS(XUL_NS, 'setting');
+     setting.setAttribute('pref-name', name);
+     setting.setAttribute('data-jetpack-id', id);
+     setting.setAttribute('pref', 'extensions.' + preferencesBranch + '.' + name);
+     setting.setAttribute('type', type);
      setting.setAttribute('title', title);
      if (description)
        setting.setAttribute('desc', description);
@@ -23,23 +43,27 @@ diff --git a/addon-sdk/source/lib/sdk/preferences/native-options.js b/addon-sdk/
 +      // Bind the name of the control into a different variable name
 +      // or the command event handler will use the last preference name
 +      // instead of the button preference name.
-+      let buttonName = name;
        let button = document.createElementNS(XUL_NS, 'button');
--      button.setAttribute('pref-name', name);
-+      button.setAttribute('pref-name', buttonName);
+       button.setAttribute('pref-name', name);
        button.setAttribute('data-jetpack-id', id);
        button.setAttribute('label', label);
        button.addEventListener('command', function() {
--        Services.obs.notifyObservers(null, `${id}-cmdPressed`, name);
-+        Services.obs.notifyObservers(null, `${id}-cmdPressed`, buttonName);
+         Services.obs.notifyObservers(null, `${id}-cmdPressed`, name);
        }, true);
        setting.appendChild(button);
+@@ -183,11 +186,11 @@ function injectOptions({ preferences, pr
+         radio.setAttribute('value', value);
+         radio.setAttribute('label', label);
+         radiogroup.appendChild(radio);
+       }
+       setting.appendChild(radiogroup);
      }
-     else if (type === 'boolint') {
-       setting.setAttribute('on', on);
-       setting.setAttribute('off', off);
-     }
-     else if (type === 'menulist') {
+ 
+     parent.appendChild(setting);
+-  }
++  });
+ }
+ exports.injectOptions = injectOptions;
 diff --git a/addon-sdk/source/test/addons/simple-prefs/package.json b/addon-sdk/source/test/addons/simple-prefs/package.json
 --- a/addon-sdk/source/test/addons/simple-prefs/package.json
 +++ b/addon-sdk/source/test/addons/simple-prefs/package.json
