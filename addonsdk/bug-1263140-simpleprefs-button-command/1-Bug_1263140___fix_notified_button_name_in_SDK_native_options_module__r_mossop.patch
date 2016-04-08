@@ -1,0 +1,75 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1460116852 -7200
+#      Fri Apr 08 14:00:52 2016 +0200
+# Node ID 75d4590ec660caae48ed83f835ef97c011f0c72e
+# Parent  5ae810198a9c8c7f4e75cd0881bfc8d1295cbc8d
+Bug 1263140 - fix notified button name in SDK native-options module. r?mossop
+
+MozReview-Commit-ID: DS6hX5SemJA
+
+diff --git a/addon-sdk/source/lib/sdk/preferences/native-options.js b/addon-sdk/source/lib/sdk/preferences/native-options.js
+--- a/addon-sdk/source/lib/sdk/preferences/native-options.js
++++ b/addon-sdk/source/lib/sdk/preferences/native-options.js
+@@ -146,22 +146,26 @@ function injectOptions({ preferences, pr
+     setting.setAttribute('title', title);
+     if (description)
+       setting.setAttribute('desc', description);
+ 
+     if (type === 'file' || type === 'directory') {
+       setting.setAttribute('fullpath', 'true');
+     }
+     else if (type === 'control') {
++      // Bind the name of the control into a different variable name
++      // or the command event handler will use the last preference name
++      // instead of the button preference name.
++      let buttonName = name;
+       let button = document.createElementNS(XUL_NS, 'button');
+-      button.setAttribute('pref-name', name);
++      button.setAttribute('pref-name', buttonName);
+       button.setAttribute('data-jetpack-id', id);
+       button.setAttribute('label', label);
+       button.addEventListener('command', function() {
+-        Services.obs.notifyObservers(null, `${id}-cmdPressed`, name);
++        Services.obs.notifyObservers(null, `${id}-cmdPressed`, buttonName);
+       }, true);
+       setting.appendChild(button);
+     }
+     else if (type === 'boolint') {
+       setting.setAttribute('on', on);
+       setting.setAttribute('off', off);
+     }
+     else if (type === 'menulist') {
+diff --git a/addon-sdk/source/test/addons/simple-prefs/package.json b/addon-sdk/source/test/addons/simple-prefs/package.json
+--- a/addon-sdk/source/test/addons/simple-prefs/package.json
++++ b/addon-sdk/source/test/addons/simple-prefs/package.json
+@@ -10,23 +10,23 @@
+   {
+     "description": "How many of them we have.",
+     "name": "myInteger",
+     "type": "integer",
+     "value": 8,
+     "title": "my-int"
+   },
+   {
++    "name": "sayHello",
++    "type": "control",
++    "label": "Click me!",
++    "title": "hello"
++  },
++  {
+     "name": "myHiddenInt",
+     "type": "integer",
+     "hidden": true,
+     "value": 5,
+     "title": "hidden-int"
+-  },
+-  {
+-    "name": "sayHello",
+-    "type": "control",
+-    "label": "Click me!",
+-    "title": "hello"
+   }],
+   "main": "./lib/main.js",
+   "version": "0.0.1"
+ }
