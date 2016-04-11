@@ -2,12 +2,12 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1460405141 -7200
 #      Mon Apr 11 22:05:41 2016 +0200
-# Node ID 883e05ad2b38611daa2ab6a21bfc6fce884b1c8e
+# Node ID 95184c9b3a0b379e2878f20c7a8bec636a08002a
 # Parent  e20a1e0f054b8b7e45168545c8f9d169047f8a7c
-Bug TBF - [webext] Track awesomebar user interaction for webNavigation transition types and qualifiers.
+Bug 1263723 - [webext] Track awesomebar user interaction for webNavigation transition types and qualifiers.
 
 - listen for the "autocomplete-did-enter-text" topic notified on the observer service
-- add support to from_address_bar transition qualifier and keyword/generated transition types
+- add support to from_address_bar transition qualifier and auto_bookmark/keyword/generated transition types
 
 MozReview-Commit-ID: 7krQiJlnc1d
 
