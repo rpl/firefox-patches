@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1460068000 -7200
 #      Fri Apr 08 00:26:40 2016 +0200
-# Node ID be8fd1fc126f922544f1e9ba39c25f679ebdbbf5
-# Parent  579cca4926ab4ad5c6a4d96799aa69c8fd2aaf35
+# Node ID d7c7e32b31182719a6df0d81f792d1e88308dff4
+# Parent  039b504d1161b427ab475451bc805da8cd014b4c
 Bug 1256652 - [webext] Initial support of webNavigation transition types and qualifiers.
 
 - transition types: reload, link, auto_subframe

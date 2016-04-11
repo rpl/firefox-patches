@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1460405141 -7200
 #      Mon Apr 11 22:05:41 2016 +0200
-# Node ID 1297fed8262d2f46aa8a141d7726700d97df6fde
-# Parent  9bd2e39270ab91c0b99df46c25945e19f21a1a6d
+# Node ID 883e05ad2b38611daa2ab6a21bfc6fce884b1c8e
+# Parent  e20a1e0f054b8b7e45168545c8f9d169047f8a7c
 Bug TBF - [webext] Track awesomebar user interaction for webNavigation transition types and qualifiers.
 
 - listen for the "autocomplete-did-enter-text" topic notified on the observer service
@@ -33,7 +33,7 @@ diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/co
  [browser_ext_browserAction_context.js]
  [browser_ext_browserAction_disabled.js]
  [browser_ext_pageAction_simple.js]
-@@ -62,8 +64,9 @@ tags = fullscreen
+@@ -63,9 +65,10 @@ tags = fullscreen
  [browser_ext_windows_size.js]
  skip-if = os == 'mac' # Fails when windows are randomly opened in fullscreen mode
  [browser_ext_windows_update.js]
@@ -42,7 +42,11 @@ diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/co
  [browser_ext_tab_runtimeConnect.js]
  [browser_ext_topwindowid.js]
  [browser_ext_webNavigation_getFrames.js]
+-[browser_ext_optionsPage_privileges.js]
+\ No newline at end of file
++[browser_ext_optionsPage_privileges.js]
 +[browser_ext_webNavigation_urlbar_transitions.js]
+\ No newline at end of file
 diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_urlbar_transitions.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_urlbar_transitions.js
 new file mode 100644
 --- /dev/null
@@ -206,7 +210,7 @@ diff --git a/browser/components/extensions/test/browser/head.js b/browser/compon
  // Bug 1239884: Our tests occasionally hit a long GC pause at unpredictable
  // times in debug builds, which results in intermittent timeouts. Until we have
  // a better solution, we force a GC after certain strategic tests, which tend to
-@@ -134,8 +135,38 @@ function closePageAction(extension, win 
+@@ -132,8 +133,38 @@ function closePageAction(extension, win 
      return promisePopupShown(node).then(() => {
        node.hidePopup();
      });
