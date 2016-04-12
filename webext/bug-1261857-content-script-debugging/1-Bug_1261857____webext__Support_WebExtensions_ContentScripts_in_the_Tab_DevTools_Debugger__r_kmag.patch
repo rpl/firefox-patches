@@ -1,0 +1,298 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1460248170 -7200
+#      Sun Apr 10 02:29:30 2016 +0200
+# Node ID 0db7eb41552913acbe13dd640482c5c466a9977d
+# Parent  039b504d1161b427ab475451bc805da8cd014b4c
+Bug 1261857 - [webext] Support WebExtensions ContentScripts in the Tab DevTools Debugger. r?kmag
+
+MozReview-Commit-ID: BtGqvAkRJZx
+
+diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/components/extensions/ExtensionContent.jsm
+--- a/toolkit/components/extensions/ExtensionContent.jsm
++++ b/toolkit/components/extensions/ExtensionContent.jsm
+@@ -54,16 +54,22 @@ var {
+ 
+ function isWhenBeforeOrSame(when1, when2) {
+   let table = {"document_start": 0,
+                "document_end": 1,
+                "document_idle": 2};
+   return table[when1] <= table[when2];
+ }
+ 
++function getInnerWindowID(window) {
++  return window.QueryInterface(Ci.nsIInterfaceRequestor)
++    .getInterface(Ci.nsIDOMWindowUtils)
++    .currentInnerWindowID;
++}
++
+ // This is the fairly simple API that we inject into content
+ // scripts.
+ var api = context => {
+   return {
+     runtime: {
+       connect: function(extensionId, connectInfo) {
+         if (!connectInfo) {
+           connectInfo = extensionId;
+@@ -321,17 +327,25 @@ class ExtensionContext extends BaseConte
+       // because it enables us to create the APIs object in this sandbox object and then copying it
+       // into the iframe's window, see Bug 1214658 for rationale)
+       this.sandbox = Cu.Sandbox(contentWindow, {
+         sandboxPrototype: contentWindow,
+         wantXrays: false,
+         isWebExtensionContentScript: true,
+       });
+     } else {
++      // sandbox metadata is needed to be recognized and supported in
++      // the Developer Tools of the tab where the content script is running.
++      let metadata = {
++        "inner-window-id": getInnerWindowID(contentWindow),
++        addonId: attrs.addonId,
++      };
++
+       this.sandbox = Cu.Sandbox(prin, {
++        metadata,
+         sandboxPrototype: contentWindow,
+         wantXrays: true,
+         isWebExtensionContentScript: true,
+         wantGlobalProperties: ["XMLHttpRequest"],
+       });
+     }
+ 
+     let delegate = {
+@@ -402,22 +416,16 @@ class ExtensionContext extends BaseConte
+       Cu.createObjectIn(this.contentWindow, {defineAs: "browser"});
+       Cu.createObjectIn(this.contentWindow, {defineAs: "chrome"});
+     }
+     Cu.nukeSandbox(this.sandbox);
+     this.sandbox = null;
+   }
+ }
+ 
+-function windowId(window) {
+-  return window.QueryInterface(Ci.nsIInterfaceRequestor)
+-               .getInterface(Ci.nsIDOMWindowUtils)
+-               .currentInnerWindowID;
+-}
+-
+ // Responsible for creating ExtensionContexts and injecting content
+ // scripts into them when new documents are created.
+ DocumentManager = {
+   extensionCount: 0,
+ 
+   // Map[windowId -> Map[extensionId -> ExtensionContext]]
+   contentScriptWindows: new Map(),
+ 
+@@ -552,33 +560,44 @@ DocumentManager = {
+     yield window;
+ 
+     for (let i = 0; i < docShell.childCount; i++) {
+       let child = docShell.getChildAt(i).QueryInterface(Ci.nsIDocShell);
+       yield* this.enumerateWindows(child);
+     }
+   },
+ 
++  getContentScriptGlobalsForWindow(window) {
++    let winId = getInnerWindowID(window);
++    let extensions = this.contentScriptWindows.get(winId);
++
++    if (extensions instanceof Map) {
++      return Array.from(extensions.values()).map((c) => c.sandbox);
++    }
++
++    return [];
++  },
++
+   getContentScriptContext(extensionId, window) {
+-    let winId = windowId(window);
++    let winId = getInnerWindowID(window);
+     if (!this.contentScriptWindows.has(winId)) {
+       this.contentScriptWindows.set(winId, new Map());
+     }
+ 
+     let extensions = this.contentScriptWindows.get(winId);
+     if (!extensions.has(extensionId)) {
+       let context = new ExtensionContext(extensionId, window);
+       extensions.set(extensionId, context);
+     }
+ 
+     return extensions.get(extensionId);
+   },
+ 
+   getExtensionPageContext(extensionId, window) {
+-    let winId = windowId(window);
++    let winId = getInnerWindowID(window);
+ 
+     let context = this.extensionPageWindows.get(winId);
+     if (!context) {
+       let context = new ExtensionContext(extensionId, window, {isExtensionPage: true});
+       this.extensionPageWindows.set(winId, context);
+     }
+ 
+     return context;
+@@ -640,17 +659,17 @@ DocumentManager = {
+         for (let script of extension.scripts) {
+           if (script.matches(window)) {
+             let context = this.getContentScriptContext(extensionId, window);
+             context.addScript(script);
+           }
+         }
+       }
+     } else {
+-      let contexts = this.contentScriptWindows.get(windowId(window)) || new Map();
++      let contexts = this.contentScriptWindows.get(getInnerWindowID(window)) || new Map();
+       for (let context of contexts.values()) {
+         context.triggerScripts(state);
+       }
+     }
+   },
+ };
+ 
+ // Represents a browser extension in the content process.
+@@ -763,17 +782,17 @@ class ExtensionGlobal {
+   }
+ 
+   uninit() {
+     this.global.sendAsyncMessage("Extension:RemoveTopWindowID", {windowId: this.windowId});
+   }
+ 
+   get messageFilterStrict() {
+     return {
+-      innerWindowID: windowId(this.global.content),
++      innerWindowID: getInnerWindowID(this.global.content),
+     };
+   }
+ 
+   receiveMessage({target, messageName, recipient, data}) {
+     switch (messageName) {
+       case "Extension:Capture":
+         return this.handleExtensionCapture(data.width, data.height, data.options);
+       case "Extension:DetectLanguage":
+@@ -866,11 +885,15 @@ this.ExtensionContent = {
+   init(global) {
+     this.globals.set(global, new ExtensionGlobal(global));
+   },
+ 
+   uninit(global) {
+     this.globals.get(global).uninit();
+     this.globals.delete(global);
+   },
++
++  getContentScriptGlobalsForWindow(window) {
++    return DocumentManager.getContentScriptGlobalsForWindow(window);
++  }
+ };
+ 
+ ExtensionManager.init();
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -27,18 +27,19 @@ support-files =
+ 
+ [test_ext_extension.html]
+ [test_ext_simple.html]
+ [test_ext_schema.html]
+ skip-if = e10s # Uses a console montitor. Actual code does not depend on e10s.
+ [test_ext_geturl.html]
+ [test_ext_contentscript.html]
+ skip-if = buildapp == 'b2g' # runat != document_idle is not supported.
++[test_ext_contentscript_api_injection.html]
+ [test_ext_contentscript_create_iframe.html]
+-[test_ext_contentscript_api_injection.html]
++[test_ext_contentScript_devtools_metadata.html]
+ [test_ext_downloads.html]
+ [test_ext_exclude_include_globs.html]
+ [test_ext_i18n_css.html]
+ [test_ext_generate.html]
+ [test_ext_idle.html]
+ [test_ext_localStorage.html]
+ [test_ext_onmessage_removelistener.html]
+ [test_ext_notifications.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentScript_devtools_metadata.html b/toolkit/components/extensions/test/mochitest/test_ext_contentScript_devtools_metadata.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_ext_contentScript_devtools_metadata.html
+@@ -0,0 +1,83 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for Sandbox metadata on WebExtensions ContentScripts</title>
++  <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/SpawnTask.js"></script>
++  <script type="text/javascript" src="/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++add_task(function* test_contentscript_devtools_sandbox_metadata() {
++  function contentScript() {
++    browser.runtime.sendMessage("contentScript.executed")
++  }
++
++  function backgroundScript() {
++    browser.runtime.onMessage.addListener((msg) => {
++      if (msg == "contentScript.executed") {
++        browser.test.notifyPass("contentScript.executed");
++      }
++    });
++  }
++
++  let extensionData = {
++    manifest: {
++      content_scripts: [
++        {
++          "matches": ["http://mochi.test/*/file_sample.html"],
++          "js": ["content_script.js"],
++          "run_at": "document_idle",
++        },
++      ],
++    },
++
++    background: "new " + backgroundScript,
++    files: {
++      "content_script.js": "new " + contentScript,
++    },
++  };
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++
++  yield extension.startup();
++
++  let win = window.open("file_sample.html");
++
++  var innerWindowID = SpecialPowers.wrap(win)
++                                   .QueryInterface(SpecialPowers.Ci.nsIInterfaceRequestor)
++                                   .getInterface(SpecialPowers.Ci.nsIDOMWindowUtils)
++                                   .currentInnerWindowID;
++
++  yield extension.awaitFinish("contentScript.executed");
++
++  const {ExtensionContent} = SpecialPowers.Cu.import(
++    "resource://gre/modules/ExtensionContent.jsm", {}
++  );
++
++  let res, metadata;
++
++  res = ExtensionContent.getContentScriptGlobalsForWindow(win);
++  is(res.length, 1, "Got the expected array of globals");
++  metadata = SpecialPowers.Cu.getSandboxMetadata(res[0]) || {};
++
++  is(metadata.addonId, extension.id, "Got the expected addonId");
++  is(metadata["inner-window-id"], innerWindowID, "Got the expected inner-window-id");
++
++  yield extension.unload();
++  info("extension unloaded");
++
++  res = ExtensionContent.getContentScriptGlobalsForWindow(win);
++  is(res.length, 0, "No content scripts globals found once the extension is unloaded");
++
++  win.close();
++});
++</script>
++
++</body>
++</html>

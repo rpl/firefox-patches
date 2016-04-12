@@ -1,0 +1,182 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1460468852 -7200
+#      Tue Apr 12 15:47:32 2016 +0200
+# Node ID fd18813258d8239f9d465ae05d060aa6f52c3e02
+# Parent  554502235b56cc143ac8a4159186b8fd9dbd01af
+Bug 1261857 - [webext] add Devtools Debugger test case on WebExtensions ContentScript sources. r?ochameau
+
+MozReview-Commit-ID: HAZy67Dwda0
+
+diff --git a/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_addon_webext_contentscript/manifest.json b/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_addon_webext_contentscript/manifest.json
+new file mode 100644
+--- /dev/null
++++ b/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_addon_webext_contentscript/manifest.json
+@@ -0,0 +1,18 @@
++{
++  "manifest_version": 2,
++  "name": "test content script sources",
++  "description": "test content script sources",
++  "version": "0.1.0",
++  "applications": {
++    "gecko": {
++      "id": "test-contentscript-sources@mozilla.com"
++    }
++  },
++  "content_scripts": [
++    {
++      "matches": ["<all_urls>"],
++      "js": ["webext-content-script.js"],
++      "run_at": "document_start"
++    }
++  ]
++}
+diff --git a/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_addon_webext_contentscript/webext-content-script.js b/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_addon_webext_contentscript/webext-content-script.js
+new file mode 100644
+--- /dev/null
++++ b/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_addon_webext_contentscript/webext-content-script.js
+@@ -0,0 +1,5 @@
++console.log("CONTENT SCRIPT LOGGED");
++
++chrome.runtime.onMessage.addListener((msg) => {
++  console.log("ON MESSAGE", msg);
++})
+diff --git a/devtools/client/debugger/test/mochitest/addon-webext-contentscript.xpi b/devtools/client/debugger/test/mochitest/addon-webext-contentscript.xpi
+new file mode 100644
+index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..484fdd73d8477155422d9d5ccf6b7c2bdefd8c6e
+GIT binary patch
+literal 661
+zc$^FHW@Zs#U|`^2@Z@RtSh=&(tPsen0b&UT8HV!Iq|}NM-Q@hdlGMBs-Qwh;%z_fV
+ztm4oRP6p<mb6CScxU_<sfsy3}GXn#d@IH55``mfYtEW%;Uk@ny_MN-%D|aAA8Q&)!
+zj=&Ee%gf74121iP_Q>m;#;NnZSGBdyYM*4e^s{o`%A-d+U#_g`)YP<_c~o^}<w{p6
+zshvk(&f?lu#&tD@i|gbGw%@-sf9zsox8Ai|>!n6RNM!NVtRhB+0Js+-YI{7EegC!p
+z2$0vr$iTo0^g?c8US?WqG04^Vd0=;k|K`Ew?$*AOd`$)dZSQSdFB=Pd$>{lL+oPB)
+zx%F1-7T4aE^74$xzPMXw_Mb7YJtlEI;fZMNiuf0MwzR#!VJ6SZES347(MN3!X9m;f
+zLno)%-L`C;cRZol)A#BBpQ1-r7X^oTwr&dzI<VvD<g1h2Uhy8itf$PmX{O}SBOV<|
+zPBL5ndM#Zb681Sl>V>RQlGc@#hCzOY8+EP=9Fbjo@cV+0yOvM+|I9hx=>F+m#liDM
+z4impkO<Cu8eWui*itJ?9<;rFa+^>C~=bWeu@MdI^W5yMq5)2>!3>StijUX28*ky&p
+nE?Nj7n~oXO$fh3#l4t?X3JG`&BU#x%+L(ZFBal7^($4?@DqHZo
+
+diff --git a/devtools/client/debugger/test/mochitest/browser.ini b/devtools/client/debugger/test/mochitest/browser.ini
+--- a/devtools/client/debugger/test/mochitest/browser.ini
++++ b/devtools/client/debugger/test/mochitest/browser.ini
+@@ -3,16 +3,17 @@ tags = devtools
+ subsuite = devtools
+ skip-if = (os == 'linux' && debug && bits == 32)
+ support-files =
+   addon1.xpi
+   addon2.xpi
+   addon3.xpi
+   addon4.xpi
+   addon5.xpi
++  addon-webext-contentscript.xpi
+   code_binary_search.coffee
+   code_binary_search.js
+   code_binary_search.map
+   code_blackboxing_blackboxme.js
+   code_blackboxing_one.js
+   code_blackboxing_three.js
+   code_blackboxing_two.js
+   code_blackboxing_unblackbox.min.js
+@@ -104,16 +105,17 @@ support-files =
+   doc_scope-variable.html
+   doc_scope-variable-2.html
+   doc_scope-variable-3.html
+   doc_scope-variable-4.html
+   doc_script-eval.html
+   doc_script-bookmarklet.html
+   doc_script-switching-01.html
+   doc_script-switching-02.html
++  doc_script_webext_contentscript.html
+   doc_split-console-paused-reload.html
+   doc_step-many-statements.html
+   doc_step-out.html
+   doc_terminate-on-tab-close.html
+   doc_watch-expressions.html
+   doc_watch-expression-button.html
+   doc_with-frame.html
+   doc_worker-source-map.html
+@@ -461,16 +463,18 @@ skip-if = true # non-named eval sources 
+ skip-if = e10s && debug
+ [browser_dbg_sources-labels.js]
+ skip-if = e10s && debug
+ [browser_dbg_sources-large.js]
+ [browser_dbg_sources-sorting.js]
+ skip-if = e10s && debug
+ [browser_dbg_sources-bookmarklet.js]
+ skip-if = e10s && debug
++[browser_dbg_sources-webext-contentscript.js]
++skip-if = e10s && debug # TODO: double-check if it is necessary
+ [browser_dbg_split-console-paused-reload.js]
+ skip-if = e10s && debug
+ [browser_dbg_stack-01.js]
+ skip-if = e10s && debug
+ [browser_dbg_stack-02.js]
+ skip-if = e10s && debug
+ [browser_dbg_stack-03.js]
+ skip-if = e10s # TODO
+diff --git a/devtools/client/debugger/test/mochitest/browser_dbg_sources-webext-contentscript.js b/devtools/client/debugger/test/mochitest/browser_dbg_sources-webext-contentscript.js
+new file mode 100644
+--- /dev/null
++++ b/devtools/client/debugger/test/mochitest/browser_dbg_sources-webext-contentscript.js
+@@ -0,0 +1,42 @@
++/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
++/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
++/* Any copyright is dedicated to the Public Domain.
++ * http://creativecommons.org/publicdomain/zero/1.0/ */
++
++/**
++ * Make sure eval scripts appear in the source list
++ */
++
++const TAB_URL = EXAMPLE_URL + "doc_script_webext_contentscript.html";
++
++function test() {
++  let gTab, gPanel, gDebugger;
++  let gSources;
++
++  addAddon(EXAMPLE_URL + "/addon-webext-contentscript.xpi").then(() => {
++    initDebugger(TAB_URL).then(([aTab,, aPanel]) => {
++      gTab = aTab;
++      gPanel = aPanel;
++      gDebugger = gPanel.panelWin;
++      gSources = gDebugger.DebuggerView.Sources;
++
++      return Task.spawn(function* () {
++        yield waitForDebuggerEvents(gPanel, gDebugger.EVENTS.SOURCE_SHOWN);
++
++        is(gSources.values.length, 1, "Should have 1 source");
++
++        let item = gSources.getItemForAttachment(attachment => {
++          return attachment.source.url.indexOf("moz-extension") == 0;
++        });
++
++        ok(item, "Got the expected WebExtensions ContentScript source");
++        ok(item.attachment.source.url.indexOf(item.attachment.group) >= 0,
++           "The source is in the expected source group");
++        is(item.attachment.label, "webext-content-script.js",
++           "Got the expected filename in the label");
++
++        yield closeDebuggerAndFinish(gPanel);
++      });
++    });
++  });
++}
+diff --git a/devtools/client/debugger/test/mochitest/doc_script_webext_contentscript.html b/devtools/client/debugger/test/mochitest/doc_script_webext_contentscript.html
+new file mode 100644
+--- /dev/null
++++ b/devtools/client/debugger/test/mochitest/doc_script_webext_contentscript.html
+@@ -0,0 +1,13 @@
++<!-- Any copyright is dedicated to the Public Domain.
++     http://creativecommons.org/publicdomain/zero/1.0/ -->
++<!doctype html>
++
++<html>
++  <head>
++    <meta charset="utf-8"/>
++    <title>Debugger test page</title>
++  </head>
++
++  <body>
++  </body>
++</html>
