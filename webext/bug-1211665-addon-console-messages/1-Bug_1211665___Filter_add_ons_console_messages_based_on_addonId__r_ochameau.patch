@@ -1,0 +1,298 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1459266039 -7200
+#      Tue Mar 29 17:40:39 2016 +0200
+# Node ID 178900fba535ec8165a12bd5fca1a71ecd9bf21d
+# Parent  039b504d1161b427ab475451bc805da8cd014b4c
+Bug 1211665 - Filter add-ons console messages based on addonId. r?ochameau
+
+MozReview-Commit-ID: 2yEWhX6shkx
+
+diff --git a/devtools/server/actors/addon.js b/devtools/server/actors/addon.js
+--- a/devtools/server/actors/addon.js
++++ b/devtools/server/actors/addon.js
+@@ -311,17 +311,17 @@ update(AddonConsoleActor.prototype, {
+     let startedListeners = [];
+ 
+     while (aRequest.listeners.length > 0) {
+       let listener = aRequest.listeners.shift();
+       switch (listener) {
+         case "ConsoleAPI":
+           if (!this.consoleAPIListener) {
+             this.consoleAPIListener =
+-              new ConsoleAPIListener(null, this, "addon/" + this.addon.id);
++              new ConsoleAPIListener(null, this, { addonId: this.addon.id });
+             this.consoleAPIListener.init();
+           }
+           startedListeners.push(listener);
+           break;
+       }
+     }
+     return {
+       startedListeners: startedListeners,
+diff --git a/devtools/shared/tests/unit/test_consoleID.js b/devtools/shared/tests/unit/test_console_filtering.js
+rename from devtools/shared/tests/unit/test_consoleID.js
+rename to devtools/shared/tests/unit/test_console_filtering.js
+--- a/devtools/shared/tests/unit/test_consoleID.js
++++ b/devtools/shared/tests/unit/test_console_filtering.js
+@@ -1,54 +1,73 @@
+ /* Any copyright is dedicated to the Public Domain.
+    http://creativecommons.org/publicdomain/zero/1.0/ */
+ 
+ const { console, ConsoleAPI } = Cu.import("resource://gre/modules/Console.jsm");
+ 
+ const { ConsoleAPIListener } = require("devtools/shared/webconsole/utils");
++const Services = require("Services");
+ 
+ var seenMessages = 0;
+ var seenTypes = 0;
+ 
+ var callback = {
+   onConsoleAPICall: function(aMessage) {
+-    switch (aMessage.consoleID) {
+-      case "foo":
+-        do_check_eq(aMessage.level, "warn");
+-        do_check_eq(aMessage.arguments[0], "Warning from foo");
+-        seenTypes |= 1;
+-        break;
+-      case "bar":
+-        do_check_eq(aMessage.level, "error");
+-        do_check_eq(aMessage.arguments[0], "Error from bar");
+-        seenTypes |= 2;
+-        break;
+-      default:
+-        do_check_eq(aMessage.level, "log");
+-        do_check_eq(aMessage.arguments[0], "Hello from default console");
+-        seenTypes |= 4;
+-        break;
++    if (aMessage.consoleID && aMessage.consoleID == "addon/foo") {
++      do_check_eq(aMessage.level, "warn");
++      do_check_eq(aMessage.arguments[0], "Warning from foo");
++      seenTypes |= 1;
++    } else if(aMessage.originAttributes &&
++              aMessage.originAttributes.addonId == "bar") {
++      do_check_eq(aMessage.level, "error");
++      do_check_eq(aMessage.arguments[0], "Error from bar");
++      seenTypes |= 2;
++    } else {
++      do_check_eq(aMessage.level, "log");
++      do_check_eq(aMessage.arguments[0], "Hello from default console");
++      seenTypes |= 4;
+     }
+     seenMessages++;
+   }
+ };
+ 
++function createFakeAddonWindow({addonId} = {}) {
++  let baseURI = Services.io.newURI("about:blank", null, null);
++  let originAttributes = {addonId};
++  let principal = Services.scriptSecurityManager
++        .createCodebasePrincipal(baseURI, originAttributes);
++  let chromeWebNav = Services.appShell.createWindowlessBrowser(true);
++  let docShell = chromeWebNav.QueryInterface(Ci.nsIInterfaceRequestor)
++                             .getInterface(Ci.nsIDocShell);
++  docShell.createAboutBlankContentViewer(principal);
++  let addonWindow = docShell.contentViewer.DOMDocument.defaultView;
++
++  return {addonWindow, chromeWebNav};
++}
++
+ /**
+  * Tests that the consoleID property of the ConsoleAPI options gets passed
+  * through to console messages.
+  */
+ function run_test() {
++  // console1 Test Console.jsm messages tagged by the Addon SDK
++  // are still filtered correctly.
+   let console1 = new ConsoleAPI({
+-    consoleID: "foo"
+-  });
+-  let console2 = new ConsoleAPI({
+-    consoleID: "bar"
++    consoleID: "addon/foo"
+   });
+ 
++  // console2 - WebExtension page's console messages tagged
++  // by 'originAttributes.addonId' are filtered correctly.
++  let {addonWindow, chromeWebNav} = createFakeAddonWindow({addonId: "bar"});
++  let console2 = addonWindow.console;
++
++  // console - Plain console object (messages are tagged with window ids
++  // and originAttributes, but the addonId will be empty).
+   console.log("Hello from default console");
++
+   console1.warn("Warning from foo");
+   console2.error("Error from bar");
+ 
+   let listener = new ConsoleAPIListener(null, callback);
+   listener.init();
+   let messages = listener.getCachedMessages();
+ 
+   seenTypes = 0;
+@@ -62,26 +81,52 @@ function run_test() {
+   console.log("Hello from default console");
+   console1.warn("Warning from foo");
+   console2.error("Error from bar");
+   do_check_eq(seenMessages, 3);
+   do_check_eq(seenTypes, 7);
+ 
+   listener.destroy();
+ 
+-  listener = new ConsoleAPIListener(null, callback, "foo");
++  listener = new ConsoleAPIListener(null, callback, {addonId: "foo"});
+   listener.init();
+   messages = listener.getCachedMessages();
+ 
+   seenTypes = 0;
+   seenMessages = 0;
+   messages.forEach(callback.onConsoleAPICall);
+   do_check_eq(seenMessages, 2);
+   do_check_eq(seenTypes, 1);
+ 
+   seenTypes = 0;
+   seenMessages = 0;
+   console.log("Hello from default console");
+   console1.warn("Warning from foo");
+   console2.error("Error from bar");
+   do_check_eq(seenMessages, 1);
+   do_check_eq(seenTypes, 1);
++
++  listener.destroy();
++
++  listener = new ConsoleAPIListener(null, callback, {addonId: "bar"});
++  listener.init();
++  messages = listener.getCachedMessages();
++
++  seenTypes = 0;
++  seenMessages = 0;
++  messages.forEach(callback.onConsoleAPICall);
++  do_check_eq(seenMessages, 3);
++  do_check_eq(seenTypes, 2);
++
++  seenTypes = 0;
++  seenMessages = 0;
++  console.log("Hello from default console");
++  console1.warn("Warning from foo");
++  console2.error("Error from bar");
++
++  do_check_eq(seenMessages, 1);
++  do_check_eq(seenTypes, 2);
++
++  listener.destroy();
++
++  // Close the addon window's chromeWebNav.
++  chromeWebNav.close();
+ }
+diff --git a/devtools/shared/tests/unit/xpcshell.ini b/devtools/shared/tests/unit/xpcshell.ini
+--- a/devtools/shared/tests/unit/xpcshell.ini
++++ b/devtools/shared/tests/unit/xpcshell.ini
+@@ -15,16 +15,16 @@ support-files =
+ [test_flatten.js]
+ [test_indentation.js]
+ [test_independent_loaders.js]
+ [test_invisible_loader.js]
+ [test_isSet.js]
+ [test_safeErrorString.js]
+ [test_defineLazyPrototypeGetter.js]
+ [test_async-utils.js]
+-[test_consoleID.js]
++[test_console_filtering.js]
+ [test_cssAngle.js]
+ [test_cssColor.js]
+ [test_prettifyCSS.js]
+ [test_require_lazy.js]
+ [test_require.js]
+ [test_stack.js]
+ [test_executeSoon.js]
+diff --git a/devtools/shared/webconsole/utils.js b/devtools/shared/webconsole/utils.js
+--- a/devtools/shared/webconsole/utils.js
++++ b/devtools/shared/webconsole/utils.js
+@@ -789,23 +789,24 @@ ConsoleServiceListener.prototype =
+  * @param nsIDOMWindow window
+  *        Optional - the window object for which we are created. This is used
+  *        for filtering out messages that belong to other windows.
+  * @param object owner
+  *        The owner object must have the following methods:
+  *        - onConsoleAPICall(). This method is invoked with one argument, the
+  *        Console API message that comes from the observer service, whenever
+  *        a relevant console API call is received.
+- * @param string consoleID
+- *        Options - The consoleID that this listener should listen to
++ * @param object filteringOptions
++ *        Optional - The filteringOptions that this listener should listen to:
++ *        - addonId: filter console messages based on the addonId.
+  */
+-function ConsoleAPIListener(window, owner, consoleID) {
++function ConsoleAPIListener(window, owner, {addonId} = {}) {
+   this.window = window;
+   this.owner = owner;
+-  this.consoleID = consoleID;
++  this.addonId = addonId;
+ }
+ exports.ConsoleAPIListener = ConsoleAPIListener;
+ 
+ ConsoleAPIListener.prototype =
+ {
+   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
+ 
+   /**
+@@ -820,20 +821,20 @@ ConsoleAPIListener.prototype =
+    * console API call object that comes from the observer service.
+    *
+    * @type object
+    * @see WebConsoleActor
+    */
+   owner: null,
+ 
+   /**
+-   * The consoleID that we listen for. If not null then only messages from this
++   * The addonId that we listen for. If not null then only messages from this
+    * console will be returned.
+    */
+-  consoleID: null,
++  addonId: null,
+ 
+   /**
+    * Initialize the window.console API observer.
+    */
+   init: function() {
+     // Note that the observer is process-wide. We will filter the messages as
+     // needed, see CAL_observe().
+     Services.obs.addObserver(this, "console-api-log-event", false);
+@@ -891,17 +892,35 @@ ConsoleAPIListener.prototype =
+     if (this.window && !workerType) {
+       let msgWindow = Services.wm.getCurrentInnerWindowWithId(message.innerID);
+       if (!msgWindow || !isWindowIncluded(this.window, msgWindow)) {
+         // Not the same window!
+         return false;
+       }
+     }
+ 
+-    if (this.consoleID && message.consoleID !== this.consoleID) {
++    if (this.addonId) {
++      // ConsoleAPI.jsm messages contains a consoleID, (and it is currently
++      // used in Addon SDK add-ons), the standard 'console' object
++      // (which is used in regular webpages and in WebExtensions pages)
++      // contains the originAttributes of the source document principal.
++
++      // Filtering based on the originAttributes used by
++      // the Console API object.
++      if (message.originAttributes &&
++          message.originAttributes.addonId == this.addonId) {
++        return true;
++      }
++
++      // Filtering based on the old-style consoleID property used by
++      // the legacy Console JSM module.
++      if (message.consoleID && message.consoleID == `addon/${this.addonId}`) {
++        return true;
++      }
++
+       return false;
+     }
+ 
+     return true;
+   },
+ 
+   /**
+    * Get the cached messages for the current inner window and its (i)frames.
