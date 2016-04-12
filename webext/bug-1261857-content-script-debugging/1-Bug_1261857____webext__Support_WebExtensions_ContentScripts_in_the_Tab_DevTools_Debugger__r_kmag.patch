@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1460248170 -7200
-#      Sun Apr 10 02:29:30 2016 +0200
-# Node ID 0db7eb41552913acbe13dd640482c5c466a9977d
+# Date 1460472007 -7200
+#      Tue Apr 12 16:40:07 2016 +0200
+# Node ID c495f36eb8a623fbf1a4b58c4733e7a1098ef3ac
 # Parent  039b504d1161b427ab475451bc805da8cd014b4c
 Bug 1261857 - [webext] Support WebExtensions ContentScripts in the Tab DevTools Debugger. r?kmag
 
@@ -199,7 +199,7 @@ diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolki
 +[test_ext_contentscript_api_injection.html]
  [test_ext_contentscript_create_iframe.html]
 -[test_ext_contentscript_api_injection.html]
-+[test_ext_contentScript_devtools_metadata.html]
++[test_ext_contentscript_devtools_metadata.html]
  [test_ext_downloads.html]
  [test_ext_exclude_include_globs.html]
  [test_ext_i18n_css.html]
@@ -208,10 +208,10 @@ diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolki
  [test_ext_localStorage.html]
  [test_ext_onmessage_removelistener.html]
  [test_ext_notifications.html]
-diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentScript_devtools_metadata.html b/toolkit/components/extensions/test/mochitest/test_ext_contentScript_devtools_metadata.html
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript_devtools_metadata.html b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_devtools_metadata.html
 new file mode 100644
 --- /dev/null
-+++ b/toolkit/components/extensions/test/mochitest/test_ext_contentScript_devtools_metadata.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_devtools_metadata.html
 @@ -0,0 +1,83 @@
 +<!DOCTYPE HTML>
 +<html>

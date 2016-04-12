@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1460468852 -7200
 #      Tue Apr 12 15:47:32 2016 +0200
-# Node ID fd18813258d8239f9d465ae05d060aa6f52c3e02
-# Parent  554502235b56cc143ac8a4159186b8fd9dbd01af
+# Node ID 7674325a11dbae0a9efa07d01dac150c5800fb0f
+# Parent  20ebacc1d7130936628a011b8d532b3770ad5594
 Bug 1261857 - [webext] add Devtools Debugger test case on WebExtensions ContentScript sources. r?ochameau
 
 MozReview-Commit-ID: HAZy67Dwda0
@@ -35,12 +35,8 @@ diff --git a/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_ad
 new file mode 100644
 --- /dev/null
 +++ b/devtools/client/debugger/test/mochitest/addon-source/browser_dbg_addon_webext_contentscript/webext-content-script.js
-@@ -0,0 +1,5 @@
-+console.log("CONTENT SCRIPT LOGGED");
-+
-+chrome.runtime.onMessage.addListener((msg) => {
-+  console.log("ON MESSAGE", msg);
-+})
+@@ -0,0 +1,1 @@
++console.log("CONTENT SCRIPT LOADED");
 diff --git a/devtools/client/debugger/test/mochitest/addon-webext-contentscript.xpi b/devtools/client/debugger/test/mochitest/addon-webext-contentscript.xpi
 new file mode 100644
 index e69de29bb2d1d6434b8b29ae775ad8c2e48c5391..484fdd73d8477155422d9d5ccf6b7c2bdefd8c6e
