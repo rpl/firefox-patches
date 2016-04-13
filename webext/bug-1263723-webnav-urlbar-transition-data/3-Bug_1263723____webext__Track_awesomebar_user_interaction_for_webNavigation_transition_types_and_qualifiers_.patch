@@ -2,8 +2,8 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1460405141 -7200
 #      Mon Apr 11 22:05:41 2016 +0200
-# Node ID 75b94b0c5938ba3c18a37766a31678a54d30b442
-# Parent  e20a1e0f054b8b7e45168545c8f9d169047f8a7c
+# Node ID 382fed461a6982e81e5f4623ae7404274fb5ab2d
+# Parent  e8f8aaee216d4d3ab2ae567ec992260ff46a5dcf
 Bug 1263723 - [webext] Track awesomebar user interaction for webNavigation transition types and qualifiers.
 
 - listen for the "autocomplete-did-enter-text" topic notified on the observer service
@@ -14,39 +14,43 @@ MozReview-Commit-ID: 7krQiJlnc1d
 diff --git a/browser/components/extensions/test/browser/browser.ini b/browser/components/extensions/test/browser/browser.ini
 --- a/browser/components/extensions/test/browser/browser.ini
 +++ b/browser/components/extensions/test/browser/browser.ini
-@@ -6,16 +6,18 @@ support-files =
-   context_tabs_onUpdated_page.html
+@@ -7,16 +7,18 @@ support-files =
    context_tabs_onUpdated_iframe.html
    file_popup_api_injection_a.html
    file_popup_api_injection_b.html
    file_iframe_document.html
    file_iframe_document.sjs
+   file_bypass_cache.sjs
    file_language_fr_en.html
    file_language_ja.html
 +  searchSuggestionEngine.xml
 +  searchSuggestionEngine.sjs
  
- [browser_ext_simple.js]
- [browser_ext_currentWindow.js]
- [browser_ext_browserAction_simple.js]
- [browser_ext_browserAction_pageAction_icon.js]
  [browser_ext_browserAction_context.js]
  [browser_ext_browserAction_disabled.js]
- [browser_ext_pageAction_simple.js]
-@@ -63,9 +65,10 @@ tags = fullscreen
+ [browser_ext_browserAction_pageAction_icon.js]
+ [browser_ext_browserAction_popup.js]
+ [browser_ext_browserAction_simple.js]
+ [browser_ext_commands_execute_page_action.js]
+ [browser_ext_commands_getAll.js]
+@@ -57,16 +59,17 @@ support-files =
+ [browser_ext_tabs_query.js]
+ [browser_ext_tabs_reload.js]
+ [browser_ext_tabs_reload_bypass_cache.js]
+ [browser_ext_tabs_sendMessage.js]
+ [browser_ext_tabs_update.js]
+ [browser_ext_tabs_update_url.js]
+ [browser_ext_topwindowid.js]
+ [browser_ext_webNavigation_getFrames.js]
++[browser_ext_webNavigation_urlbar_transitions.js]
+ [browser_ext_windows.js]
+ [browser_ext_windows_create.js]
+ tags = fullscreen
+ [browser_ext_windows_create_tabId.js]
+ [browser_ext_windows_events.js]
  [browser_ext_windows_size.js]
  skip-if = os == 'mac' # Fails when windows are randomly opened in fullscreen mode
  [browser_ext_windows_update.js]
- tags = fullscreen
- [browser_ext_contentscript_connect.js]
- [browser_ext_tab_runtimeConnect.js]
- [browser_ext_topwindowid.js]
- [browser_ext_webNavigation_getFrames.js]
--[browser_ext_optionsPage_privileges.js]
-\ No newline at end of file
-+[browser_ext_optionsPage_privileges.js]
-+[browser_ext_webNavigation_urlbar_transitions.js]
-\ No newline at end of file
 diff --git a/browser/components/extensions/test/browser/browser_ext_webNavigation_urlbar_transitions.js b/browser/components/extensions/test/browser/browser_ext_webNavigation_urlbar_transitions.js
 new file mode 100644
 --- /dev/null
@@ -399,6 +403,83 @@ new file mode 100644
 +<Url type="application/x-suggestions+json" method="GET" template="http://mochi.test:8888/browser/browser/components/extensions/test/browser/searchSuggestionEngine.sjs?{searchTerms}"/>
 +<Url type="text/html" method="GET" template="http://mochi.test:8888/" rel="searchform"/>
 +</SearchPlugin>
+diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
+--- a/toolkit/components/extensions/ext-webNavigation.js
++++ b/toolkit/components/extensions/ext-webNavigation.js
+@@ -27,23 +27,34 @@ const frameTransitions = {
+   anyFrame: {
+     qualifiers: ["server_redirect", "client_redirect", "forward_back"],
+   },
+   topFrame: {
+     types: ["reload", "form_submit"],
+   },
+ };
+ 
++const tabTransitions = {
++  topFrame: {
++    qualifiers: ["from_address_bar"],
++    types: ["auto_bookmark", "typed", "keyword", "generated", "link"],
++  },
++  subFrame: {
++    types: ["auto_subframe", "manual_subframe"],
++  },
++};
++
+ function isTopLevelFrame({frameId, parentFrameId}) {
+   return frameId == 0 && parentFrameId == -1;
+ }
+ 
+ function fillTransitionProperties(eventName, src, dst) {
+   if (eventName == "onCommitted" || eventName == "onHistoryStateUpdated") {
+     let frameTransitionData = src.frameTransitionData || {};
++    let tabTransitionData = src.tabTransitionData || {};
+ 
+     let transitionType, transitionQualifiers = [];
+ 
+     // Fill transition properties for any frame.
+     for (let qualifier of frameTransitions.anyFrame.qualifiers) {
+       if (frameTransitionData[qualifier]) {
+         transitionQualifiers.push(qualifier);
+       }
+@@ -51,24 +62,37 @@ function fillTransitionProperties(eventN
+ 
+     if (isTopLevelFrame(dst)) {
+       for (let type of frameTransitions.topFrame.types) {
+         if (frameTransitionData[type]) {
+           transitionType = type;
+         }
+       }
+ 
++      for (let qualifier of tabTransitions.topFrame.qualifiers) {
++        if (tabTransitionData[qualifier]) {
++          transitionQualifiers.push(qualifier);
++        }
++      }
++
++      for (let type of tabTransitions.topFrame.types) {
++        if (tabTransitionData[type]) {
++          transitionType = type;
++        }
++      }
++
+       // If transitionType is not defined, defaults it to "link".
+       if (!transitionType) {
+         transitionType = defaultTransitionTypes.topFrame;
+       }
+     } else {
+       // If it is sub-frame, transitionType defaults it to "auto_subframe",
+       // "manual_subframe" is set only in case of a recent user interaction.
+-      transitionType = defaultTransitionTypes.subFrame;
++      transitionType = tabTransitionData.link ?
++        "manual_subframe" : defaultTransitionTypes.subFrame;
+     }
+ 
+     // Fill the transition properties in the webNavigation event object.
+     dst.transitionType = transitionType;
+     dst.transitionQualifiers = transitionQualifiers;
+   }
+ }
+ 
 diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
 --- a/toolkit/modules/addons/WebNavigation.jsm
 +++ b/toolkit/modules/addons/WebNavigation.jsm
@@ -444,31 +525,33 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
    },
  
    addListener(type, listener) {
-@@ -99,27 +113,26 @@ var Manager = {
+@@ -95,24 +109,30 @@ var Manager = {
+   },
+ 
+   onLocationChange(browser, data) {
+     let url = data.location;
  
      // Transition data which is coming from the content process.
      let {frameTransitionData} = data;
  
-     // Transition data which is tracked in the main process
-     // (related to UI user interaction tracking, e.g. user
-     // interacting with the urlbar or user which is explicitly
-     // clicking on a bookmark or a link).
--    // TODO: in this phase this is just a placeholder for the real feature.
--    let tabTransitionData = {};
++    // Transition data which is tracked in the main process
++    // (related to UI user interaction tracking, e.g. user
++    // interacting with the urlbar or user which is explicitly
++    // clicking on a bookmark or a link).
 +    let tabTransitionData = this.popRecentTabTransitionData(browser);
 +
 +    let extra = {url, frameTransitionData, tabTransitionData};
- 
++
      if (data.isReferenceFragmentUpdated) {
 -      this.fire("onReferenceFragmentUpdated", browser, data, {url});
 +      this.fire("onReferenceFragmentUpdated", browser, data, extra);
      } else if (data.isHistoryStateUpdated) {
 -      this.fire("onHistoryStateUpdated", browser, data,
--                {url, frameTransitionData, tabTransitionData});
+-                {url, frameTransitionData});
 +      this.fire("onHistoryStateUpdated", browser, data, extra);
      } else {
 -      this.fire("onCommitted", browser, data,
--                {url, frameTransitionData, tabTransitionData});
+-                {url, frameTransitionData});
 +      this.fire("onCommitted", browser, data, extra);
      }
    },
@@ -478,7 +561,7 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
    },
  
    fire(type, browser, data, extra) {
-@@ -140,16 +153,107 @@ var Manager = {
+@@ -133,16 +153,107 @@ var Manager = {
      for (let prop in extra) {
        details[prop] = extra[prop];
      }
