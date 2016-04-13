@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1460068000 -7200
-#      Fri Apr 08 00:26:40 2016 +0200
-# Node ID d7c7e32b31182719a6df0d81f792d1e88308dff4
-# Parent  039b504d1161b427ab475451bc805da8cd014b4c
+# Date 1460563829 -7200
+#      Wed Apr 13 18:10:29 2016 +0200
+# Node ID 1d288bfce5c2b140d3fee4c997025ffb3492924e
+# Parent  d5ee38a7a2f7d2237e994a556462444c99590fcf
 Bug 1256652 - [webext] Initial support of webNavigation transition types and qualifiers.
 
 - transition types: reload, link, auto_subframe
@@ -14,7 +14,7 @@ MozReview-Commit-ID: Bx3oG2fuWuv
 diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/components/extensions/ext-webNavigation.js
 --- a/toolkit/components/extensions/ext-webNavigation.js
 +++ b/toolkit/components/extensions/ext-webNavigation.js
-@@ -13,16 +13,94 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+@@ -13,16 +13,70 @@ XPCOMUtils.defineLazyModuleGetter(this, 
  
  Cu.import("resource://gre/modules/ExtensionUtils.jsm");
  var {
@@ -37,16 +37,6 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
 +  },
 +};
 +
-+const tabTransitions = {
-+  topFrame: {
-+    qualifiers: ["from_address_bar"],
-+    types: ["auto_bookmark", "typed", "keyword", "generated", "link"],
-+  },
-+  subFrame: {
-+    types: ["auto_subframe", "manual_subframe"],
-+  },
-+};
-+
 +function isTopLevelFrame({frameId, parentFrameId}) {
 +  return frameId == 0 && parentFrameId == -1;
 +}
@@ -54,7 +44,6 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
 +function fillTransitionProperties(eventName, src, dst) {
 +  if (eventName == "onCommitted" || eventName == "onHistoryStateUpdated") {
 +    let frameTransitionData = src.frameTransitionData || {};
-+    let tabTransitionData = src.tabTransitionData || {};
 +
 +    let transitionType, transitionQualifiers = [];
 +
@@ -72,27 +61,14 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
 +        }
 +      }
 +
-+      for (let qualifier of tabTransitions.topFrame.qualifiers) {
-+        if (tabTransitionData[qualifier]) {
-+          transitionQualifiers.push(qualifier);
-+        }
-+      }
-+
-+      for (let type of tabTransitions.topFrame.types) {
-+        if (tabTransitionData[type]) {
-+          transitionType = type;
-+        }
-+      }
-+
 +      // If transitionType is not defined, defaults it to "link".
 +      if (!transitionType) {
 +        transitionType = defaultTransitionTypes.topFrame;
 +      }
 +    } else {
-+      // If sub-frame transitionType defaults it to "auto_subframe",
++      // If it is sub-frame, transitionType defaults it to "auto_subframe",
 +      // "manual_subframe" is set only in case of a recent user interaction.
-+      transitionType = tabTransitionData.link ?
-+        "manual_subframe" : defaultTransitionTypes.subFrame;
++      transitionType = defaultTransitionTypes.subFrame;
 +    }
 +
 +    // Fill the transition properties in the webNavigation event object.
@@ -109,7 +85,7 @@ diff --git a/toolkit/components/extensions/ext-webNavigation.js b/toolkit/compon
        if (!data.browser) {
          return;
        }
-@@ -41,16 +119,18 @@ function WebNavigationEventManager(conte
+@@ -41,16 +95,18 @@ function WebNavigationEventManager(conte
  
        // Fills in tabId typically.
        let result = {};
@@ -306,7 +282,7 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
      Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
      Services.mm.addMessageListener("Extension:StateChange", this);
      Services.mm.addMessageListener("Extension:LocationChange", this);
-@@ -95,22 +92,34 @@ var Manager = {
+@@ -95,22 +92,27 @@ var Manager = {
          }
        }
      }
@@ -318,23 +294,16 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
 +    // Transition data which is coming from the content process.
 +    let {frameTransitionData} = data;
 +
-+    // Transition data which is tracked in the main process
-+    // (related to UI user interaction tracking, e.g. user
-+    // interacting with the urlbar or user which is explicitly
-+    // clicking on a bookmark or a link).
-+    // TODO: in this phase this is just a placeholder for the real feature.
-+    let tabTransitionData = {};
-+
      if (data.isReferenceFragmentUpdated) {
        this.fire("onReferenceFragmentUpdated", browser, data, {url});
      } else if (data.isHistoryStateUpdated) {
 -      this.fire("onHistoryStateUpdated", browser, data, {url});
 +      this.fire("onHistoryStateUpdated", browser, data,
-+                {url, frameTransitionData, tabTransitionData});
++                {url, frameTransitionData});
      } else {
 -      this.fire("onCommitted", browser, data, {url});
 +      this.fire("onCommitted", browser, data,
-+                {url, frameTransitionData, tabTransitionData});
++                {url, frameTransitionData});
      }
    },
  
