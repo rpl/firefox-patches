@@ -1,0 +1,175 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1460651165 -7200
+#      Thu Apr 14 18:26:05 2016 +0200
+# Node ID c05e4e6f4c1998ff94c85fa79e8716fdc3ca9089
+# Parent  56c19123522c148b3e1dca53e24b9f6c72ff13a7
+Bug 1256652 - [webext] Add webNavigation client_redirect transitions implementation and test case. r?krizsa
+
+MozReview-Commit-ID: DoDzXCuk4FQ
+
+diff --git a/toolkit/components/extensions/test/mochitest/file_webNavigation_clientRedirect.html b/toolkit/components/extensions/test/mochitest/file_webNavigation_clientRedirect.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_webNavigation_clientRedirect.html
+@@ -0,0 +1,9 @@
++<!DOCTYPE HTML>
++
++<html>
++  <head>
++    <meta http-equiv="refresh" content="1;dummy_page.html">
++  </head>
++  <body>
++  </body>
++</html>
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -1,15 +1,16 @@
+ [DEFAULT]
+ skip-if = buildapp == 'mulet' || asan
+ support-files =
+   head.js
+   file_WebRequest_page1.html
+   file_WebRequest_page2.html
+   file_WebRequest_page3.html
++  file_webNavigation_clientRedirect.html
+   file_WebNavigation_page1.html
+   file_WebNavigation_page2.html
+   file_WebNavigation_page3.html
+   file_image_good.png
+   file_image_bad.png
+   file_image_redirect.png
+   file_style_good.css
+   file_style_bad.css
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+@@ -67,16 +67,17 @@ function backgroundScript() {
+ 
+ const BASE = "http://mochi.test:8888/tests/toolkit/components/extensions/test/mochitest";
+ const URL = BASE + "/file_WebNavigation_page1.html";
+ const FRAME = BASE + "/file_WebNavigation_page2.html";
+ const FRAME2 = BASE + "/file_WebNavigation_page3.html";
+ const FRAME_PUSHSTATE = BASE + "/file_WebNavigation_page3_pushState.html";
+ const REDIRECT = BASE + "/redirection.sjs";
+ const REDIRECTED = BASE + "/dummy_page.html";
++const CLIENT_REDIRECT = BASE + "/file_webNavigation_clientRedirect.html";
+ 
+ const REQUIRED = [
+   "onBeforeNavigate",
+   "onCommitted",
+   "onDOMContentLoaded",
+   "onCompleted",
+ ];
+ 
+@@ -212,16 +213,34 @@ add_task(function* webnav_transitions_pr
+   if (found) {
+     is(found.details.transitionType, "link",
+        "Got the expected 'link' transitionType in the OnCommitted event");
+     ok(Array.isArray(found.details.transitionQualifiers) &&
+        found.details.transitionQualifiers.find((q) => q == "forward_back"),
+        "Got the expected 'forward_back' transitionQualifiers in the OnCommitted events");
+   }
+ 
++  // transitionQualifier: client_redirect
++  received = [];
++  yield loadAndWait(win, "onCompleted", REDIRECTED, () => {
++    win.location = CLIENT_REDIRECT;
++  });
++
++  found = received.find((data) => (data.event == "onCommitted" && data.url == REDIRECTED));
++
++  ok(found, "Got the onCommitted event");
++
++  if (found) {
++    is(found.details.transitionType, "link",
++       "Got the expected 'link' transitionType in the OnCommitted event");
++    ok(Array.isArray(found.details.transitionQualifiers) &&
++       found.details.transitionQualifiers.find((q) => q == "client_redirect"),
++       "Got the expected 'client_redirect' transitionQualifiers in the OnCommitted events");
++  }
++
+   // cleanup phase
+   win.close();
+ 
+   yield extension.unload();
+   info("webnavigation extension unloaded");
+ });
+ 
+ add_task(function* webnav_ordering() {
+diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
+--- a/toolkit/modules/addons/WebNavigationContent.js
++++ b/toolkit/modules/addons/WebNavigationContent.js
+@@ -62,31 +62,40 @@ var WebProgressListener = {
+     for (let currentDocShell of WebNavigationFrames.iterateDocShellTree(docShell)) {
+       let win = currentDocShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                                .getInterface(Ci.nsIDOMWindow);
+       let {currentURI} = currentDocShell.QueryInterface(Ci.nsIWebNavigation);
+ 
+       this.previousURIMap.set(win, currentURI);
+     }
+ 
++    // This WeakSet of DOMWindows keeps track of the attempted refresh.
++    this.refreshAttemptedDOMWindows = new WeakSet();
++
+     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIWebProgress);
+     webProgress.addProgressListener(this, Ci.nsIWebProgress.NOTIFY_STATE_WINDOW |
++                                          Ci.nsIWebProgress.NOTIFY_REFRESH |
+                                           Ci.nsIWebProgress.NOTIFY_LOCATION);
+   },
+ 
+   uninit() {
+     if (!docShell) {
+       return;
+     }
+     let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                               .getInterface(Ci.nsIWebProgress);
+     webProgress.removeProgressListener(this);
+   },
+ 
++  onRefreshAttempted: function onRefreshAttempted(webProgress, URI, delay, sameURI) {
++    this.refreshAttemptedDOMWindows.add(webProgress.DOMWindow);
++    return true;
++  },
++
+   onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
+     let {originalURI, URI: locationURI} = request.QueryInterface(Ci.nsIChannel);
+ 
+     // Prevents "about", "chrome", "resource" and "moz-extension" URI schemes to be
+     // reported with the resolved "file" or "jar" URIs. (see Bug 1246125 for rationale)
+     if (locationURI.schemeIs("file") || locationURI.schemeIs("jar")) {
+       let shouldUseOriginalURI = originalURI.schemeIs("about") ||
+                                  originalURI.schemeIs("chrome") ||
+@@ -220,21 +229,29 @@ var WebProgressListener = {
+         frameTransitionData.server_redirect = true;
+       }
+     }
+ 
+     if (FormSubmitListener.hasAndForget(DOMWindow)) {
+       frameTransitionData.form_submit = true;
+     }
+ 
++    if (this.refreshAttemptedDOMWindows.has(DOMWindow)) {
++      this.refreshAttemptedDOMWindows.delete(DOMWindow);
++      frameTransitionData.client_redirect = true;
++    }
+ 
+     return frameTransitionData;
+   },
+ 
+-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
++  QueryInterface: XPCOMUtils.generateQI([
++    Ci.nsIWebProgressListener,
++    Ci.nsIWebProgressListener2,
++    Ci.nsISupportsWeakReference,
++  ]),
+ };
+ 
+ var disabled = false;
+ WebProgressListener.init();
+ FormSubmitListener.init();
+ addEventListener("unload", () => {
+   if (!disabled) {
+     disabled = true;

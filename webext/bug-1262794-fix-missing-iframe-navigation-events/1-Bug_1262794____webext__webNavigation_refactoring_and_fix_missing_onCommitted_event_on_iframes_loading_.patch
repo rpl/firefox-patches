@@ -2,9 +2,9 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459990826 -7200
 #      Thu Apr 07 03:00:26 2016 +0200
-# Node ID e8223b0ff425e7d702cffb1bd3b162623672acf1
+# Node ID 56a01d0456318613198ddcfc323ac7a3e256fbe1
 # Parent  30010c0e58af2b863b6f56bb9d1e519128832eb5
-Bug 1262794 - [webext] webNavigation refactoring and fix missing onCommitted event on iframes loading.
+Bug 1262794 - [webext] webNavigation refactoring and fix missing onCommitted event on iframes loading. r=krizsa
 
 MozReview-Commit-ID: JSZFCWr2WNk
 
@@ -140,7 +140,7 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -49,78 +49,111 @@ var WebProgressListener = {
+@@ -49,78 +49,117 @@ var WebProgressListener = {
        return;
      }
      let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -169,15 +169,17 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
 -        // it here.
 -        this.onLocationChange(webProgress, request, request.QueryInterface(Ci.nsIChannel).URI, 0);
 -      }
-+    if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT) {
-+      // Based on the docs of the webNavigation.onCommitted event, it should be raised when:
-+      // "The document  might still be downloading, but at least part of
-+      // the document has been received"
-+      // and for some reason we don't fire onLocationChange for the
-+      // initial navigation of a sub-frame.
-+      // For the above two reasons, we process the document change here and
-+      // then send an "Extension:DocumentChange" message to the main process,
-+      // where it will be turned into a webNavigation.onCommitted event.
++    // Based on the docs of the webNavigation.onCommitted event, it should be raised when:
++    // "The document  might still be downloading, but at least part of
++    // the document has been received"
++    // and for some reason we don't fire onLocationChange for the
++    // initial navigation of a sub-frame.
++    // For the above two reasons, when the navigation event is related to
++    // a sub-frame we process the document change here and
++    // then send an "Extension:DocumentChange" message to the main process,
++    // where it will be turned into a webNavigation.onCommitted event.
++    if ((webProgress.DOMWindow.top != webProgress.DOMWindow) &&
++        (stateFlags & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT)) {
 +      this.sendDocumentChange({webProgress, locationURI});
      }
    },
@@ -206,6 +208,10 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
 -      let pathChanged = !(previousURI && locationURI.equalsExceptRef(previousURI));
 -      let hashChanged = !(previousURI && previousURI.ref == locationURI.ref);
 +      this.sendHistoryChange({webProgress, previousURI, locationURI});
++    } else if (webProgress.DOMWindow.top == webProgress.DOMWindow) {
++      // Unfortunately to detect server redirection, we have to catch the
++      // document changes from top level frames here.
++      this.sendDocumentChange({webProgress, locationURI, request});
 +    }
 +  },
  

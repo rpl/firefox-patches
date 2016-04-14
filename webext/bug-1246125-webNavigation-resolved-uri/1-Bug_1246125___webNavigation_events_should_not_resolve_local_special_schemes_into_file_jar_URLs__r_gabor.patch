@@ -2,9 +2,9 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459980263 -7200
 #      Thu Apr 07 00:04:23 2016 +0200
-# Node ID d5c4709f5beb4122a87fa97078d33a58f869ef2f
-# Parent  e8223b0ff425e7d702cffb1bd3b162623672acf1
-Bug 1246125 - webNavigation events should not resolve local special schemes into file/jar URLs. r=krizsa
+# Node ID 15f863bc40efe4601b1348639edcdc050ddef3aa
+# Parent  56a01d0456318613198ddcfc323ac7a3e256fbe1
+Bug 1246125 - [webext] webNavigation events should not resolve local special schemes into file/jar URLs. r=krizsa
 
 - chrome, resource, about and moz-extension URLs should not be reported with their resolved
   file or jar URLs
@@ -142,8 +142,8 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
  
      this.sendStateChange({webProgress, locationURI, stateFlags, status});
  
-     if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT) {
-       // Based on the docs of the webNavigation.onCommitted event, it should be raised when:
-       // "The document  might still be downloading, but at least part of
-       // the document has been received"
-       // and for some reason we don't fire onLocationChange for the
+     // Based on the docs of the webNavigation.onCommitted event, it should be raised when:
+     // "The document  might still be downloading, but at least part of
+     // the document has been received"
+     // and for some reason we don't fire onLocationChange for the
+     // initial navigation of a sub-frame.

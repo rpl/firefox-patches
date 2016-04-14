@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1460563829 -7200
-#      Wed Apr 13 18:10:29 2016 +0200
-# Node ID 1d288bfce5c2b140d3fee4c997025ffb3492924e
-# Parent  d5ee38a7a2f7d2237e994a556462444c99590fcf
-Bug 1256652 - [webext] Initial support of webNavigation transition types and qualifiers.
+# Date 1460649968 -7200
+#      Thu Apr 14 18:06:08 2016 +0200
+# Node ID be0f8e075ef135a58795e1b80b586ba27eafec61
+# Parent  15f863bc40efe4601b1348639edcdc050ddef3aa
+Bug 1256652 - [webext] Initial support of webNavigation transition types and qualifiers. r?krizsa
 
 - transition types: reload, link, auto_subframe
 - transition qualifiers: forward_back, server_redirect
@@ -281,29 +281,41 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
    init() {
      Services.mm.addMessageListener("Extension:DOMContentLoaded", this);
      Services.mm.addMessageListener("Extension:StateChange", this);
-     Services.mm.addMessageListener("Extension:LocationChange", this);
-@@ -95,22 +92,27 @@ var Manager = {
+     Services.mm.addMessageListener("Extension:DocumentChange", this);
+@@ -99,28 +96,36 @@ var Manager = {
+           let error = `Error code ${data.status}`;
+           this.fire("onErrorOccurred", browser, data, {error, url});
          }
        }
      }
    },
  
-   onLocationChange(browser, data) {
-     let url = data.location;
+   onDocumentChange(browser, data) {
+-    let url = data.location;
++    let extra = {
++      url: data.location,
++      // Transition data which is coming from the content process.
++      frameTransitionData: data.frameTransitionData
++    };
  
-+    // Transition data which is coming from the content process.
-+    let {frameTransitionData} = data;
-+
+-    this.fire("onCommitted", browser, data, {url});
++    this.fire("onCommitted", browser, data, extra);
+   },
+ 
+   onHistoryChange(browser, data) {
+-    let url = data.location;
++    let extra = {
++      url: data.location,
++      // Transition data which is coming from the content process.
++      frameTransitionData: data.frameTransitionData
++    };
+ 
      if (data.isReferenceFragmentUpdated) {
-       this.fire("onReferenceFragmentUpdated", browser, data, {url});
+-      this.fire("onReferenceFragmentUpdated", browser, data, {url});
++      this.fire("onReferenceFragmentUpdated", browser, data, extra);
      } else if (data.isHistoryStateUpdated) {
 -      this.fire("onHistoryStateUpdated", browser, data, {url});
-+      this.fire("onHistoryStateUpdated", browser, data,
-+                {url, frameTransitionData});
-     } else {
--      this.fire("onCommitted", browser, data, {url});
-+      this.fire("onCommitted", browser, data,
-+                {url, frameTransitionData});
++      this.fire("onHistoryStateUpdated", browser, data, extra);
      }
    },
  
@@ -315,26 +327,99 @@ diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/W
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -103,26 +103,49 @@ var WebProgressListener = {
-         isReferenceFragmentUpdated = true;
-       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE) {
-         isHistoryStateUpdated = true;
-       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
-         isHistoryStateUpdated = true;
-       }
+@@ -75,17 +75,17 @@ var WebProgressListener = {
+     // and for some reason we don't fire onLocationChange for the
+     // initial navigation of a sub-frame.
+     // For the above two reasons, when the navigation event is related to
+     // a sub-frame we process the document change here and
+     // then send an "Extension:DocumentChange" message to the main process,
+     // where it will be turned into a webNavigation.onCommitted event.
+     if ((webProgress.DOMWindow.top != webProgress.DOMWindow) &&
+         (stateFlags & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT)) {
+-      this.sendDocumentChange({webProgress, locationURI});
++      this.sendDocumentChange({webProgress, locationURI, request});
      }
+   },
  
+   onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
+     let {DOMWindow} = webProgress;
+ 
+     // Get the previous URI loaded in the DOMWindow.
+     let previousURI = this.previousURIMap.get(DOMWindow);
+@@ -97,17 +97,17 @@ var WebProgressListener = {
+ 
+     // When a frame navigation doesn't change the current loaded document
+     // (which can be due to history.pushState/replaceState or to a changed hash in the url),
+     // it is reported only to the onLocationChange, for this reason
+     // we process the history change here and then we are going to send
+     // an "Extension:HistoryChange" to the main process, where it will be turned
+     // into a webNavigation.onHistoryStateUpdated/onReferenceFragmentUpdated event.
+     if (isSameDocument) {
+-      this.sendHistoryChange({webProgress, previousURI, locationURI});
++      this.sendHistoryChange({webProgress, previousURI, locationURI, request});
+     } else if (webProgress.DOMWindow.top == webProgress.DOMWindow) {
+       // Unfortunately to detect server redirection, we have to catch the
+       // document changes from top level frames here.
+       this.sendDocumentChange({webProgress, locationURI, request});
+     }
+   },
+ 
+   sendStateChange({webProgress, locationURI, stateFlags, status}) {
+@@ -117,27 +117,31 @@ var WebProgressListener = {
+       parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+       status,
+       stateFlags,
+     };
+ 
+     sendAsyncMessage("Extension:StateChange", data);
+   },
+ 
+-  sendDocumentChange({webProgress, locationURI}) {
++  sendDocumentChange({webProgress, locationURI, request}) {
++    let {loadType} = webProgress;
 +    let frameTransitionData = this.getFrameTransitionData({loadType, request});
 +
      let data = {
 +      frameTransitionData,
-       isHistoryStateUpdated, isReferenceFragmentUpdated,
        location: locationURI ? locationURI.spec : "",
        windowId: webProgress.DOMWindowID,
        parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
      };
  
-     sendAsyncMessage("Extension:LocationChange", data);
+     sendAsyncMessage("Extension:DocumentChange", data);
+   },
+ 
+-  sendHistoryChange({webProgress, previousURI, locationURI}) {
++  sendHistoryChange({webProgress, previousURI, locationURI, request}) {
+     let {loadType} = webProgress;
+ 
+     let isHistoryStateUpdated = false;
+     let isReferenceFragmentUpdated = false;
+ 
+     let pathChanged = !(previousURI && locationURI.equalsExceptRef(previousURI));
+     let hashChanged = !(previousURI && previousURI.ref == locationURI.ref);
+ 
+@@ -152,27 +156,51 @@ var WebProgressListener = {
+       isReferenceFragmentUpdated = true;
+     } else if (loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE) {
+       isHistoryStateUpdated = true;
+     } else if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
+       isHistoryStateUpdated = true;
+     }
+ 
+     if (isHistoryStateUpdated || isReferenceFragmentUpdated) {
++      let frameTransitionData = this.getFrameTransitionData({loadType, request});
++
+       let data = {
++        frameTransitionData,
+         isHistoryStateUpdated, isReferenceFragmentUpdated,
+         location: locationURI ? locationURI.spec : "",
+         windowId: webProgress.DOMWindowID,
+         parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+       };
+ 
+       sendAsyncMessage("Extension:HistoryChange", data);
+     }
    },
  
 +  getFrameTransitionData({loadType, request}) {
@@ -356,6 +441,7 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
 +
 +    return frameTransitionData;
 +  },
++
 +
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
  };

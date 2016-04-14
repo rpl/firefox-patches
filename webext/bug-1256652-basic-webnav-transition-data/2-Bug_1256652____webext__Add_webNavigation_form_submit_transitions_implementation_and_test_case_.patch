@@ -2,9 +2,9 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1460130011 -7200
 #      Fri Apr 08 17:40:11 2016 +0200
-# Node ID 451efc2fb3812acf9192ef478db39cbf08b4c9c3
-# Parent  1d288bfce5c2b140d3fee4c997025ffb3492924e
-Bug 1256652 - [webext] Add webNavigation form_submit transitions implementation and test case.
+# Node ID 56c19123522c148b3e1dca53e24b9f6c72ff13a7
+# Parent  be0f8e075ef135a58795e1b80b586ba27eafec61
+Bug 1256652 - [webext] Add webNavigation form_submit transitions implementation and test case. r=krizsa
 
 MozReview-Commit-ID: GiMnQpCpHHm
 
@@ -110,27 +110,63 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
  
      // Populate the above previousURIMap by iterating over the docShells tree.
      for (let currentDocShell of WebNavigationFrames.iterateDocShellTree(docShell)) {
-@@ -103,58 +132,66 @@ var WebProgressListener = {
-         isReferenceFragmentUpdated = true;
-       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE) {
-         isHistoryStateUpdated = true;
-       } else if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
-         isHistoryStateUpdated = true;
-       }
-     }
+@@ -118,31 +147,31 @@ var WebProgressListener = {
+       status,
+       stateFlags,
+     };
  
+     sendAsyncMessage("Extension:StateChange", data);
+   },
+ 
+   sendDocumentChange({webProgress, locationURI, request}) {
+-    let {loadType} = webProgress;
 -    let frameTransitionData = this.getFrameTransitionData({loadType, request});
++    let {loadType, DOMWindow} = webProgress;
 +    let frameTransitionData = this.getFrameTransitionData({loadType, request, DOMWindow});
  
      let data = {
        frameTransitionData,
-       isHistoryStateUpdated, isReferenceFragmentUpdated,
        location: locationURI ? locationURI.spec : "",
        windowId: webProgress.DOMWindowID,
        parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
      };
  
-     sendAsyncMessage("Extension:LocationChange", data);
+     sendAsyncMessage("Extension:DocumentChange", data);
+   },
+ 
+   sendHistoryChange({webProgress, previousURI, locationURI, request}) {
+-    let {loadType} = webProgress;
++    let {loadType, DOMWindow} = webProgress;
+ 
+     let isHistoryStateUpdated = false;
+     let isReferenceFragmentUpdated = false;
+ 
+     let pathChanged = !(previousURI && locationURI.equalsExceptRef(previousURI));
+     let hashChanged = !(previousURI && previousURI.ref == locationURI.ref);
+ 
+     // When the location changes but the document is the same:
+@@ -156,60 +185,67 @@ var WebProgressListener = {
+       isReferenceFragmentUpdated = true;
+     } else if (loadType & Ci.nsIDocShell.LOAD_CMD_PUSHSTATE) {
+       isHistoryStateUpdated = true;
+     } else if (loadType & Ci.nsIDocShell.LOAD_CMD_HISTORY) {
+       isHistoryStateUpdated = true;
+     }
+ 
+     if (isHistoryStateUpdated || isReferenceFragmentUpdated) {
+-      let frameTransitionData = this.getFrameTransitionData({loadType, request});
++      let frameTransitionData = this.getFrameTransitionData({loadType, request, DOMWindow});
+ 
+       let data = {
+         frameTransitionData,
+         isHistoryStateUpdated, isReferenceFragmentUpdated,
+         location: locationURI ? locationURI.spec : "",
+         windowId: webProgress.DOMWindowID,
+         parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
+       };
+ 
+       sendAsyncMessage("Extension:HistoryChange", data);
+     }
    },
  
 -  getFrameTransitionData({loadType, request}) {
@@ -159,6 +195,7 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
      return frameTransitionData;
    },
  
+-
    QueryInterface: XPCOMUtils.generateQI([Ci.nsIWebProgressListener, Ci.nsISupportsWeakReference]),
  };
  
