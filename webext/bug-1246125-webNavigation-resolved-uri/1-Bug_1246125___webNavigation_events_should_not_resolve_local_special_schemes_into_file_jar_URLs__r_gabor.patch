@@ -2,9 +2,9 @@
 # User Luca Greco <lgreco@mozilla.com>
 # Date 1459980263 -7200
 #      Thu Apr 07 00:04:23 2016 +0200
-# Node ID b12b40df4a85aa9eba67901bd43f666ce0bb38fe
-# Parent  d5ee38a7a2f7d2237e994a556462444c99590fcf
-Bug 1246125 - webNavigation events should not resolve local special schemes into file/jar URLs. r=gabor
+# Node ID d5c4709f5beb4122a87fa97078d33a58f869ef2f
+# Parent  e8223b0ff425e7d702cffb1bd3b162623672acf1
+Bug 1246125 - webNavigation events should not resolve local special schemes into file/jar URLs. r=krizsa
 
 - chrome, resource, about and moz-extension URLs should not be reported with their resolved
   file or jar URLs
@@ -117,7 +117,7 @@ new file mode 100644
 diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/addons/WebNavigationContent.js
 --- a/toolkit/modules/addons/WebNavigationContent.js
 +++ b/toolkit/modules/addons/WebNavigationContent.js
-@@ -49,33 +49,46 @@ var WebProgressListener = {
+@@ -49,17 +49,28 @@ var WebProgressListener = {
        return;
      }
      let webProgress = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
@@ -126,6 +126,7 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
    },
  
    onStateChange: function onStateChange(webProgress, request, stateFlags, status) {
+-    let locationURI = request.QueryInterface(Ci.nsIChannel).URI;
 +    let {originalURI, URI: locationURI} = request.QueryInterface(Ci.nsIChannel);
 +
 +    // Prevents "about", "chrome", "resource" and "moz-extension" URI schemes to be
@@ -138,31 +139,11 @@ diff --git a/toolkit/modules/addons/WebNavigationContent.js b/toolkit/modules/ad
 +
 +      locationURI = shouldUseOriginalURI ? originalURI : locationURI;
 +    }
-+
-     let data = {
--      requestURL: request.QueryInterface(Ci.nsIChannel).URI.spec,
-+      requestURL: locationURI.spec,
-       windowId: webProgress.DOMWindowID,
-       parentWindowId: WebNavigationFrames.getParentWindowId(webProgress.DOMWindow),
-       status,
-       stateFlags,
-     };
  
-     sendAsyncMessage("Extension:StateChange", data);
+     this.sendStateChange({webProgress, locationURI, stateFlags, status});
  
-     if (webProgress.DOMWindow.top != webProgress.DOMWindow) {
-       let webNav = webProgress.QueryInterface(Ci.nsIWebNavigation);
-       if (!webNav.canGoBack) {
-         // For some reason we don't fire onLocationChange for the
-         // initial navigation of a sub-frame. So we need to simulate
-         // it here.
--        this.onLocationChange(webProgress, request, request.QueryInterface(Ci.nsIChannel).URI, 0);
-+        this.onLocationChange(webProgress, request, locationURI, 0);
-       }
-     }
-   },
- 
-   onLocationChange: function onLocationChange(webProgress, request, locationURI, flags) {
-     let {DOMWindow, loadType} = webProgress;
- 
-     // Get the previous URI loaded in the DOMWindow.
+     if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_DOCUMENT) {
+       // Based on the docs of the webNavigation.onCommitted event, it should be raised when:
+       // "The document  might still be downloading, but at least part of
+       // the document has been received"
+       // and for some reason we don't fire onLocationChange for the
