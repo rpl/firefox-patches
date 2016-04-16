@@ -1,0 +1,181 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1460724796 -7200
+#      Fri Apr 15 14:53:16 2016 +0200
+# Node ID 7a6e89539cf9a3ea3e5ad3ad25cc472960991f31
+# Parent  396762bc3949b7b22c3e1722d6840413221c1550
+Bug 1256652 - [webext] Add more tests on sub-frames WebNavigation transitions properties. r?krizsa
+
+MozReview-Commit-ID: 8hjFmyfpXkR
+
+diff --git a/toolkit/components/extensions/test/mochitest/file_webNavigation_frameClientRedirect.html b/toolkit/components/extensions/test/mochitest/file_webNavigation_frameClientRedirect.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_webNavigation_frameClientRedirect.html
+@@ -0,0 +1,12 @@
++<!DOCTYPE HTML>
++
++<html>
++<body>
++
++<iframe src="file_webNavigation_clientRedirect.html" width="200" height="200"></iframe>
++
++<form>
++</form>
++
++</body>
++</html>
+diff --git a/toolkit/components/extensions/test/mochitest/file_webNavigation_frameRedirect.html b/toolkit/components/extensions/test/mochitest/file_webNavigation_frameRedirect.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/file_webNavigation_frameRedirect.html
+@@ -0,0 +1,12 @@
++<!DOCTYPE HTML>
++
++<html>
++<body>
++
++<iframe src="redirection.sjs" width="200" height="200"></iframe>
++
++<form>
++</form>
++
++</body>
++</html>
+diff --git a/toolkit/components/extensions/test/mochitest/mochitest.ini b/toolkit/components/extensions/test/mochitest/mochitest.ini
+--- a/toolkit/components/extensions/test/mochitest/mochitest.ini
++++ b/toolkit/components/extensions/test/mochitest/mochitest.ini
+@@ -3,16 +3,18 @@ skip-if = buildapp == 'mulet' || asan
+ support-files =
+   head.js
+   file_WebRequest_page1.html
+   file_WebRequest_page2.html
+   file_WebRequest_page3.html
+   file_webNavigation_clientRedirect.html
+   file_webNavigation_clientRedirect_httpHeaders.html
+   file_webNavigation_clientRedirect_httpHeaders.html^headers^
++  file_webNavigation_frameClientRedirect.html
++  file_webNavigation_frameRedirect.html
+   file_WebNavigation_page1.html
+   file_WebNavigation_page2.html
+   file_WebNavigation_page3.html
+   file_image_good.png
+   file_image_bad.png
+   file_image_redirect.png
+   file_style_good.css
+   file_style_bad.css
+diff --git a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+--- a/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
++++ b/toolkit/components/extensions/test/mochitest/test_ext_webnavigation.html
+@@ -69,16 +69,18 @@ const BASE = "http://mochi.test:8888/tes
+ const URL = BASE + "/file_WebNavigation_page1.html";
+ const FRAME = BASE + "/file_WebNavigation_page2.html";
+ const FRAME2 = BASE + "/file_WebNavigation_page3.html";
+ const FRAME_PUSHSTATE = BASE + "/file_WebNavigation_page3_pushState.html";
+ const REDIRECT = BASE + "/redirection.sjs";
+ const REDIRECTED = BASE + "/dummy_page.html";
+ const CLIENT_REDIRECT = BASE + "/file_webNavigation_clientRedirect.html";
+ const CLIENT_REDIRECT_HTTPHEADER = BASE + "/file_webNavigation_clientRedirect_httpHeaders.html";
++const FRAME_CLIENT_REDIRECT = BASE + "/file_webNavigation_frameClientRedirect.html";
++const FRAME_REDIRECT = BASE + "/file_webNavigation_frameRedirect.html";
+ 
+ const REQUIRED = [
+   "onBeforeNavigate",
+   "onCommitted",
+   "onDOMContentLoaded",
+   "onCompleted",
+ ];
+ 
+@@ -98,17 +100,17 @@ function loadAndWait(win, event, url, sc
+ add_task(function* webnav_transitions_props() {
+   function backgroundScriptTransitions() {
+     const EVENTS = [
+       "onCommitted",
+       "onCompleted",
+     ];
+ 
+     function gotEvent(event, details) {
+-      browser.test.log(`Got ${event} ${details.url} ${details.transitionType}`);
++      browser.test.log(`Got ${event} ${details.url} ${details.transitionType} ${details.transitionQualifiers && JSON.stringify(details.transitionQualifiers)}`);
+ 
+       browser.test.sendMessage("received", {url: details.url, details, event});
+     }
+ 
+     let listeners = {};
+     for (let event of EVENTS) {
+       listeners[event] = gotEvent.bind(null, event);
+       browser.webNavigation[event].addListener(listeners[event]);
+@@ -234,17 +236,17 @@ add_task(function* webnav_transitions_pr
+     is(found.details.transitionType, "link",
+        "Got the expected 'link' transitionType in the OnCommitted event");
+     ok(Array.isArray(found.details.transitionQualifiers) &&
+        found.details.transitionQualifiers.find((q) => q == "client_redirect"),
+        "Got the expected 'client_redirect' transitionQualifiers in the OnCommitted events");
+   }
+ 
+   // transitionQualifier: client_redirect
+-  // (from meta http-equiv tag)
++  // (from http headers)
+   received = [];
+   yield loadAndWait(win, "onCompleted", REDIRECTED, () => {
+     win.location = CLIENT_REDIRECT_HTTPHEADER;
+   });
+ 
+   found = received.find((data) => (data.event == "onCommitted" &&
+                                    data.url == CLIENT_REDIRECT_HTTPHEADER));
+ 
+@@ -253,16 +255,54 @@ add_task(function* webnav_transitions_pr
+   if (found) {
+     is(found.details.transitionType, "link",
+        "Got the expected 'link' transitionType in the OnCommitted event");
+     ok(Array.isArray(found.details.transitionQualifiers) &&
+        found.details.transitionQualifiers.find((q) => q == "client_redirect"),
+        "Got the expected 'client_redirect' transitionQualifiers in the OnCommitted events");
+   }
+ 
++  // transitionQualifier: client_redirect (sub-frame)
++  // (from meta http-equiv tag)
++  received = [];
++  yield loadAndWait(win, "onCompleted", REDIRECTED, () => {
++    win.location = FRAME_CLIENT_REDIRECT;
++  });
++
++  found = received.find((data) => (data.event == "onCommitted" && data.url == REDIRECTED));
++
++  ok(found, "Got the onCommitted event");
++
++  if (found) {
++    is(found.details.transitionType, "auto_subframe",
++       "Got the expected 'auto_subframe' transitionType in the OnCommitted event");
++    ok(Array.isArray(found.details.transitionQualifiers) &&
++       found.details.transitionQualifiers.find((q) => q == "client_redirect"),
++       "Got the expected 'client_redirect' transitionQualifiers in the OnCommitted events");
++  }
++
++  // transitionQualifier: server_redirect (sub-frame)
++  received = [];
++  yield loadAndWait(win, "onCompleted", REDIRECTED, () => { win.location = FRAME_REDIRECT; });
++
++  found = received.find((data) => (data.event == "onCommitted" && data.url == REDIRECT));
++
++  ok(found, "Got the onCommitted event");
++
++  if (found) {
++    is(found.details.transitionType, "auto_subframe",
++       "Got the expected 'auto_subframe' transitionType in the OnCommitted event");
++    // BUG 1264936: currently the server_redirect is not detected in sub-frames
++    // once we fix it we can test it here:
++    //
++    // ok(Array.isArray(found.details.transitionQualifiers) &&
++    //    found.details.transitionQualifiers.find((q) => q == "server_redirect"),
++    //    "Got the expected 'server_redirect' transitionQualifiers in the OnCommitted events");
++  }
++
+   // cleanup phase
+   win.close();
+ 
+   yield extension.unload();
+   info("webnavigation extension unloaded");
+ });
+ 
+ add_task(function* webnav_ordering() {
