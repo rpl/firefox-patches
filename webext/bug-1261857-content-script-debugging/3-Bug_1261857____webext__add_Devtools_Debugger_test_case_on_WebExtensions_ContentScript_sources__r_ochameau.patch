@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1460468852 -7200
-#      Tue Apr 12 15:47:32 2016 +0200
-# Node ID 7674325a11dbae0a9efa07d01dac150c5800fb0f
-# Parent  20ebacc1d7130936628a011b8d532b3770ad5594
-Bug 1261857 - [webext] add Devtools Debugger test case on WebExtensions ContentScript sources. r?ochameau
+# Date 1460806653 -7200
+#      Sat Apr 16 13:37:33 2016 +0200
+# Node ID 3b2667ecff625149ada643605876bc0cc21b9448
+# Parent  b82fa337e73d3f73206a8fadaf1dbcda458e2192
+Bug 1261857 - [webext] add Devtools Debugger test case on WebExtensions ContentScript sources. r=ochameau
 
 MozReview-Commit-ID: HAZy67Dwda0
 
@@ -92,7 +92,7 @@ diff --git a/devtools/client/debugger/test/mochitest/browser.ini b/devtools/clie
    doc_watch-expression-button.html
    doc_with-frame.html
    doc_worker-source-map.html
-@@ -461,16 +463,18 @@ skip-if = true # non-named eval sources 
+@@ -461,16 +463,17 @@ skip-if = true # non-named eval sources 
  skip-if = e10s && debug
  [browser_dbg_sources-labels.js]
  skip-if = e10s && debug
@@ -102,7 +102,6 @@ diff --git a/devtools/client/debugger/test/mochitest/browser.ini b/devtools/clie
  [browser_dbg_sources-bookmarklet.js]
  skip-if = e10s && debug
 +[browser_dbg_sources-webext-contentscript.js]
-+skip-if = e10s && debug # TODO: double-check if it is necessary
  [browser_dbg_split-console-paused-reload.js]
  skip-if = e10s && debug
  [browser_dbg_stack-01.js]
@@ -115,7 +114,7 @@ diff --git a/devtools/client/debugger/test/mochitest/browser_dbg_sources-webext-
 new file mode 100644
 --- /dev/null
 +++ b/devtools/client/debugger/test/mochitest/browser_dbg_sources-webext-contentscript.js
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,61 @@
 +/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 +/* vim: set ft=javascript ts=2 et sw=2 tw=80: */
 +/* Any copyright is dedicated to the Public Domain.
@@ -128,34 +127,53 @@ new file mode 100644
 +const TAB_URL = EXAMPLE_URL + "doc_script_webext_contentscript.html";
 +
 +function test() {
-+  let gTab, gPanel, gDebugger;
-+  let gSources;
++  let gPanel, gDebugger;
++  let gSources, gAddon;
 +
-+  addAddon(EXAMPLE_URL + "/addon-webext-contentscript.xpi").then(() => {
-+    initDebugger(TAB_URL).then(([aTab,, aPanel]) => {
-+      gTab = aTab;
-+      gPanel = aPanel;
-+      gDebugger = gPanel.panelWin;
-+      gSources = gDebugger.DebuggerView.Sources;
++  let cleanup = function* (e) {
++    if (gAddon) {
++      // Remove the addon, if any.
++      yield removeAddon(gAddon);
++    }
++    if (gPanel) {
++      // Close the debugger panel, if any.
++      yield closeDebuggerAndFinish(gPanel);
++    } else {
++      // If no debugger panel was opened, call finish directly.
++      finish();
++    }
++  };
 +
-+      return Task.spawn(function* () {
-+        yield waitForDebuggerEvents(gPanel, gDebugger.EVENTS.SOURCE_SHOWN);
++  return Task.spawn(function* () {
++    gAddon = yield addAddon(EXAMPLE_URL + "/addon-webext-contentscript.xpi");
 +
-+        is(gSources.values.length, 1, "Should have 1 source");
++    [,, gPanel] = yield initDebugger(TAB_URL);
++    gDebugger = gPanel.panelWin;
++    gSources = gDebugger.DebuggerView.Sources;
 +
-+        let item = gSources.getItemForAttachment(attachment => {
-+          return attachment.source.url.indexOf("moz-extension") == 0;
-+        });
++    // Wait for a SOURCE_SHOWN event for at most 4 seconds.
++    yield Promise.race([
++      waitForDebuggerEvents(gPanel, gDebugger.EVENTS.SOURCE_SHOWN),
++      waitForTime(4000),
++    ]);
 +
-+        ok(item, "Got the expected WebExtensions ContentScript source");
-+        ok(item.attachment.source.url.indexOf(item.attachment.group) >= 0,
-+           "The source is in the expected source group");
-+        is(item.attachment.label, "webext-content-script.js",
-+           "Got the expected filename in the label");
++    is(gSources.values.length, 1, "Should have 1 source");
 +
-+        yield closeDebuggerAndFinish(gPanel);
-+      });
++    let item = gSources.getItemForAttachment(attachment => {
++      return attachment.source.url.includes("moz-extension");
 +    });
++
++    ok(item, "Got the expected WebExtensions ContentScript source");
++    ok(item && item.attachment.source.url.includes(item.attachment.group),
++       "The source is in the expected source group");
++    is(item && item.attachment.label, "webext-content-script.js",
++       "Got the expected filename in the label");
++
++    yield cleanup();
++  }).catch((e) => {
++    ok(false, `Got an unexpected exception: ${e}`);
++    // Cleanup in case of failures in the above task.
++    return Task.spawn(cleanup);
 +  });
 +}
 diff --git a/devtools/client/debugger/test/mochitest/doc_script_webext_contentscript.html b/devtools/client/debugger/test/mochitest/doc_script_webext_contentscript.html

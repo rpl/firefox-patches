@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1460464709 -7200
-#      Tue Apr 12 14:38:29 2016 +0200
-# Node ID 20ebacc1d7130936628a011b8d532b3770ad5594
-# Parent  c495f36eb8a623fbf1a4b58c4733e7a1098ef3ac
-Bug 1261857 - [webext] Add existent WebExtensions ContentScript globals in the Tab DevTools debuggees. r?ochameau
+# Date 1460729590 -7200
+#      Fri Apr 15 16:13:10 2016 +0200
+# Node ID b82fa337e73d3f73206a8fadaf1dbcda458e2192
+# Parent  0135f40555514eff3be6ba2f2715b93c31fff0ce
+Bug 1261857 - [webext] Add existent WebExtensions ContentScript globals in the Tab DevTools debuggees. r=ochameau
 
 MozReview-Commit-ID: K5YESAVRikO
 
@@ -40,7 +40,7 @@ diff --git a/devtools/server/actors/webbrowser.js b/devtools/server/actors/webbr
    this.makeDebugger = makeDebugger.bind(null, {
 -    findDebuggees: () => this.windows,
 +    findDebuggees: () => {
-+      return [].concat(this.windows, this.webextensionsContentScriptGlobals);
++      return this.windows.concat(this.webextensionsContentScriptGlobals);
 +    },
      shouldAddNewGlobalAsDebuggee: this._shouldAddNewGlobalAsDebuggee
    });

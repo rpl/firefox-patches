@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1460472007 -7200
-#      Tue Apr 12 16:40:07 2016 +0200
-# Node ID c495f36eb8a623fbf1a4b58c4733e7a1098ef3ac
-# Parent  039b504d1161b427ab475451bc805da8cd014b4c
-Bug 1261857 - [webext] Support WebExtensions ContentScripts in the Tab DevTools Debugger. r?kmag
+# Date 1460732997 -7200
+#      Fri Apr 15 17:09:57 2016 +0200
+# Node ID 0135f40555514eff3be6ba2f2715b93c31fff0ce
+# Parent  30010c0e58af2b863b6f56bb9d1e519128832eb5
+Bug 1261857 - [webext] Support WebExtensions ContentScripts in the Tab DevTools Debugger. r=kmag
 
 MozReview-Commit-ID: BtGqvAkRJZx
 
@@ -96,8 +96,8 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
 +    let winId = getInnerWindowID(window);
 +    let extensions = this.contentScriptWindows.get(winId);
 +
-+    if (extensions instanceof Map) {
-+      return Array.from(extensions.values()).map((c) => c.sandbox);
++    if (extensions) {
++      return Array.from(extensions.values(), ctx => ctx.sandbox);
 +    }
 +
 +    return [];
@@ -168,7 +168,7 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
        case "Extension:Capture":
          return this.handleExtensionCapture(data.width, data.height, data.options);
        case "Extension:DetectLanguage":
-@@ -866,11 +885,15 @@ this.ExtensionContent = {
+@@ -866,11 +885,19 @@ this.ExtensionContent = {
    init(global) {
      this.globals.set(global, new ExtensionGlobal(global));
    },
@@ -178,9 +178,13 @@ diff --git a/toolkit/components/extensions/ExtensionContent.jsm b/toolkit/compon
      this.globals.delete(global);
    },
 +
++  // This helper is exported to be integrated in the devtools RDP actors,
++  // that can use it to retrieve the existent WebExtensions ContentScripts
++  // of a target window and be able to show the ContentScripts source in the
++  // DevTools Debugger panel.
 +  getContentScriptGlobalsForWindow(window) {
 +    return DocumentManager.getContentScriptGlobalsForWindow(window);
-+  }
++  },
  };
  
  ExtensionManager.init();
@@ -212,7 +216,7 @@ diff --git a/toolkit/components/extensions/test/mochitest/test_ext_contentscript
 new file mode 100644
 --- /dev/null
 +++ b/toolkit/components/extensions/test/mochitest/test_ext_contentscript_devtools_metadata.html
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,81 @@
 +<!DOCTYPE HTML>
 +<html>
 +<head>
@@ -230,7 +234,7 @@ new file mode 100644
 +
 +add_task(function* test_contentscript_devtools_sandbox_metadata() {
 +  function contentScript() {
-+    browser.runtime.sendMessage("contentScript.executed")
++    browser.runtime.sendMessage("contentScript.executed");
 +  }
 +
 +  function backgroundScript() {
@@ -264,7 +268,7 @@ new file mode 100644
 +
 +  let win = window.open("file_sample.html");
 +
-+  var innerWindowID = SpecialPowers.wrap(win)
++  let innerWindowID = SpecialPowers.wrap(win)
 +                                   .QueryInterface(SpecialPowers.Ci.nsIInterfaceRequestor)
 +                                   .getInterface(SpecialPowers.Ci.nsIDOMWindowUtils)
 +                                   .currentInnerWindowID;
@@ -275,11 +279,9 @@ new file mode 100644
 +    "resource://gre/modules/ExtensionContent.jsm", {}
 +  );
 +
-+  let res, metadata;
-+
-+  res = ExtensionContent.getContentScriptGlobalsForWindow(win);
++  let res = ExtensionContent.getContentScriptGlobalsForWindow(win);
 +  is(res.length, 1, "Got the expected array of globals");
-+  metadata = SpecialPowers.Cu.getSandboxMetadata(res[0]) || {};
++  let metadata = SpecialPowers.Cu.getSandboxMetadata(res[0]) || {};
 +
 +  is(metadata.addonId, extension.id, "Got the expected addonId");
 +  is(metadata["inner-window-id"], innerWindowID, "Got the expected inner-window-id");
