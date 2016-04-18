@@ -1,0 +1,208 @@
+diff --git a/browser/base/content/content.js b/browser/base/content/content.js
+--- a/browser/base/content/content.js
++++ b/browser/base/content/content.js
+@@ -372,20 +372,24 @@ var ClickEventHandler = {
+         node) {
+       let referrerAttrValue = Services.netUtils.parseAttributePolicyString(node.
+                               getAttribute("referrerpolicy"));
+       if (referrerAttrValue !== Ci.nsIHttpChannel.REFERRER_POLICY_DEFAULT) {
+         referrerPolicy = referrerAttrValue;
+       }
+     }
+ 
++    let frameOuterWindowID = ownerDoc.defaultView.QueryInterface(Ci.nsIInterfaceRequestor)
++          .getInterface(Ci.nsIDOMWindowUtils)
++          .outerWindowID;
++
+     let json = { button: event.button, shiftKey: event.shiftKey,
+                  ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+                  altKey: event.altKey, href: null, title: null,
+-                 bookmark: false, referrerPolicy: referrerPolicy };
++                 bookmark: false, referrerPolicy, frameOuterWindowID };
+ 
+     if (href) {
+       try {
+         BrowserUtils.urlSecurityCheck(href, principal);
+       } catch (e) {
+         return;
+       }
+ 
+diff --git a/browser/base/content/nsContextMenu.js b/browser/base/content/nsContextMenu.js
+--- a/browser/base/content/nsContextMenu.js
++++ b/browser/base/content/nsContextMenu.js
+@@ -951,16 +951,17 @@ nsContextMenu.prototype = {
+     // Otherwise make sure that nothing in the parent chain disables spellchecking
+     return aNode.spellcheck;
+   },
+ 
+   _openLinkInParameters : function (extra) {
+     let params = { charset: gContextMenuContentData.charSet,
+                    referrerURI: gContextMenuContentData.documentURIObject,
+                    referrerPolicy: gContextMenuContentData.referrerPolicy,
++                   frameOuterWindowID: gContextMenuContentData.frameOuterWindowID,
+                    noReferrer: this.linkHasNoReferrer };
+     for (let p in extra)
+       params[p] = extra[p];
+     return params;
+   },
+ 
+   // Open linked-to URL in a new window.
+   openLink : function () {
+diff --git a/browser/base/content/utilityOverlay.js b/browser/base/content/utilityOverlay.js
+--- a/browser/base/content/utilityOverlay.js
++++ b/browser/base/content/utilityOverlay.js
+@@ -278,17 +278,26 @@ function openLinkIn(url, where, params) 
+     sa.AppendElement(allowThirdPartyFixupSupports);
+     sa.AppendElement(referrerPolicySupports);
+ 
+     let features = "chrome,dialog=no,all";
+     if (aIsPrivate) {
+       features += ",private";
+     }
+ 
+-    Services.ww.openWindow(w || window, getBrowserURL(), null, features, sa);
++    let win = Services.ww.openWindow(w || window, getBrowserURL(), null, features, sa);
++    Services.obs.notifyObservers({
++      wrappedJSObject: {
++        chromeWindowOpened: win,
++        data: {
++          sourceWindowId: params.frameOuterWindowID,
++          url
++        }
++      }
++    }, "opening-link-in-new-window", null);
+     return;
+   }
+ 
+   let loadInBackground = where == "current" ? false : aInBackground;
+   if (loadInBackground == null) {
+     loadInBackground = aFromChrome ?
+                          false :
+                          getBoolPref("browser.tabs.loadInBackground");
+@@ -350,29 +359,39 @@ function openLinkIn(url, where, params) 
+       referrerPolicy: aReferrerPolicy,
+       postData: aPostData,
+     });
+     break;
+   case "tabshifted":
+     loadInBackground = !loadInBackground;
+     // fall through
+   case "tab":
+-    w.gBrowser.loadOneTab(url, {
++    let tab = w.gBrowser.loadOneTab(url, {
+       referrerURI: aReferrerURI,
+       referrerPolicy: aReferrerPolicy,
+       charset: aCharset,
+       postData: aPostData,
+       inBackground: loadInBackground,
+       allowThirdPartyFixup: aAllowThirdPartyFixup,
+       relatedToCurrent: aRelatedToCurrent,
+       skipAnimation: aSkipTabAnimation,
+       allowMixedContent: aAllowMixedContent,
+       noReferrer: aNoReferrer,
+       userContextId: aUserContextId
+     });
++    Services.obs.notifyObservers({
++      wrappedJSObject: {
++        tab,
++        sourceTab: w.gBrowser.selectedTab,
++        data: {
++          url,
++          sourceWindowId: params.frameOuterWindowID
++        }
++      }
++    }, "opening-link-in-new-tab", null);
+     break;
+   }
+ 
+   w.gBrowser.selectedBrowser.focus();
+ 
+   if (!loadInBackground && w.isBlankPageURL(url)) {
+     w.focusAndSelectUrlBar();
+   }
+diff --git a/browser/modules/ContentClick.jsm b/browser/modules/ContentClick.jsm
+--- a/browser/modules/ContentClick.jsm
++++ b/browser/modules/ContentClick.jsm
+@@ -1,8 +1,9 @@
++
+ /* -*- mode: js; indent-tabs-mode: nil; js-indent-level: 2 -*- */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+ var Cc = Components.classes;
+@@ -75,12 +76,13 @@ var ContentClick = {
+     if (where == "current")
+       return;
+ 
+     // Todo(903022): code for where == save
+ 
+     let params = { charset: browser.characterSet,
+                    referrerURI: browser.documentURI,
+                    referrerPolicy: json.referrerPolicy,
+-                   noReferrer: json.noReferrer };
++                   noReferrer: json.noReferrer,
++                   frameOuterWindowID: json.frameOuterWindowID };
+     window.openLinkIn(json.href, where, params);
+   }
+ };
+diff --git a/toolkit/modules/addons/WebNavigation.jsm b/toolkit/modules/addons/WebNavigation.jsm
+--- a/toolkit/modules/addons/WebNavigation.jsm
++++ b/toolkit/modules/addons/WebNavigation.jsm
+@@ -78,16 +78,54 @@ var Manager = {
+         break;
+ 
+       case "Extension:DOMContentLoaded":
+         this.onLoad(target, data);
+         break;
+     }
+   },
+ 
++  QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]),
++
++  observer: function(subject, topic, data) {
++    switch (topic) {
++    case "opening-link-in-new-window":
++      this.onOpeningLinkInNewWindow(subject);
++      break;
++    case "opening-link-in-new-tab":
++      this.onOpeningLinkInNewTab(subject);
++      break;
++    }
++  },
++
++  onOpeningLinkINNewWindow({chromeWindowOpened, sourceTab, data}) {
++    let {sourceWindowId, url} = data;
++
++    if (!chromeWindowOpened.gBrowser) {
++      let obs = (finishedWindow, topic, data) => {
++        if (finishedWindow != chromeWindowOpened) {
++          return;
++        }
++        Services.obs.removeObserver(obs, "browser-delayed-startup-finished");
++        let browser = chromeWindowOpened.gBrowser.selectedTab.linkedBrowser;
++        this.fire("onCreatedNavigationTarget", browser, data, {url, sourceTab, sourceWindowId});
++      };
++      Services.obs.addObserver(obs, "browser-delayed-startup-finished", false);
++    } else {
++      let browser = chromeWindowOpened.gBrowser.selectedTab.linkedBrowser;
++      this.fire("onCreatedNavigationTarget", browser, data, {url, sourceTab, sourceWindowId});
++    }
++  },
++
++  onOpeningLinkINNewTab({tab, sourceTab, data}) {
++    let {sourceWindowId, url} = data;
++
++    this.fire("onCreatedNavigationTarget", tab.linkedBrowser, data, {url, sourceWindowId, sourceTab});
++  },
++
+   onStateChange(browser, data) {
+     let stateFlags = data.stateFlags;
+     if (stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW) {
+       let url = data.requestURL;
+       if (stateFlags & Ci.nsIWebProgressListener.STATE_START) {
+         this.fire("onBeforeNavigate", browser, data, {url});
+       } else if (stateFlags & Ci.nsIWebProgressListener.STATE_STOP) {
+         if (Components.isSuccessCode(data.status)) {
