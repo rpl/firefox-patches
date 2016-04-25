@@ -1,9 +1,0 @@
-export MOZCONFIG=`dirname $0`/mozconfig-full-build
-
-OLDPROMPT="$PROMPT"
-export PROMPT="(full-build) $PROMPT"
-
-deactivate() {
-  export PROMPT="$OLDPROMPT"
-  unset MOZCONFIG
-}

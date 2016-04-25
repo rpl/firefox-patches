@@ -1,6 +1,0 @@
-# Write build artifacts to:
-mk_add_options MOZ_OBJDIR=./objdir-full-build
-
-## DEBUG BUILD
-ac_add_options --enable-debug
-ac_add_options --disable-optimize

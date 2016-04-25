@@ -1,9 +1,0 @@
-export MOZCONFIG=`dirname $0`/mozconfig-artifacts
-
-OLDPROMPT="$PROMPT"
-export PROMPT="(artifacts) $PROMPT"
-
-deactivate() {
-  export PROMPT="$OLDPROMPT"
-  unset MOZCONFIG
-}

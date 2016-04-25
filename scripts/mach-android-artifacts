@@ -1,9 +1,0 @@
-export MOZCONFIG=`dirname $0`/mozconfig-android-artifacts
-
-OLDPROMPT="$PROMPT"
-export PROMPT="(android-artifacts) $PROMPT"
-
-deactivate() {
-  export PROMPT="$OLDPROMPT"
-  unset MOZCONFIG
-}
