@@ -1,0 +1,107 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1461777002 -7200
+#      Wed Apr 27 19:10:02 2016 +0200
+# Node ID fc16cd6cb02d25aa16ce915c5ac4fd3dc6435f45
+# Parent  ad203d6770991e4d40b2e8987b435f11800a5916
+NEXT: integrate EmbeddedWebExtensionsUtils helper into XPIProvider.
+
+MozReview-Commit-ID: Iw47S7OMP5S
+
+diff --git a/toolkit/mozapps/extensions/internal/XPIProvider.jsm b/toolkit/mozapps/extensions/internal/XPIProvider.jsm
+--- a/toolkit/mozapps/extensions/internal/XPIProvider.jsm
++++ b/toolkit/mozapps/extensions/internal/XPIProvider.jsm
+@@ -50,16 +50,18 @@ XPCOMUtils.defineLazyModuleGetter(this, 
+ XPCOMUtils.defineLazyModuleGetter(this, "ConsoleAPI",
+                                   "resource://gre/modules/Console.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "ProductAddonChecker",
+                                   "resource://gre/modules/addons/ProductAddonChecker.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                   "resource://gre/modules/UpdateUtils.jsm");
+ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                   "resource://gre/modules/AppConstants.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "EmbeddedWebExtensionsUtils",
++                                  "resource://gre/modules/ClassicExtensionsUtils.jsm");
+ 
+ XPCOMUtils.defineLazyServiceGetter(this, "Blocklist",
+                                    "@mozilla.org/extensions/blocklist;1",
+                                    Ci.nsIBlocklistService);
+ XPCOMUtils.defineLazyServiceGetter(this,
+                                    "ChromeRegistry",
+                                    "@mozilla.org/chrome/chrome-registry;1",
+                                    "nsIChromeRegistry");
+@@ -755,16 +757,17 @@ function EM_R(aProperty) {
+ 
+ function createAddonDetails(id, aAddon) {
+   return {
+     id: id || aAddon.id,
+     type: aAddon.type,
+     version: aAddon.version,
+     multiprocessCompatible: aAddon.multiprocessCompatible,
+     runInSafeMode: aAddon.runInSafeMode,
++    enableEmbeddedWebExtension: aAddon.enableEmbeddedWebExtension,
+   };
+ }
+ 
+ /**
+  * Converts an internal add-on type to the type presented through the API.
+  *
+  * @param  aType
+  *         The internal add-on type
+@@ -1097,16 +1100,17 @@ function loadManifestFromRDF(aUri, aStre
+ 
+   addon.strictCompatibility = !(addon.type in COMPATIBLE_BY_DEFAULT_TYPES) ||
+                               getRDFProperty(ds, root, "strictCompatibility") == "true";
+ 
+   // Only read these properties for extensions.
+   if (addon.type == "extension") {
+     addon.bootstrap = getRDFProperty(ds, root, "bootstrap") == "true";
+     addon.multiprocessCompatible = getRDFProperty(ds, root, "multiprocessCompatible") == "true";
++    addon.enableEmbeddedWebExtension = getRDFProperty(ds, root, "enableEmbeddedWebExtension") == "true";
+     if (addon.optionsType &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_DIALOG &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_INLINE &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_TAB &&
+         addon.optionsType != AddonManager.OPTIONS_TYPE_INLINE_INFO) {
+       throw new Error("Install manifest specifies unknown type: " + addon.optionsType);
+     }
+   }
+@@ -4747,20 +4751,38 @@ this.XPIProvider = {
+       };
+ 
+       if (aExtraParams) {
+         for (let key in aExtraParams) {
+           params[key] = aExtraParams[key];
+         }
+       }
+ 
++      if (aAddon.enableEmbeddedWebExtension) {
++        if (aReason == BOOTSTRAP_REASONS.ADDON_ENABLE) {
++          params.embeddedWebExtensionAPI = EmbeddedWebExtensionsUtils
++            .getAPIFor(params, params.resourceURI.resolve("/"));
++        } else if (aReason == BOOTSTRAP_REASONS.ADDON_DISABLE) {
++          // shutdown the embedded webextension here, so that the onConnect event listener
++          // on the classic extension side will be able to receive a disconect on the
++          // WebExtension port API.
++          EmbeddedWebExtensionsUtils.shutdownFor(params);
++        }
++      }
++
+       logger.debug("Calling bootstrap method " + aMethod + " on " + aAddon.id + " version " +
+                    aAddon.version);
+       try {
+         method(params, aReason);
++
++        // startup the embedded webextension here, so that the classic extension side
++        // has been already able to subscribe any onConnect event listener it needs.
++        if (aAddon.enableEmbeddedWebExtension && aReason == BOOTSTRAP_REASONS.ADDON_ENABLE) {
++          EmbeddedWebExtensionsUtils.startupFor({id: aAddon.id});
++        }
+       }
+       catch (e) {
+         logger.warn("Exception running bootstrap method " + aMethod + " on " + aAddon.id, e);
+       }
+     }
+     finally {
+       if (CHROME_TYPES.has(aAddon.type) && aMethod == "shutdown" && aReason != BOOTSTRAP_REASONS.APP_SHUTDOWN) {
+         logger.debug("Removing manifest for " + aFile.path);

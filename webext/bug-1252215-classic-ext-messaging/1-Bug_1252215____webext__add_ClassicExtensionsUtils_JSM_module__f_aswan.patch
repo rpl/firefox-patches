@@ -1,0 +1,392 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1461784594 -7200
+#      Wed Apr 27 21:16:34 2016 +0200
+# Node ID ed10ea9e02488d41b5c590452747d769ed7a5037
+# Parent  7353d8e2cef652857f730e3b9ce39425e388e832
+Bug 1252215 - [webext] add ClassicExtensionsUtils JSM module. f?aswan
+
+- this new module contains helpers to be able to receive connections
+  originated from a webextension context from a classic extension context
+  (implemented by the `ClassicExtensionContext` class exported from
+  this new jsm module)
+
+MozReview-Commit-ID: DS1NTXk0fB6
+
+diff --git a/toolkit/components/extensions/ClassicExtensionsUtils.jsm b/toolkit/components/extensions/ClassicExtensionsUtils.jsm
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/ClassicExtensionsUtils.jsm
+@@ -0,0 +1,94 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++this.EXPORTED_SYMBOLS = ["ClassicExtensionContext"];
++
++/* exported ClassicExtensionContext */
++
++/**
++ * This file exports helpers for Classic Extensions that wants to embed a webextensions
++ * and exchange messages with the embedded WebExtensions' contexts.
++ */
++
++const Ci = Components.interfaces;
++const Cc = Components.classes;
++const Cu = Components.utils;
++const Cr = Components.results;
++const CC = Components.Constructor;
++
++Cu.import("resource://gre/modules/Services.jsm");
++
++Cu.import("resource://gre/modules/ExtensionUtils.jsm");
++const {
++  Messenger,
++  BaseContext,
++} = ExtensionUtils;
++
++Cu.import("resource://gre/modules/ExtensionManagement.jsm");
++const {
++  getExtensionUUID,
++} = ExtensionManagement;
++
++const systemPrincipal = CC("@mozilla.org/systemprincipal;1", "nsIPrincipal")();
++
++const ns = Symbol();
++
++/**
++ * Instances created from this class provides to a classic extension
++ * a simple API to exchange messages with a webextension.
++ */
++var ClassicExtensionContext = class extends BaseContext {
++  constructor({id, url}) {
++    super(id);
++
++    // Create private instance data.
++    this[ns] = {};
++    this[ns].id = id;
++    this[ns].url = url;
++
++    let sender = {id: getExtensionUUID(id), url};
++
++    let filter = {extensionId: id};
++    let delegate = {getSender() {}};
++
++    // Classic Extensions (xul overlays, bootstrap restartless and Addon SDK)
++    // runs with a systemPrincipal.
++    this[ns].addonPrincipal = systemPrincipal;
++
++    this[ns].messenger = new Messenger(this, [Services.mm, Services.ppmm],
++                                       sender, filter, delegate);
++
++    this[ns].cloneScope = Cu.Sandbox(this[ns].addonPrincipal, {});
++    Cu.setSandboxMetadata(this[ns].cloneScope, {addonId: id});
++
++    this[ns].api = {
++      onConnect: this[ns].messenger.onConnect("runtime.onConnect"),
++    };
++  }
++
++  close() {
++    Cu.nukeSandbox(this.cloneScope);
++  }
++
++  get cloneScope() {
++    return this[ns].cloneScope;
++  }
++
++  get type() {
++    // Instead of the usually set extension context type, always return
++    // "classic_extension".
++    return "classic_extension";
++  }
++
++  get principal() {
++    // Return the addon principal.
++    return this[ns].addonPrincipal;
++  }
++
++  get api() {
++    return this[ns].api;
++  }
++};
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -97,16 +97,20 @@ var {
+   LocaleData,
+   Messenger,
+   injectAPI,
+   instanceOf,
+   extend,
+   flushJarCache,
+ } = ExtensionUtils;
+ 
++var {
++  getExtensionUUID,
++} = ExtensionManagement;
++
+ const LOGGER_ID_BASE = "addons.webextension.";
+ 
+ const COMMENT_REGEXP = new RegExp(String.raw`
+     ^
+     (
+       (?:
+         [^"] |
+         " (?:[^"\\] | \\.)* "
+@@ -675,46 +679,16 @@ GlobalManager = {
+       }
+       eventHandler.removeEventListener("unload", listener, true);
+       context.unload();
+     };
+     eventHandler.addEventListener("unload", listener, true);
+   },
+ };
+ 
+-// All moz-extension URIs use a machine-specific UUID rather than the
+-// extension's own ID in the host component. This makes it more
+-// difficult for web pages to detect whether a user has a given add-on
+-// installed (by trying to load a moz-extension URI referring to a
+-// web_accessible_resource from the extension). getExtensionUUID
+-// returns the UUID for a given add-on ID.
+-function getExtensionUUID(id) {
+-  const PREF_NAME = "extensions.webextensions.uuids";
+-
+-  let pref = Preferences.get(PREF_NAME, "{}");
+-  let map = {};
+-  try {
+-    map = JSON.parse(pref);
+-  } catch (e) {
+-    Cu.reportError(`Error parsing ${PREF_NAME}.`);
+-  }
+-
+-  if (id in map) {
+-    return map[id];
+-  }
+-
+-  let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
+-  let uuid = uuidGenerator.generateUUID().number;
+-  uuid = uuid.slice(1, -1); // Strip { and } off the UUID.
+-
+-  map[id] = uuid;
+-  Preferences.set(PREF_NAME, JSON.stringify(map));
+-  return uuid;
+-}
+-
+ // Represents the data contained in an extension, contained either
+ // in a directory or a zip file, which may or may not be installed.
+ // This class implements the functionality of the Extension class,
+ // primarily related to manifest parsing and localization, which is
+ // useful prior to extension installation or initialization.
+ //
+ // No functionality of this class is guaranteed to work before
+ // |readManifest| has been called, and completed.
+diff --git a/toolkit/components/extensions/ExtensionManagement.jsm b/toolkit/components/extensions/ExtensionManagement.jsm
+--- a/toolkit/components/extensions/ExtensionManagement.jsm
++++ b/toolkit/components/extensions/ExtensionManagement.jsm
+@@ -10,16 +10,19 @@ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+ const Cu = Components.utils;
+ const Cr = Components.results;
+ 
+ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+ Cu.import("resource://gre/modules/Services.jsm");
+ Cu.import("resource://gre/modules/AppConstants.jsm");
+ 
++XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
++                                  "resource://gre/modules/Preferences.jsm");
++
+ /*
+  * This file should be kept short and simple since it's loaded even
+  * when no extensions are running.
+  */
+ 
+ // Keep track of frame IDs for content windows. Mostly we can just use
+ // the outer window ID as the frame ID. However, the API specifies
+ // that top-level windows have a frame ID of 0. So we need to keep
+@@ -266,17 +269,49 @@ function getAPILevelForWindow(window, ad
+     // (see Bug 1214658 for rationale)
+     return CONTENTSCRIPT_PRIVILEGES;
+   }
+ 
+   // WebExtension URLs loaded into top frames UI could have full API level privileges.
+   return FULL_PRIVILEGES;
+ }
+ 
++// All moz-extension URIs use a machine-specific UUID rather than the
++// extension's own ID in the host component. This makes it more
++// difficult for web pages to detect whether a user has a given add-on
++// installed (by trying to load a moz-extension URI referring to a
++// web_accessible_resource from the extension). getExtensionUUID
++// returns the UUID for a given add-on ID.
++function getExtensionUUID(id) {
++  const PREF_NAME = "extensions.webextensions.uuids";
++
++  let pref = Preferences.get(PREF_NAME, "{}");
++  let map = {};
++  try {
++    map = JSON.parse(pref);
++  } catch (e) {
++    Cu.reportError(`Error parsing ${PREF_NAME}.`);
++  }
++
++  if (id in map) {
++    return map[id];
++  }
++
++  let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
++  let uuid = uuidGenerator.generateUUID().number;
++  uuid = uuid.slice(1, -1); // Strip { and } off the UUID.
++
++  map[id] = uuid;
++  Preferences.set(PREF_NAME, JSON.stringify(map));
++  return uuid;
++}
++
+ this.ExtensionManagement = {
++  getExtensionUUID,
++
+   startupExtension: Service.startupExtension.bind(Service),
+   shutdownExtension: Service.shutdownExtension.bind(Service),
+ 
+   registerScript: Scripts.register.bind(Scripts),
+   getScripts: Scripts.getScripts.bind(Scripts),
+ 
+   registerSchema: Schemas.register.bind(Schemas),
+   getSchemas: Schemas.getSchemas.bind(Schemas),
+diff --git a/toolkit/components/extensions/moz.build b/toolkit/components/extensions/moz.build
+--- a/toolkit/components/extensions/moz.build
++++ b/toolkit/components/extensions/moz.build
+@@ -1,15 +1,16 @@
+ # -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+ # vim: set filetype=python:
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ EXTRA_JS_MODULES += [
++    'ClassicExtensionsUtils.jsm',
+     'Extension.jsm',
+     'ExtensionContent.jsm',
+     'ExtensionManagement.jsm',
+     'ExtensionStorage.jsm',
+     'ExtensionUtils.jsm',
+     'MessageChannel.jsm',
+     'Schemas.jsm',
+ ]
+diff --git a/toolkit/components/extensions/test/mochitest/chrome.ini b/toolkit/components/extensions/test/mochitest/chrome.ini
+--- a/toolkit/components/extensions/test/mochitest/chrome.ini
++++ b/toolkit/components/extensions/test/mochitest/chrome.ini
+@@ -1,15 +1,17 @@
+ [DEFAULT]
+ support-files =
+   file_download.html
+   file_download.txt
+   interruptible.sjs
+   file_sample.html
+ 
++[test_chrome_ext_classic_extension_context.html]
++skip-if = (os == 'android') # TODO: check if it is needed
+ [test_chrome_ext_background_debug_global.html]
+ skip-if = (os == 'android') # android doesn't have devtools
+ [test_chrome_ext_background_page.html]
+ skip-if = true # bug 1267328; was (toolkit == 'android') # android doesn't have devtools
+ [test_chrome_ext_downloads_download.html]
+ [test_chrome_ext_downloads_misc.html]
+ [test_chrome_ext_downloads_search.html]
+ [test_chrome_ext_eventpage_warning.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context.html b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context.html
+@@ -0,0 +1,88 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for simple WebExtension</title>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SpawnTask.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" href="chrome://mochikit/contents/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++add_task(function* classic_extension_context() {
++  function backgroundScript() {
++    browser.test.sendMessage("webextension-ready");
++
++    browser.test.onMessage.addListener(msg => {
++      if (msg == "do-connect") {
++        let port = chrome.runtime.connect();
++
++        port.onMessage.addListener((msg) => {
++          browser.test.assertEq("classic_extension -> webextension", msg,
++                                "Got the expected message from the ClassicExtensionContext");
++          port.postMessage("webextension -> classic_extension");
++        });
++      }
++    });
++  }
++
++  let extensionData = {
++    background: "new " + backgroundScript,
++  };
++
++  const {
++    ClassicExtensionContext,
++  } = SpecialPowers.Cu.import("resource://gre/modules/ClassicExtensionsUtils.jsm", {});
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++  yield extension.startup();
++  yield extension.awaitMessage("webextension-ready");
++
++  let classicContext = new ClassicExtensionContext({
++    id: extension.id,
++    url: "about:blank",
++  });
++
++  ok(classicContext, "Got a ClassicExtensionContext instance");
++
++  is(classicContext.type, "classic_extension",
++     "ClassicExtensionContext instance has the expected type");
++
++  ok(classicContext.api, "Got the API object");
++
++  let waitConnectPort = new Promise(resolve => {
++    classicContext.api.onConnect.addListener(port => {
++      resolve(port);
++    });
++  });
++
++  extension.sendMessage("do-connect");
++
++  let port = yield waitConnectPort;
++
++  ok(port, "Got the Port API object");
++
++  let waitPortMessage = new Promise(resolve => {
++    port.onMessage.addListener((msg) => {
++      resolve(msg);
++    });
++  });
++
++  port.postMessage("classic_extension -> webextension");
++
++  let msg = yield waitPortMessage;
++
++  is(msg, "webextension -> classic_extension",
++     "ClassicExtensionContext received the expected message from the webextension");
++
++  yield extension.unload();
++});
++
++</script>
++
++</body>
++</html>
