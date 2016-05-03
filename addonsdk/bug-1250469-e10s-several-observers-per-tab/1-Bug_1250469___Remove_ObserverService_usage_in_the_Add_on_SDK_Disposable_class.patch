@@ -1,9 +1,9 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1457555975 -3600
-#      Wed Mar 09 21:39:35 2016 +0100
-# Node ID 9c6149b99e81e61fad34bf5f77a64f25b01483db
-# Parent  b3006e4e09af81825badbad69fa3e8c546c7507c
+# Date 1457847255 -3600
+#      Sun Mar 13 06:34:15 2016 +0100
+# Node ID 3139e676e6625ff35af6fca0057220e804517313
+# Parent  5e9136916f72c2e28363b9be5ca90220d78ebe3b
 Bug 1250469 - Remove ObserverService usage in the Add-on SDK Disposable class
 
 MozReview-Commit-ID: 32X9M07FbHO
@@ -44,7 +44,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  
  const upgrade = method("disposable/upgrade");
  exports.upgrade = upgrade;
-@@ -37,38 +33,75 @@ exports.downgrade = downgrade;
+@@ -37,38 +33,77 @@ exports.downgrade = downgrade;
  
  const unload = method("disposable/unload");
  exports.unload = unload;
@@ -60,9 +60,11 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  
 +const { isWeak } = require("./reference");
 +const WeakSet = require("../lang/weak-set");
++
++const weakDisposables = {};
 +const disposables = new Set();
 +
-+on(addonUnloadTopic, ({ subject, data }) => {
++on(addonUnloadTopic, ({ subject }) => {
 +  if (subject.wrappedJSObject !== unloadSubject) {
 +    return;
 +  }
@@ -70,7 +72,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
 +  function tryDisposableUnload(disposable) {
 +    try {
 +      if (disposable) {
-+        unload(disposable, data);
++        unload(disposable);
 +      }
 +    } catch(e) {
 +      console.error("Error unloading a disposable", e);
@@ -83,18 +85,18 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
 +
 +  disposables.clear();
 +
-+  for (let disposable of WeakSet.iterator(disposables)) {
++  for (let disposable of WeakSet.iterator(weakDisposables)) {
 +    tryDisposableUnload(disposable);
 +  }
 +
-+  WeakSet.clear(disposables);
++  WeakSet.clear(weakDisposables);
 +});
  
  // Set's up disposable instance.
  const setupDisposable = disposable => {
 -  subscribe(disposable, addonUnloadTopic, isWeak(disposable));
 +  if (isWeak(disposable)) {
-+    WeakSet.add(disposables, disposable);
++    WeakSet.add(weakDisposables, disposable);
 +  } else {
 +    disposables.add(disposable);
 +  }
@@ -105,7 +107,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  const disposeDisposable = disposable => {
 -  unsubscribe(disposable, addonUnloadTopic);
 +  if (isWeak(disposable)) {
-+    WeakSet.remove(disposables, disposable);
++    WeakSet.remove(weakDisposables, disposable);
 +  } else {
 +    disposables.delete(disposable);
 +  }
@@ -124,7 +126,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
      setupDisposable(this);
    },
    destroy: function(reason) {
-@@ -81,53 +114,40 @@ const Disposable = Class({
+@@ -81,50 +116,39 @@ const Disposable = Class({
      // Implement your initialize logic here.
    },
    dispose: function() {
@@ -162,8 +164,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
      // reason (falling back to destroy if not found) and
      // delegate unloading to it.
      const unload = unloaders[reason] || unloaders.destroy;
--    unload(disposable);
-+    unload(disposable, reason);
+     unload(disposable);
    }
  });
  
@@ -178,14 +179,8 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  upgrade.define(Disposable, dispose);
  uninstall.define(Disposable, dispose);
  
--// If application is shut down no dispose is invoked as undo-ing
--// changes made by instance is likely to just waste of resources &
--// increase shutdown time. Although specefic components may choose
--// to implement shutdown handler that does something better.
--shutdown.define(Disposable, disposable => {});
-+// If the shutdown `dispose` is not defined some of the test cases
-+// will fail if the loader is unloading with 'shutdown' reason.
-+shutdown.define(Disposable, dispose);
+ // If application is shut down no dispose is invoked as undo-ing
+ // changes made by instance is likely to just waste of resources &
 diff --git a/addon-sdk/source/test/test-disposable.js b/addon-sdk/source/test/test-disposable.js
 --- a/addon-sdk/source/test/test-disposable.js
 +++ b/addon-sdk/source/test/test-disposable.js
@@ -254,11 +249,11 @@ diff --git a/addon-sdk/source/test/test-disposable.js b/addon-sdk/source/test/te
  
    f3.destroy("shutdown");
 -  assert.equal(disposals, 0, "shutdown doesn't invoke disposal");
-+  assert.equal(disposals, 1, "shutdown invoke disposal");
++  assert.equal(disposals, 0, "shutdown invoke disposal");
 +  f3.destroy("shutdown");
    f3.destroy();
 -  assert.equal(disposals, 0, "shutdown already skipped disposal");
-+  assert.equal(disposals, 1, "shutdown disposal happens just once");
++  assert.equal(disposals, 0, "shutdown disposal happens just once");
  
    disposals = 0;
    const f4 = new Foo();
