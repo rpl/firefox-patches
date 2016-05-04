@@ -1,10 +1,10 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1461777002 -7200
-#      Wed Apr 27 19:10:02 2016 +0200
-# Node ID fc16cd6cb02d25aa16ce915c5ac4fd3dc6435f45
-# Parent  ad203d6770991e4d40b2e8987b435f11800a5916
-NEXT: integrate EmbeddedWebExtensionsUtils helper into XPIProvider.
+# Date 1462361599 -7200
+#      Wed May 04 13:33:19 2016 +0200
+# Node ID e19e27630e9971740e413d1ac1ec458288c72764
+# Parent  564f8d6ce7c6957bbc780ce8d27b7afdb0063a9f
+Bug 1269342 - Integrate EmbeddedWebExtensionsUtils helper into XPIProvider. f?aswan
 
 MozReview-Commit-ID: Iw47S7OMP5S
 
@@ -30,7 +30,7 @@ diff --git a/toolkit/mozapps/extensions/internal/XPIProvider.jsm b/toolkit/mozap
                                     "ChromeRegistry",
                                     "@mozilla.org/chrome/chrome-registry;1",
                                     "nsIChromeRegistry");
-@@ -755,16 +757,17 @@ function EM_R(aProperty) {
+@@ -759,16 +761,17 @@ function EM_R(aProperty) {
  
  function createAddonDetails(id, aAddon) {
    return {
@@ -48,7 +48,7 @@ diff --git a/toolkit/mozapps/extensions/internal/XPIProvider.jsm b/toolkit/mozap
   *
   * @param  aType
   *         The internal add-on type
-@@ -1097,16 +1100,17 @@ function loadManifestFromRDF(aUri, aStre
+@@ -1101,16 +1104,17 @@ function loadManifestFromRDF(aUri, aStre
  
    addon.strictCompatibility = !(addon.type in COMPATIBLE_BY_DEFAULT_TYPES) ||
                                getRDFProperty(ds, root, "strictCompatibility") == "true";
@@ -66,7 +66,7 @@ diff --git a/toolkit/mozapps/extensions/internal/XPIProvider.jsm b/toolkit/mozap
        throw new Error("Install manifest specifies unknown type: " + addon.optionsType);
      }
    }
-@@ -4747,20 +4751,38 @@ this.XPIProvider = {
+@@ -4740,20 +4744,37 @@ this.XPIProvider = {
        };
  
        if (aExtraParams) {
@@ -77,8 +77,7 @@ diff --git a/toolkit/mozapps/extensions/internal/XPIProvider.jsm b/toolkit/mozap
  
 +      if (aAddon.enableEmbeddedWebExtension) {
 +        if (aReason == BOOTSTRAP_REASONS.ADDON_ENABLE) {
-+          params.embeddedWebExtensionAPI = EmbeddedWebExtensionsUtils
-+            .getAPIFor(params, params.resourceURI.resolve("/"));
++          params.embeddedWebExtensionAPI = EmbeddedWebExtensionsUtils.getAPIFor(params);
 +        } else if (aReason == BOOTSTRAP_REASONS.ADDON_DISABLE) {
 +          // shutdown the embedded webextension here, so that the onConnect event listener
 +          // on the classic extension side will be able to receive a disconect on the

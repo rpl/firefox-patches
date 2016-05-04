@@ -1,0 +1,328 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1462380160 -7200
+#      Wed May 04 18:42:40 2016 +0200
+# Node ID 564f8d6ce7c6957bbc780ce8d27b7afdb0063a9f
+# Parent  839905df34722e7ac0cbb1afaf1e7f7b3e1c1c1f
+Bug 1269342 - [webext] Add EmbeddedWebExtensionsUtils helper. f?aswan
+
+This patch introduces a new exported helper (EmbeddedWebExtensionsUtils)
+and its related testcase.
+
+EmbeddedWebExtensionsUtils is going to be integrated in the XPIProvider
+to provide the Embedded WebExtension to the Classic Extensions which
+have enabled it in their install.rdf
+
+MozReview-Commit-ID: 7M1DRkXjGat
+
+diff --git a/toolkit/components/extensions/ClassicExtensionsUtils.jsm b/toolkit/components/extensions/ClassicExtensionsUtils.jsm
+--- a/toolkit/components/extensions/ClassicExtensionsUtils.jsm
++++ b/toolkit/components/extensions/ClassicExtensionsUtils.jsm
+@@ -1,17 +1,17 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-this.EXPORTED_SYMBOLS = ["ClassicExtensionContext"];
++this.EXPORTED_SYMBOLS = ["ClassicExtensionContext", "EmbeddedWebExtensionsUtils"];
+ 
+-/* exported ClassicExtensionContext */
++/* exported ClassicExtensionContext, EmbeddedWebExtensionsUtils */
+ 
+ /**
+  *  This file exports helpers for Classic Extensions that wants to embed a webextensions
+  *  and exchange messages with the embedded WebExtensions' contexts.
+  */
+ 
+ const Ci = Components.interfaces;
+ const Cc = Components.classes;
+@@ -175,8 +175,148 @@ var ClassicExtensionContext = class exte
+   /**
+    *  The messaging API object exposed to the classic extension code to be exchange to
+    *  exchange messages with the associated webextension contexts.
+    */
+   get api() {
+     return this[ns].api;
+   }
+ };
++
++/**
++ *  This class instances are used internally by the exported EmbeddedWebExtensionsUtils
++ *  to manage the embedded webextension instance and the related ClassicExtensionContext
++ *  instance used to exchange messages with it.
++ */
++class EmbeddedWebExtension {
++  /**
++   *  Create a new EmbeddedWebExtension given the addon id and the base resource URI of the
++   *  container addon (the webextension resources will be loaded from the "webextension/"
++   *  subdir of the base resource URI for the classic extension addon).
++   *
++   *  @param containerAddonParams: (Object)
++   *    An object with the following properties:
++   *    - id: (String)
++   *      The Addon id of the Classic Extension which will contain the embedded webextension.
++   *    - resourceURI (nsIURI)
++   *      The nsIURI of the Classic Extension container addon.
++   */
++  constructor({id, resourceURI}) {
++    this.addonId = id;
++
++    let webextensionURI = Services.io.newURI(resourceURI.resolve("webextension/"), null, null);
++
++    this.webextension = new Extension({
++      id,
++      resourceURI: webextensionURI,
++    });
++
++    this.classicExtensionContext = new ClassicExtensionContext({
++      targetAddonId: id,
++      targetExtension: this.webextension,
++      senderURL: resourceURI.resolve("/"),
++    });
++
++    // destroy the ClassicExtensionContext cloneScope when
++    // the embedded webextensions is unloaded.
++    this.webextension.callOnClose(this.classicExtensionContext);
++  }
++
++  /**
++   *  The messaging API object exposed to the classic extension code to be able to
++   *  exchange messages with the associated webextension contexts.
++   */
++  get api() {
++    return this.classicExtensionContext.api;
++  }
++
++  /**
++   *  Start the embedded webextension (and report any loading error in the Browser console).
++   */
++  startup() {
++    this.webextension.startup()
++      .catch((err) => {
++        // Report an error if the embedded webextension fails during
++        // its startup.
++        let id = this.addonId;
++        Cu.reportError(`Embedded WebExtension startup failed for addonId ${id}: ${err}`);
++      });
++  }
++
++  /**
++   *  Shuts down the embedded webextension.
++   */
++  shutdown() {
++    this.webextension.shutdown();
++  }
++}
++
++
++// Map of the existent embeddedWebExtensions by add-on id,
++// used to retrieve the EmbeddedWebExtension class instances
++// between calls to callBootstrapMethod in the XPIProvider.
++const embeddedWebExtensionsMap = new Map();
++
++/**
++ *  This exported helper is used in the XPIProvider to automatically
++ *  provide the ClassicExtensionContext instance to both bootstrap.js or
++ *  SDK based add-ons that request it through their install.rdf metadata.
++ */
++var EmbeddedWebExtensionsUtils = {
++  /**
++   *  Retrieve an existent EmbeddedWebExtension instance (or lazily created
++   *  one if it doesn't exist yet) and return its associated API object.
++   *
++   *  @param addonParam: (Object)
++   *    An object with the following properties
++   *    - id: (String)
++   *      The Addon id of the Classic Extension which will contain the embedded webextension.
++   *    - resourceURI (nsIURI)
++   *      The nsIURI of the Classic Extension container addon.
++   */
++  getAPIFor({id, resourceURI}) {
++    let embeddedWebExtension;
++
++    // Create the embeddedWebExtension helper instance if it doesn't
++    // exist yet.
++    if (!embeddedWebExtensionsMap.has(id)) {
++      embeddedWebExtension = new EmbeddedWebExtension({id, resourceURI});
++      embeddedWebExtensionsMap.set(id, embeddedWebExtension);
++    } else {
++      embeddedWebExtension = embeddedWebExtensionsMap.get(id);
++    }
++
++    return embeddedWebExtension.api;
++  },
++
++  /**
++   *  Start the embedded webextension instance if any.
++   *
++   *  @param addonParam: (Object)
++   *    An object with the following properties
++   *    - id: (String)
++   */
++  startupFor({id}) {
++    let embeddedWebExtension = embeddedWebExtensionsMap.get(id);
++    if (embeddedWebExtension) {
++      embeddedWebExtension.startup();
++    } else {
++      Cu.reportError(`No embedded WebExtension found for addonId ${id}`);
++    }
++  },
++
++  /**
++   *  Stop the embedded webextension instance if any.
++   *
++   *  @param addonParam: (Object)
++   *    An object with the following properties
++   *    - id: (String)
++   */
++  shutdownFor({id}) {
++    let embeddedWebExtension = embeddedWebExtensionsMap.get(id);
++    if (embeddedWebExtension) {
++      embeddedWebExtension.shutdown();
++      embeddedWebExtensionsMap.delete(id);
++    } else {
++      Cu.reportError(`No embedded WebExtension found for addonId ${id}`);
++    }
++  },
++};
+diff --git a/toolkit/components/extensions/test/mochitest/chrome.ini b/toolkit/components/extensions/test/mochitest/chrome.ini
+--- a/toolkit/components/extensions/test/mochitest/chrome.ini
++++ b/toolkit/components/extensions/test/mochitest/chrome.ini
+@@ -3,16 +3,17 @@ support-files =
+   file_download.html
+   file_download.txt
+   interruptible.sjs
+   file_sample.html
+ 
+ [test_chrome_ext_classic_extension_context.html]
+ [test_chrome_ext_classic_extension_context_contentscript.html]
+ skip-if = (os == 'android') # User browser.tabs and TabManager. Bug 1258975 on android.
++[test_chrome_ext_classic_extension_embedding.html]
+ [test_chrome_ext_background_debug_global.html]
+ skip-if = (os == 'android') # android doesn't have devtools
+ [test_chrome_ext_background_page.html]
+ skip-if = true # bug 1267328; was (toolkit == 'android') # android doesn't have devtools
+ [test_chrome_ext_downloads_download.html]
+ [test_chrome_ext_downloads_misc.html]
+ [test_chrome_ext_downloads_search.html]
+ [test_chrome_ext_eventpage_warning.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_embedding.html b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_embedding.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_embedding.html
+@@ -0,0 +1,113 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for simple WebExtension</title>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SpawnTask.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" href="chrome://mochikit/contents/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++const {
++  EmbeddedWebExtensionsUtils,
++} = SpecialPowers.Cu.import("resource://gre/modules/ClassicExtensionsUtils.jsm", {});
++
++const {
++  Extension,
++} = SpecialPowers.Cu.import("resource://gre/modules/Extension.jsm", {});
++
++
++/**
++ *  This test case ensures that the EmbeddedWebExtensionsUtils:
++ *   - load the embedded webextension resources from a "/webextension/" dir
++ *     inside the XPI
++ *   - EmbeddedEebExtensionsUtils.getAPIFor returns an API object which exposes
++ *     a working `runtime.onConnect` event object (e.g. the API can receive a port
++ *     when the embedded webextension is started  and it can exchange messages
++ *     with the background page)
++ *   - EmbeddedWebExtensionsUtils.startup/shutdown methods manage the embedded
++ *     webextension lifecycle as expected
++ *   - The port object receive a disconnect event when the embedded webextension is
++ *     shutting down
++ */
++add_task(function* classic_extension_context() {
++  function backgroundScript() {
++    let port = chrome.runtime.connect();
++
++    port.onMessage.addListener((msg) => {
++      if (msg == "classic_extension -> webextension") {
++        port.postMessage("webextension -> classic_extension");
++      }
++    });
++  }
++
++  const id = "@test.embedded.web.extension";
++  let xpi = Extension.generateXPI(id, {
++    files: {
++      "webextension/manifest.json": `{
++       "applications": {"gecko": {"id": "${id}"}},
++       "name": "embedded webextension name",
++       "manifest_version": 2,
++       "version": "1.0",
++       "background": {
++         "scripts": ["bg.js"]
++       }
++     }`,
++      "webextension/bg.js": `new ${backgroundScript}`,
++    },
++  });
++
++  let fileURI = SpecialPowers.Services.io.newFileURI(xpi);
++  let resourceURI = SpecialPowers.Services.io.newURI(`jar:${fileURI.spec}!/`, null, null);
++
++  let embeddedWebExtensionAPI = EmbeddedWebExtensionsUtils.getAPIFor({
++    id, resourceURI,
++  }, resourceURI.resolve("/"));
++
++  ok(embeddedWebExtensionAPI, "Got the embeddedExtensionAPI object");
++
++  let waitConnectPort = new Promise(resolve => {
++    embeddedWebExtensionAPI.onConnect.addListener(port => {
++      resolve(port);
++    });
++  });
++
++  EmbeddedWebExtensionsUtils.startupFor({id});
++
++  let port = yield waitConnectPort;
++
++  ok(port, "Got the Port API object");
++
++  let waitPortMessage = new Promise(resolve => {
++    port.onMessage.addListener((msg) => {
++      resolve(msg);
++    });
++  });
++
++  port.postMessage("classic_extension -> webextension");
++
++  let msg = yield waitPortMessage;
++
++  is(msg, "webextension -> classic_extension",
++     "ClassicExtensionContext received the expected message from the webextension");
++
++  let waitForDisconnect = new Promise(resolve => {
++    port.onDisconnect.addListener(resolve);
++  });
++
++  EmbeddedWebExtensionsUtils.shutdownFor({id});
++
++  yield waitForDisconnect;
++
++  info("Got the disconnect event on shutdown");
++});
++
++</script>
++
++</body>
++</html>

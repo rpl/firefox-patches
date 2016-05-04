@@ -1,0 +1,540 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1462380117 -7200
+#      Wed May 04 18:41:57 2016 +0200
+# Node ID 839905df34722e7ac0cbb1afaf1e7f7b3e1c1c1f
+# Parent  2e135e4c3c919c95d8bcbf3df7d3283175cefd5f
+Bug 1252215 - [webext] ClassicExtensionsUtils JSM module and ClassicExtensionContext helper. r?aswan
+
+- this new module contains helpers to be able to receive connections
+  originated from a webextension context from a classic extension context
+  (implemented by the `ClassicExtensionContext` class exported from
+  this new jsm module)
+
+- two new mochitest-chrome test files ensures that the ClassicExtensionContext can receive a Port
+  object and exchange messages with a background page and a content script (the content script test
+  is in a different test file because it doesn't currently work on android, because it needs
+  the browser.tabs API and the TabManager internal helper)
+
+MozReview-Commit-ID: DS1NTXk0fB6
+
+diff --git a/toolkit/components/extensions/ClassicExtensionsUtils.jsm b/toolkit/components/extensions/ClassicExtensionsUtils.jsm
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/ClassicExtensionsUtils.jsm
+@@ -0,0 +1,182 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++"use strict";
++
++this.EXPORTED_SYMBOLS = ["ClassicExtensionContext"];
++
++/* exported ClassicExtensionContext */
++
++/**
++ *  This file exports helpers for Classic Extensions that wants to embed a webextensions
++ *  and exchange messages with the embedded WebExtensions' contexts.
++ */
++
++const Ci = Components.interfaces;
++const Cc = Components.classes;
++const Cu = Components.utils;
++const Cr = Components.results;
++const CC = Components.Constructor;
++
++Cu.import("resource://gre/modules/Services.jsm");
++Cu.import("resource://gre/modules/XPCOMUtils.jsm");
++
++// Lazy import Extension and Management
++XPCOMUtils.defineLazyModuleGetter(this, "Extension",
++                                  "resource://gre/modules/Extension.jsm");
++XPCOMUtils.defineLazyModuleGetter(this, "Management",
++                                  "resource://gre/modules/Extension.jsm");
++
++// Import Messenger and BaseContext from ExtensionUtils.
++const {
++  ExtensionUtils: {
++    Messenger,
++    BaseContext,
++  },
++} = Cu.import("resource://gre/modules/ExtensionUtils.jsm", {});
++
++
++const systemPrincipal = CC("@mozilla.org/systemprincipal;1", "nsIPrincipal")();
++
++const ns = Symbol();
++
++/**
++ *  Instances created from this class provides to a classic extension
++ *  a simple API to exchange messages with a webextension.
++ */
++var ClassicExtensionContext = class extends BaseContext {
++  /**
++   *  Create a new ClassicExtensionContext given an addon id and an optional
++   *  url (which can be used to recognized the messages of container context).
++   *
++   *  @param classicExtentionContextParams: (Object)
++   *    An object with the following properties:
++   *    - targetAddonId: (String)
++   *      The Addon id of the target webextension.
++   *    - targetExtension: (Extension [optional])
++   *      The webextension instance associated with this context (which defaults to a
++   *      fake extension object with senderId as the fake extension uuid and without
++   *      any permission on its own). This will be the instance of the newly created
++   *      embedded webextension when this class is used through the EmbeddedWebExtensionsUtils.
++   *    - senderId: (String [optional])
++   *      The id (or uuid) of the classic extension which is joining the webextension
++   *      messaging (which defaults to targetExtension.uuid if missing).
++   *    - senderURL: (String [optional])
++   *      An URL to mark the messages sent from this context.
++   */
++  constructor({targetAddonId, targetExtension, senderId, senderURL}) {
++    if (!targetAddonId) {
++      throw new Error("targetAddonId parameter is mandatory");
++    }
++
++    super(targetAddonId);
++
++    // associate this context with the targetExtension object or
++    // to a fake extension which:
++    //  - has senderId as the fake extension uuid
++    //  - does not have any permission on its own
++    this.extension = targetExtension || {
++      uuid: senderId,
++      hasPermission: () => false,
++    };
++
++    let sender = {
++      id: this.extension.uuid,
++      url: senderURL,
++    };
++
++    let filter = {extensionId: targetAddonId};
++
++    // The empty getSender is needed so that the messaging works even on
++    // platforms where TabManager is not currently supported (e.g. Android).
++    let delegate = {
++      getSender() {},
++    };
++
++    // This page-load event is handled synchronously by ext-tabs.js
++    // and will put a getSender method in the delegate object, that will
++    // be able to resolve the tab object when the connection is originated
++    // from a tab (e.g. a content script).
++    Management.emit("page-load", this, {type: this.type}, sender, delegate);
++
++    // Create private instance data.
++    this[ns] = {};
++
++    // Classic Extensions (xul overlays, bootstrap restartless and Addon SDK)
++    // runs with a systemPrincipal.
++    this[ns].addonPrincipal = systemPrincipal;
++
++    this[ns].messenger = new Messenger(this, [Services.mm, Services.ppmm],
++                                       sender, filter, delegate);
++
++    this[ns].cloneScope = Cu.Sandbox(this[ns].addonPrincipal, {});
++    Cu.setSandboxMetadata(this[ns].cloneScope, {addonId: targetAddonId});
++
++    this[ns].api = {
++      onConnect: this[ns].messenger.onConnect("runtime.onConnect"),
++    };
++  }
++
++  /**
++   *  Close the context, by nuking its `cloneScope` sandbox, when the associated
++   *  webextension is shutting down or the this helper instance is needed anymore.
++   */
++  close() {
++    Cu.nukeSandbox(this.cloneScope);
++  }
++
++  /**
++   *  Signal that the context is shutting down and call the unload method.
++   *  Called when the extension shuts down.
++   */
++  shutdown() {
++    this.unload();
++  }
++
++  /**
++   *  This method is called when an the extension shuts down or unloaded.
++   */
++  unload() {
++    if (this.unloaded) {
++      return;
++    }
++
++    super.unload();
++  }
++
++  /**
++   *  The sandbox associated to this context (used by the messaging
++   *  internals as the sandbox to clone the received messages into).
++   */
++  get cloneScope() {
++    return this[ns].cloneScope;
++  }
++
++  /**
++   *  The custom type of this context (that will always be
++   *  "classic_extension").
++   */
++  get type() {
++    // Instead of the usually set extension context type, always return
++    // "classic_extension".
++    return "classic_extension";
++  }
++
++  /**
++   *  The principal associated to the context (which is a system principal as the other
++   *  code running in a classic extension).
++   */
++  get principal() {
++    // Return the addon principal.
++    return this[ns].addonPrincipal;
++  }
++
++  /**
++   *  The messaging API object exposed to the classic extension code to be exchange to
++   *  exchange messages with the associated webextension contexts.
++   */
++  get api() {
++    return this[ns].api;
++  }
++};
+diff --git a/toolkit/components/extensions/Extension.jsm b/toolkit/components/extensions/Extension.jsm
+--- a/toolkit/components/extensions/Extension.jsm
++++ b/toolkit/components/extensions/Extension.jsm
+@@ -1,15 +1,15 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ "use strict";
+ 
+-this.EXPORTED_SYMBOLS = ["Extension", "ExtensionData"];
++this.EXPORTED_SYMBOLS = ["Extension", "ExtensionData", "Management"];
+ 
+ /* globals Extension ExtensionData */
+ 
+ /*
+  * This file is the main entry point for extensions. When an extension
+  * loads, its bootstrap.js file creates a Extension instance
+  * and calls .startup() on it. It calls .shutdown() when the extension
+  * unloads. Extension manages any extension-specific state in
+@@ -116,17 +116,17 @@ const COMMENT_REGEXP = new RegExp(String
+     //.*
+   `.replace(/\s+/g, ""), "gm");
+ 
+ var scriptScope = this;
+ 
+ var ExtensionContext, GlobalManager;
+ 
+ // This object loads the ext-*.js scripts that define the extension API.
+-var Management = {
++var Management = this.Management = {
+   initialized: null,
+   scopes: [],
+   apis: [],
+   schemaApis: [],
+   emitter: new EventEmitter(),
+ 
+   // Loads all the ext-*.js scripts currently registered.
+   lazyInit() {
+diff --git a/toolkit/components/extensions/moz.build b/toolkit/components/extensions/moz.build
+--- a/toolkit/components/extensions/moz.build
++++ b/toolkit/components/extensions/moz.build
+@@ -1,15 +1,16 @@
+ # -*- Mode: python; c-basic-offset: 4; indent-tabs-mode: nil; tab-width: 40 -*-
+ # vim: set filetype=python:
+ # This Source Code Form is subject to the terms of the Mozilla Public
+ # License, v. 2.0. If a copy of the MPL was not distributed with this
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ EXTRA_JS_MODULES += [
++    'ClassicExtensionsUtils.jsm',
+     'Extension.jsm',
+     'ExtensionContent.jsm',
+     'ExtensionManagement.jsm',
+     'ExtensionStorage.jsm',
+     'ExtensionUtils.jsm',
+     'MessageChannel.jsm',
+     'Schemas.jsm',
+ ]
+diff --git a/toolkit/components/extensions/test/mochitest/chrome.ini b/toolkit/components/extensions/test/mochitest/chrome.ini
+--- a/toolkit/components/extensions/test/mochitest/chrome.ini
++++ b/toolkit/components/extensions/test/mochitest/chrome.ini
+@@ -1,15 +1,18 @@
+ [DEFAULT]
+ support-files =
+   file_download.html
+   file_download.txt
+   interruptible.sjs
+   file_sample.html
+ 
++[test_chrome_ext_classic_extension_context.html]
++[test_chrome_ext_classic_extension_context_contentscript.html]
++skip-if = (os == 'android') # User browser.tabs and TabManager. Bug 1258975 on android.
+ [test_chrome_ext_background_debug_global.html]
+ skip-if = (os == 'android') # android doesn't have devtools
+ [test_chrome_ext_background_page.html]
+ skip-if = true # bug 1267328; was (toolkit == 'android') # android doesn't have devtools
+ [test_chrome_ext_downloads_download.html]
+ [test_chrome_ext_downloads_misc.html]
+ [test_chrome_ext_downloads_search.html]
+ [test_chrome_ext_eventpage_warning.html]
+diff --git a/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context.html b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context.html
+@@ -0,0 +1,112 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for simple WebExtension</title>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SpawnTask.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" href="chrome://mochikit/contents/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++/**
++ *  This test case ensures that ClassicExtensionContext instances:
++ *   - expose the expected API object and can join the messaging
++ *     of a webextension given its addon id
++ *   - the exposed API object can receive a port related to a `runtime.connect`
++ *     Port created in the webextension's background page
++ *   - the received Port instance can exchange messages with the background page
++ *   - the received Port receive a disconnect event when the webextension is
++ *     shutting down
++ */
++add_task(function* classic_extension_context() {
++  function backgroundScript() {
++    browser.test.sendMessage("webextension-ready");
++
++    browser.test.onMessage.addListener(msg => {
++      if (msg == "do-connect") {
++        let port = chrome.runtime.connect();
++
++        port.onMessage.addListener(msg => {
++          browser.test.assertEq("classic_extension -> webextension", msg,
++                                "Got the expected message from the ClassicExtensionContext");
++          port.postMessage("webextension -> classic_extension");
++        });
++      }
++    });
++  }
++
++  let extensionData = {
++    background: "new " + backgroundScript,
++  };
++
++  const {
++    ClassicExtensionContext,
++  } = SpecialPowers.Cu.import("resource://gre/modules/ClassicExtensionsUtils.jsm", {});
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++  yield extension.startup();
++  yield extension.awaitMessage("webextension-ready");
++
++  let classicContext = new ClassicExtensionContext({
++    targetAddonId: extension.id,
++    sourceAddonId: "@fake-source-addon-id",
++    sourceContextURL: "about:blank",
++  });
++
++  ok(classicContext, "Got a ClassicExtensionContext instance");
++
++  is(classicContext.type, "classic_extension",
++     "ClassicExtensionContext instance has the expected type");
++
++  ok(classicContext.api, "Got the API object");
++
++  let waitConnectPort = new Promise(resolve => {
++    classicContext.api.onConnect.addListener(port => {
++      resolve(port);
++    });
++  });
++
++  extension.sendMessage("do-connect");
++
++  let port = yield waitConnectPort;
++
++  ok(port, "Got the Port API object");
++  ok(port.sender, "The port has a sender property");
++  ok(port.sender.id, "The port sender has an id property");
++  ok(port.sender.url, "The port sender has an url property");
++
++  let waitPortMessage = new Promise(resolve => {
++    port.onMessage.addListener((msg) => {
++      resolve(msg);
++    });
++  });
++
++  port.postMessage("classic_extension -> webextension");
++
++  let msg = yield waitPortMessage;
++
++  is(msg, "webextension -> classic_extension",
++     "ClassicExtensionContext received the expected message from the webextension");
++
++  let waitForDisconnect = new Promise(resolve => {
++    port.onDisconnect.addListener(resolve);
++  });
++
++  yield extension.unload();
++
++  yield waitForDisconnect;
++
++  info("Got the disconnect event on unload");
++
++  classicContext.shutdown();
++});
++
++</script>
++
++</body>
++</html>
+diff --git a/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context_contentscript.html b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context_contentscript.html
+new file mode 100644
+--- /dev/null
++++ b/toolkit/components/extensions/test/mochitest/test_chrome_ext_classic_extension_context_contentscript.html
+@@ -0,0 +1,130 @@
++<!DOCTYPE HTML>
++<html>
++<head>
++  <title>Test for simple WebExtension</title>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/SpawnTask.js"></script>
++  <script src="chrome://mochikit/content/tests/SimpleTest/ExtensionTestUtils.js"></script>
++  <script type="text/javascript" src="head.js"></script>
++  <link rel="stylesheet" href="chrome://mochikit/contents/tests/SimpleTest/test.css"/>
++</head>
++<body>
++
++<script type="text/javascript">
++"use strict";
++
++/**
++ *  This test case ensures that the ClassicExtensionContext can receive a connection
++ *  from a content script and that the received port contains the expected sender
++ *  tab info.
++ */
++add_task(function* classic_extension_context_contentscript_connection() {
++  function backgroundScript() {
++    browser.test.onMessage.addListener(msg => {
++      if (msg == "close-current-tab") {
++        browser.tabs.query({active: true})
++          .then(tabs => browser.tabs.remove(tabs[0].id))
++          .then(() => browser.test.notifyPass("current-tab-closed"))
++          .catch(() => browser.test.notifyFail("current-tab-closed"));
++      }
++    });
++  }
++
++  function contentScript() {
++    let port = chrome.runtime.connect();
++
++    port.onMessage.addListener(msg => {
++      browser.test.assertEq("classic_extension -> webextension", msg,
++                            "Got the expected message from the ClassicExtensionContext");
++      port.postMessage("webextension -> classic_extension");
++    });
++  }
++
++  let extensionData = {
++    background: `new ${backgroundScript}`,
++    manifest: {
++      "content_scripts": [
++        {
++          "matches": ["http://example.com/*"],
++          "js": ["content-script.js"],
++          "run_at": "document_idle",
++        },
++      ],
++    },
++    files: {
++      "content-script.js": `new ${contentScript}`,
++    },
++  };
++
++  const {
++    ClassicExtensionContext,
++  } = SpecialPowers.Cu.import("resource://gre/modules/ClassicExtensionsUtils.jsm", {});
++
++  let extension = ExtensionTestUtils.loadExtension(extensionData);
++
++  yield extension.startup();
++
++  let classicContext = new ClassicExtensionContext({
++    targetAddonId: extension.id,
++    sourceAddonId: "@fake-source-addon-id",
++    sourceContextURL: "about:blank",
++  });
++
++  ok(classicContext, "Got a ClassicExtensionContext instance");
++
++  is(classicContext.type, "classic_extension",
++     "ClassicExtensionContext instance has the expected type");
++
++  ok(classicContext.api, "Got the API object");
++
++  let waitConnectPort = new Promise(resolve => {
++    classicContext.api.onConnect.addListener(port => {
++      resolve(port);
++    });
++  });
++
++  window.open("http://example.com");
++
++  let port = yield waitConnectPort;
++
++  ok(port, "Got the Port API object");
++  ok(port.sender, "The port has a sender property");
++  ok(port.sender.id, "The port sender has an id property");
++  ok(port.sender.url, "The port sender has an url property");
++  ok(port.sender.tab, "The port sender has a tab property");
++  ok(port.sender.tab.id, "The port sender tab has an id property");
++
++  let waitPortMessage = new Promise(resolve => {
++    port.onMessage.addListener((msg) => {
++      resolve(msg);
++    });
++  });
++
++  port.postMessage("classic_extension -> webextension");
++
++  let msg = yield waitPortMessage;
++
++  is(msg, "webextension -> classic_extension",
++     "ClassicExtensionContext received the expected message from the webextension");
++
++  let waitForDisconnect = new Promise(resolve => {
++    port.onDisconnect.addListener(resolve);
++  });
++
++  extension.sendMessage("close-current-tab");
++
++  yield waitForDisconnect;
++
++  info("Got the disconnect event on tab closed");
++
++  yield extension.awaitFinish("current-tab-closed");
++
++  yield extension.unload();
++
++  classicContext.shutdown();
++});
++
++</script>
++
++</body>
++</html>
