@@ -1,0 +1,207 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1462839392 -7200
+#      Tue May 10 02:16:32 2016 +0200
+# Node ID 9bf2be0de26f7edbda7204657ab4fca77e36f159
+# Parent  d8379d17070aca105575eb3364a7388850c02277
+TMP: log when no CleanUI is called, forceGC after each test, prevent exception on removeObserver, skip simple-prefs.
+
+MozReview-Commit-ID: GRUddE80OUw
+
+diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/sdk/core/disposable.js
+--- a/addon-sdk/source/lib/sdk/core/disposable.js
++++ b/addon-sdk/source/lib/sdk/core/disposable.js
+@@ -4,16 +4,17 @@
+ 
+ "use strict";
+ 
+ module.metadata = {
+   "stability": "experimental"
+ };
+ 
+ const { Cu, Ci } = require("chrome");
++const { Services } = Cu.import("resource://gre/modules/Services.jsm");
+ 
+ const { Class } = require("./heritage");
+ const method = require("../../method/core");
+ 
+ const unloadSubject = require('@loader/unload');
+ const addonUnloadTopic = "sdk:loader:destroy";
+ 
+ const { on } = require('../system/events');
+@@ -55,24 +56,29 @@ on(addonUnloadTopic, ({ subject }) => {
+   }
+ 
+   function tryDisposableUnload(disposable) {
+     let realDisposable = disposable instanceof Ci.xpcIJSWeakReference ?
+           disposable.get() : disposable;
+ 
+     try {
+       if (realDisposable) {
++        console.log("DISPOSABLE UNLOADING...");
+         unload(realDisposable);
++        console.log("DISPOSABLE UNLOADED...");
+       }
+     } catch(e) {
+-      console.error("Error unloading a disposable", realDisposable, e);
++      console.error("Error unloading a",
++                    disposable instanceof Ci.xpcIJSWeakReference ?
++                      "weak disposable" : "disposable",
++                    realDisposable, e);
+     }
+   }
+ 
+-  for (let disposable of disposables) {
++  for (let disposable of Array.from(disposables).reverse()) {
+     tryDisposableUnload(disposable);
+   }
+ 
+   disposables.clear();
+ });
+ 
+ // Set's up disposable instance.
+ const setupDisposable = disposable => {
+diff --git a/addon-sdk/source/lib/sdk/deprecated/unit-test.js b/addon-sdk/source/lib/sdk/deprecated/unit-test.js
+--- a/addon-sdk/source/lib/sdk/deprecated/unit-test.js
++++ b/addon-sdk/source/lib/sdk/deprecated/unit-test.js
+@@ -9,16 +9,17 @@ module.metadata = {
+ 
+ const timer = require("../timers");
+ const cfxArgs = require("../test/options");
+ const { getTabs, closeTab, getURI, getTabId, getSelectedTab } = require("../tabs/utils");
+ const { windows, isBrowser, getMostRecentBrowserWindow } = require("../window/utils");
+ const { defer, all, Debugging: PromiseDebugging, resolve } = require("../core/promise");
+ const { getInnerId } = require("../window/utils");
+ const { cleanUI } = require("../test/utils");
++const { Cu } = require("chrome");
+ 
+ const findAndRunTests = function findAndRunTests(options) {
+   var TestFinder = require("./unit-test-finder").TestFinder;
+   var finder = new TestFinder({
+     filter: options.filter,
+     testInProcess: options.testInProcess,
+     testOutOfProcess: options.testOutOfProcess
+   });
+@@ -363,20 +364,22 @@ TestRunner.prototype = {
+           }
+         }
+       }
+ 
+       return failure;
+     }).
+     then(failure => {
+       if (!failure) {
+-        this.pass("There was a clean UI.");
++        this.pass("No Failure. No clean UI called.");
++        Cu.forceGC();
+         return null;
+       }
+       return cleanUI().then(() => {
++        Cu.forceGC();
+         this.pass("There is a clean UI.");
+       });
+     }).
+     then(() => {
+       this.testRunSummary.push({
+         name: this.test.name,
+         passed: this.test.passed,
+         failed: this.test.failed,
+diff --git a/addon-sdk/source/lib/sdk/system/events.js b/addon-sdk/source/lib/sdk/system/events.js
+--- a/addon-sdk/source/lib/sdk/system/events.js
++++ b/addon-sdk/source/lib/sdk/system/events.js
+@@ -9,21 +9,22 @@ module.metadata = {
+ };
+ 
+ const { Cc, Ci, Cu } = require('chrome');
+ const { Unknown } = require('../platform/xpcom');
+ const { Class } = require('../core/heritage');
+ const { ns } = require('../core/namespace');
+ const observerService =
+   Cc['@mozilla.org/observer-service;1'].getService(Ci.nsIObserverService);
+-const { addObserver, removeObserver, notifyObservers } = observerService;
++const { addObserver, removeObserver, notifyObservers, enumerateObservers } = observerService;
+ const { ShimWaiver } = Cu.import("resource://gre/modules/ShimWaiver.jsm");
+ const addObserverNoShim = ShimWaiver.getProperty(observerService, "addObserver");
+ const removeObserverNoShim = ShimWaiver.getProperty(observerService, "removeObserver");
+ const notifyObserversNoShim = ShimWaiver.getProperty(observerService, "notifyObservers");
++const enumerateObserversNoShim = ShimWaiver.getProperty(observerService, "enumerateObservers");
+ const unloadSubject = require('@loader/unload');
+ 
+ const Subject = Class({
+   extends: Unknown,
+   initialize: function initialize(object) {
+     // Double-wrap the object and set a property identifying the
+     // wrappedJSObject as one of our wrappers to distinguish between
+     // subjects that are one of our wrappers (which we should unwrap
+@@ -133,21 +134,29 @@ exports.once = once;
+ function off(type, listener, shimmed = false) {
+   // Take list of observers as with the given `listener`.
+   let observers = subscribers(listener);
+   // If `observer` for the given `type` is registered, then
+   // remove it & unregister.
+   if (type in observers) {
+     let observer = observers[type];
+     delete observers[type];
++
++    // Check empty observer list before removing to prevents
++    // failures due to removeObserver raises a failure exception.
+     if (shimmed) {
+-      removeObserver(observer, type);
++      if (enumerateObservers(type).hasMoreElements()) {
++        removeObserver(observer, type);
++      }
+     } else {
+-      removeObserverNoShim(observer, type);
++      if (enumerateObserversNoShim(type).hasMoreElements()) {
++        removeObserverNoShim(observer, type);
++      }
+     }
++
+     stillAlive.delete(weakRefs.get(observer));
+     wasShimmed.delete(weakRefs.get(observer));
+   }
+ }
+ exports.off = off;
+ 
+ // must use WeakMap to keep reference to all the WeakRefs (!), see bug 986115
+ var weakRefs = new WeakMap();
+@@ -158,17 +167,17 @@ var stillAlive = new Map();
+ var wasShimmed = new Map();
+ 
+ on('sdk:loader:destroy', function onunload({ subject, data: reason }) {
+   // using logic from ./unload, to avoid a circular module reference
+   if (subject.wrappedJSObject === unloadSubject) {
+     off('sdk:loader:destroy', onunload, false);
+ 
+     // don't bother
+-    if (reason === 'shutdown') 
++    if (reason === 'shutdown')
+       return;
+ 
+     stillAlive.forEach( (type, ref) => {
+       let observer = ref.get();
+       if (observer) {
+         if (wasShimmed.get(ref)) {
+           removeObserver(observer, type);
+         } else {
+diff --git a/addon-sdk/source/test/jetpack-package.ini b/addon-sdk/source/test/jetpack-package.ini
+--- a/addon-sdk/source/test/jetpack-package.ini
++++ b/addon-sdk/source/test/jetpack-package.ini
+@@ -115,16 +115,17 @@ skip-if = true
+ [test-rules.js]
+ [test-sandbox.js]
+ [test-selection.js]
+ [test-self.js]
+ [test-sequence.js]
+ [test-set-exports.js]
+ [test-shared-require.js]
+ [test-simple-prefs.js]
++skip-if = debug ### TODO: debug is test-simple-prefs runs, then test-tabs-events crash
+ [test-simple-storage.js]
+ [test-system-events.js]
+ [test-system-input-output.js]
+ [test-system-runtime.js]
+ [test-system-startup.js]
+ [test-system.js]
+ [test-tab-events.js]
+ [test-tab-observer.js]
