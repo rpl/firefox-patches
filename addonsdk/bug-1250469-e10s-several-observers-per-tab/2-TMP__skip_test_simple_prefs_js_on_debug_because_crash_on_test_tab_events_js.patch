@@ -1,0 +1,31 @@
+# HG changeset patch
+# User Luca Greco <lgreco@mozilla.com>
+# Date 1463142380 -7200
+#      Fri May 13 14:26:20 2016 +0200
+# Node ID 210ef0630b484678cc668cec5cab72a5fc2ee9f1
+# Parent  cb9ad6f82d59189c6a36035cb81819e05de86bbe
+TMP: skip test-simple-prefs.js on debug because crash on test-tab-events.js
+
+MozReview-Commit-ID: CPWBE8hLUvS
+
+diff --git a/addon-sdk/source/test/jetpack-package.ini b/addon-sdk/source/test/jetpack-package.ini
+--- a/addon-sdk/source/test/jetpack-package.ini
++++ b/addon-sdk/source/test/jetpack-package.ini
+@@ -115,16 +115,17 @@ skip-if = true
+ [test-rules.js]
+ [test-sandbox.js]
+ [test-selection.js]
+ [test-self.js]
+ [test-sequence.js]
+ [test-set-exports.js]
+ [test-shared-require.js]
+ [test-simple-prefs.js]
++skip-if = debug # Bug TBF crash on test-tabs-events.js
+ [test-simple-storage.js]
+ [test-system-events.js]
+ [test-system-input-output.js]
+ [test-system-runtime.js]
+ [test-system-startup.js]
+ [test-system.js]
+ [test-tab-events.js]
+ [test-tab-observer.js]

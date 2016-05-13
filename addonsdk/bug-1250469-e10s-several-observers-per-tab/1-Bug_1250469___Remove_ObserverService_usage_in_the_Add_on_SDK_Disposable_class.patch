@@ -1,8 +1,8 @@
 # HG changeset patch
 # User Luca Greco <lgreco@mozilla.com>
-# Date 1457847255 -3600
-#      Sun Mar 13 06:34:15 2016 +0100
-# Node ID 3139e676e6625ff35af6fca0057220e804517313
+# Date 1463104367 -7200
+#      Fri May 13 03:52:47 2016 +0200
+# Node ID cb9ad6f82d59189c6a36035cb81819e05de86bbe
 # Parent  5e9136916f72c2e28363b9be5ca90220d78ebe3b
 Bug 1250469 - Remove ObserverService usage in the Add-on SDK Disposable class
 
@@ -11,7 +11,7 @@ MozReview-Commit-ID: 32X9M07FbHO
 diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/sdk/core/disposable.js
 --- a/addon-sdk/source/lib/sdk/core/disposable.js
 +++ b/addon-sdk/source/lib/sdk/core/disposable.js
-@@ -3,31 +3,27 @@
+@@ -3,31 +3,29 @@
   * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
  
  "use strict";
@@ -20,7 +20,8 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
    "stability": "experimental"
  };
  
--
++const { Cu, Ci } = require("chrome");
+ 
  const { Class } = require("./heritage");
 -const { Observer, subscribe, unsubscribe, observe } = require("./observer");
 -const { isWeak, WeakReference } = require("./reference");
@@ -30,7 +31,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  const addonUnloadTopic = "sdk:loader:destroy";
  
 -
-+const { on } = require('../system/events');
++const { Observer, subscribe, unsubscribe, observe } = require("./observer");
  
  const uninstall = method("disposable/uninstall");
  exports.uninstall = uninstall;
@@ -44,7 +45,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  
  const upgrade = method("disposable/upgrade");
  exports.upgrade = upgrade;
-@@ -37,38 +33,77 @@ exports.downgrade = downgrade;
+@@ -37,38 +35,86 @@ exports.downgrade = downgrade;
  
  const unload = method("disposable/unload");
  exports.unload = unload;
@@ -59,44 +60,51 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  setup.define(Object, (object, ...args) => object.setup(...args));
  
 +const { isWeak } = require("./reference");
-+const WeakSet = require("../lang/weak-set");
 +
-+const weakDisposables = {};
++const disposablesWeakRefs = new WeakMap();
 +const disposables = new Set();
 +
-+on(addonUnloadTopic, ({ subject }) => {
++const DisposablesUnloadObserver = Class({ implements: [Observer] });
++const disposablesUnloadObserver = new DisposablesUnloadObserver();
++
++observe.define(DisposablesUnloadObserver, (obj, subject, topic, data) => {
 +  if (subject.wrappedJSObject !== unloadSubject) {
 +    return;
 +  }
 +
 +  function tryDisposableUnload(disposable) {
++    let realDisposable = disposable instanceof Ci.xpcIJSWeakReference ?
++          disposable.get() : disposable;
++
 +    try {
-+      if (disposable) {
-+        unload(disposable);
++      if (realDisposable) {
++        unload(realDisposable);
 +      }
 +    } catch(e) {
-+      console.error("Error unloading a disposable", e);
-+    }
-+  }
++      console.error("Error unloading a",
++                    disposable instanceof Ci.xpcIJSWeakReference ?
++                   "weak disposable" : "disposable",
++                   realDisposable, e);
++   }
++ }
 +
-+  for (let disposable of disposables) {
-+    tryDisposableUnload(disposable);
-+  }
++ for (let disposable of disposables) {
++   tryDisposableUnload(disposable);
++ }
 +
-+  disposables.clear();
-+
-+  for (let disposable of WeakSet.iterator(weakDisposables)) {
-+    tryDisposableUnload(disposable);
-+  }
-+
-+  WeakSet.clear(weakDisposables);
++ disposables.clear();
 +});
++
++subscribe(disposablesUnloadObserver, addonUnloadTopic, false);
  
  // Set's up disposable instance.
  const setupDisposable = disposable => {
 -  subscribe(disposable, addonUnloadTopic, isWeak(disposable));
-+  if (isWeak(disposable)) {
-+    WeakSet.add(weakDisposables, disposable);
++  if (isWeak(disposable) && !disposablesWeakRefs.has(disposable)) {
++    // If is a weak reference and is not already tracked.
++    let weakRef = Cu.getWeakReference(disposable);
++    disposablesWeakRefs.set(disposable, weakRef);
++    disposables.add(weakRef);
 +  } else {
 +    disposables.add(disposable);
 +  }
@@ -107,7 +115,9 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
  const disposeDisposable = disposable => {
 -  unsubscribe(disposable, addonUnloadTopic);
 +  if (isWeak(disposable)) {
-+    WeakSet.remove(weakDisposables, disposable);
++    let weakRef = disposablesWeakRefs.get(disposable);
++    disposables.delete(weakRef);
++    disposablesWeakRefs.delete(disposable);
 +  } else {
 +    disposables.delete(disposable);
 +  }
@@ -126,7 +136,7 @@ diff --git a/addon-sdk/source/lib/sdk/core/disposable.js b/addon-sdk/source/lib/
      setupDisposable(this);
    },
    destroy: function(reason) {
-@@ -81,50 +116,39 @@ const Disposable = Class({
+@@ -81,50 +127,39 @@ const Disposable = Class({
      // Implement your initialize logic here.
    },
    dispose: function() {
